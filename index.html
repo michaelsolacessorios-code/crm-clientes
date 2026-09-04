@@ -1381,23 +1381,15 @@ function lerPdfComoBase64(file){
 async function extrairPedidoDoPdf(file){
   const base64 = await lerPdfComoBase64(file);
   const prompt = 'Analise este PDF de pedido/nota de venda. Pode ter ate 20 paginas e centenas de itens — leia o documento inteiro, todas as paginas, sem pular nada. Responda APENAS com um JSON valido, compacto, sem espacos desnecessarios, sem nenhum texto antes ou depois, sem comentarios, exatamente neste formato: {"valorTotal":0,"itens":[["codigo","descricao curta",0]]}. Cada item da lista "itens" e um array com 3 posicoes, nessa ordem: [0]=codigo do produto (coluna "Produto" ou "Codigo"), [1]=descricao BEM RESUMIDA do produto (no maximo 35 caracteres, corte se precisar), [2]=quantidade vendida (numero). valorTotal e o valor final do pedido em reais (o total que o cliente vai pagar — geralmente chamado de "Valor Liquido", "Valor Total" ou "Total Geral" no documento; se nao existir esse campo, use o total de mercadorias), como numero puro (sem R$, sem ponto de milhar, ponto para casas decimais). Inclua TODOS os itens de TODAS as paginas do pedido, sem excecao, mesmo que a lista tenha centenas de linhas. Se nao identificar o codigo de algum item, use "?" nesse campo, mas sempre inclua a linha.';
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  // Chama nossa própria função no Vercel (api/analisar-pedido.js), que guarda a chave da Anthropic
+  // em segredo no servidor — o navegador do vendedor nunca vê essa chave.
+  const response = await fetch('/api/analisar-pedido', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 16000,
-      messages: [{
-        role: 'user',
-        content: [
-          {type:'document', source:{type:'base64', media_type:'application/pdf', data: base64}},
-          {type:'text', text: prompt},
-        ],
-      }],
-    }),
+    body: JSON.stringify({ base64, prompt }),
   });
-  if(!response.ok) throw new Error('Erro ao processar o PDF (tente novamente).');
   const data = await response.json();
+  if(!response.ok) throw new Error(data?.error || 'Erro ao processar o PDF (tente novamente).');
   const textBlock = (data.content||[]).find(b => b.type === 'text');
   if(!textBlock) throw new Error('Não consegui ler o conteúdo do PDF.');
   let clean = textBlock.text.replace(/```json|```/g,'').trim();
@@ -2615,8 +2607,9 @@ function abrirSubirPedidoModal(codigo){
       <div id="pedidoUploadStep">
         <label class="field-label">PDF do pedido</label>
         <input type="file" id="pedidoPdfInput" accept=".pdf" class="login-input">
-        <button class="primary-btn" id="btnAnalisarPedido" style="width:100%;">Analisar pedido</button>
+        <button class="primary-btn" id="btnAnalisarPedido" style="width:100%;">Analisar pedido (lê o PDF automaticamente)</button>
         <div id="msgAnalisarPedido"></div>
+        <button type="button" class="ghost-btn" id="btnPreencherManual" style="width:100%; margin-top:10px;">Preencher manualmente (sem PDF)</button>
       </div>
       <div id="pedidoRevisaoStep" style="display:none;"></div>
       <div class="modal-actions" style="margin-top:14px;">
@@ -2628,6 +2621,10 @@ function abrirSubirPedidoModal(codigo){
   backdrop.onclick = (e) => { if(e.target===backdrop) backdrop.remove(); };
   backdrop.querySelector('#fecharSubirPedido').onclick = () => backdrop.remove();
 
+  backdrop.querySelector('#btnPreencherManual').onclick = () => {
+    renderRevisaoPedido({valorTotal: 0, itens: []});
+  };
+
   backdrop.querySelector('#btnAnalisarPedido').onclick = async () => {
     const file = backdrop.querySelector('#pedidoPdfInput').files[0];
     const msg = backdrop.querySelector('#msgAnalisarPedido');
@@ -2638,9 +2635,9 @@ function abrirSubirPedidoModal(codigo){
       const resultado = await extrairPedidoDoPdf(file);
       renderRevisaoPedido(resultado);
     }catch(err){
-      msg.innerHTML = `<div class="msg err">${err.message}</div>`;
+      msg.innerHTML = `<div class="msg err">A leitura automática não está disponível nesse ambiente (${err.message}). Use "Preencher manualmente" abaixo pra lançar o pedido mesmo assim.</div>`;
     }
-    btn.disabled = false; btn.textContent = 'Analisar pedido';
+    btn.disabled = false; btn.textContent = 'Analisar pedido (lê o PDF automaticamente)';
   };
 
   function renderRevisaoPedido(resultado){

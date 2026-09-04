@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRM - Carteira de Clientes</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
+        body { background: #f0f4f8; color: #1a202c; }
+        
+        /* Tela de Login */
+        .login-container { display: flex; justify-content: center; align-items: center; height: 100vh; background: linear-gradient(135deg, #2b6cb0, #2f855a); }
+        .login-box { background: white; padding: 2.5rem; border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); width: 100%; max-width: 400px; }
+        .login-box h1 { text-align: center; margin-bottom: 2rem; color: #2d3748; font-size: 1.8rem; }
+        .input-group { margin-bottom: 1.2rem; }
+        .input-group label { display: block; margin-bottom: 0.5rem; font-weight: 600; color: #4a5568; }
+        .input-group input { width: 100%; padding: 0.85rem; border: 2px solid #e2e8f0; border-radius: 8px; font-size: 1rem; transition: border-color 0.3s; }
+        .input-group input:focus { outline: none; border-color: #2b6cb0; }
+        button { width: 100%; padding: 0.9rem; background: #2b6cb0; color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: background 0.3s; }
+        button:hover { background: #2c5282; }
+        
+        /* Painel Principal */
+        .app-container { display: none; padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 2px solid #e2e8f0; }
+        .user-info { display: flex; align-items: center; gap: 1rem; }
+        .btn-sair { background: #e53e3e; padding: 0.5rem 1rem; width: auto; }
+        .btn-sair:hover { background: #c53030; }
+        
+        /* Estatísticas */
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+        .stat-card { background: white; padding: 1.2rem; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); text-align: center; }
+        .stat-card h3 { font-size: 2rem; margin-bottom: 0.3rem; color: #2d3748; }
+        .stat-card p { color: #718096; font-size: 0.9rem; }
+        
+        /* Botões */
+        .botoes { display: flex; gap: 0.8rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+        .btn { padding: 0.7rem 1.2rem; border-radius: 8px; text-decoration: none; font-weight: 500; font-size: 0.95rem; width: auto; display: inline-flex; align-items: center; gap: 0.5rem; }
+        .btn-novo { background: #2f855a; color: white; }
+        .btn-novo:hover { background: #276749; }
+        .btn-excel { background: #ed8936; color: white; }
+        .btn-excel:hover { background: #dd6b20; }
+        .btn-importar { background: #805ad5; color: white; }
+        .btn-importar:hover { background: #6b46c1; }
+        
+        /* Busca e Filtros */
+        .busca { margin-bottom: 1.5rem; display: flex; gap: 0.8rem; flex-wrap: wrap; }
+        .busca input, .busca select { padding: 0.7rem; border: 2px solid #e2e8f0; border-radius: 8px; font-size: 0.95rem; }
+        .busca input { flex: 1; min-width: 250px; }
+        
+        /* Tabela */
+        .tabela { background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow: hidden; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 0.9rem; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 0.95rem; }
+        th { background: #f7fafc; font-weight: 600; color: #2d3748; }
+        tr:hover { background: #f7fafc; }
+        
+        /* Cores de Status */
+        .status-em-dia { color: #2f855a; font-weight: 600; }
+        .status-atencao { color: #d69e2e; font-weight: 600; }
+        .status-inadimplente { color: #e53e3e; font-weight: 600; }
+        
+        /* Modal */
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); justify-content: center; align-items: center; z-index: 1000; }
+        .modal-aberto { display: flex; }
+        .modal-conteudo { background: white; padding: 2rem; border-radius: 12px; width: 90%; max-width: 550px; max-height: 90vh; overflow-y: auto; }
+        .modal-conteudo h2 { margin-bottom: 1.5rem; color: #2d3748; }
+        .modal-botoes { display: flex; gap: 0.8rem; margin-top: 1.5rem; justify-content: flex-end; }
+        .btn-cancelar { background: #e2e8f0; color: #2d3748; }
+        .btn-cancelar:hover { background: #cbd5e0; }
+        
+        /* Responsivo */
+        @media(max-width: 768px) {
+            th, td { padding: 0.6rem; font-size: 0.85rem; }
+            .botoes { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- TELA DE LOGIN -->
+<div class="login-container" id="telaLogin">
+    <div class="login-box">
+        <h1>🔐 Acesso ao CRM</h1>
+        <div class="input-group">
+            <label>Usuário</label>
+            <input type="text" id="usuario" placeholder="Digite seu usuário">
+        </div>
+        <div class="input-group">
+            <label>Senha</label>
+            <input type="password" id="senha" placeholder="Digite sua senha">
+        </div>
+        <button onclick="entrar()">Entrar</button>
+    </div>
+</div>
+
+<!-- PAINEL PRINCIPAL -->
+<div class="app-container" id="painel">
+    <header>
+        <h1>💼 CRM - Carteira de Clientes</h1>
+        <div class="user-info">
+            <span id="nomeUsuario"></span>
+            <button class="btn-sair" onclick="sair()">Sair</button>
+        </div>
+    </header>
+
+    <!-- ESTATÍSTICAS -->
+    <div class="stats">
+        <div class="stat-card">
+            <h3 id="totalClientes">0</h3>
+            <p>Total de Clientes</p>
+        </div>
+        <div class="stat-card">
+            <h3 id="clientesEmDia">0</h3>
+            <p>Em Dia ✅</p>
+        </div>
+        <div class="stat-card">
+            <h3 id="clientesAtencao">0</h3>
+            <p>Atenção ⚠️</p>
+        </div>
+        <div class="stat-card">
+            <h3 id="clientesInadimplentes">0</h3>
+            <p>Inadimplentes ❌</p>
+        </div>
+    </div>
+
+    <!-- BOTÕES -->
+    <div class="botoes">
+        <button class="btn btn-novo" onclick="abrirModal()">➕ Novo Cliente</button>
+        <button class="btn btn-excel" onclick="exportarExcel()">📤 Exportar Excel</button>
+        <button class="btn btn-importar" onclick="document.getElementById('arquivoExcel').click()">📥 Importar Excel</button>
+        <input type="file" id="arquivoExcel" accept=".xlsx,.xls,.csv" style="display:none" onchange="importarExcel(event)">
+    </div>
+
+    <!-- BUSCA E FILTROS -->
+    <div class="busca">
+        <input type="text" id="busca" placeholder="🔍 Buscar por nome, cidade ou vendedor..." oninput="filtrarClientes()">
+        <select id="filtroStatus" onchange="filtrarClientes()">
+            <option value="todos">Todos os Status</option>
+            <option value="Em Dia">✅ Em Dia</option>
+            <option value="Atenção">⚠️ Atenção</option>
+            <option value="Inadimplente">❌ Inadimplente</option>
+        </select>
+    </div>
+
+    <!-- TABELA -->
+    <div class="tabela">
+        <table>
+            <thead>
+                <tr>
+                    <th>Razão Social / Nome</th>
+                    <th>Cidade / UF</th>
+                    <th>Vendedor</th>
+                    <th>Status</th>
+                    <th>Última Compra</th>
+                    <th>Ações</th>
+                </tr>
+            </thead>
+            <tbody id="listaClientes"></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- MODAL CADASTRAR/EDITAR -->
+<div class="modal" id="modalForm">
+    <div class="modal-conteudo">
+        <h2 id="tituloModal">Cadastrar Cliente</h2>
+        <div class="input-group">
+            <label>Razão Social / Nome *</label>
+            <input type="text" id="nome" required>
+        </div>
+        <div class="input-group">
+            <label>Endereço / Cidade / UF</label>
+            <input type="text" id="cidade" placeholder="Ex: São Paulo - SP">
+        </div>
+        <div class="input-group">
+            <label>Vendedor Responsável</label>
+            <input type="text" id="vendedor" placeholder="Nome do vendedor">
+        </div>
+        <div class="input-group">
+            <label>Última Compra</label>
+            <input type="date" id="ultimaCompra">
+        </div>
+        <div class="input-group">
+            <label>Status</label>
+            <select id="status">
+                <option value="Em Dia">✅ Em Dia</option>
+                <option value="Atenção">⚠️ Atenção</option>
+                <option value="Inadimplente">❌ Inadimplente</option>
+            </select>
+        </div>
+        <div class="input-group">
+            <label>Observações</label>
+            <input type="text" id="observacoes" placeholder="Dias de visita, contato, etc.">
+        </div>
+        <div class="modal-botoes">
+            <button class="btn btn-cancelar" onclick="fecharModal()">Cancelar</button>
+            <button onclick="salvarCliente()">Salvar</button>
+        </div>
+    </div>
+</div>
+
+<script>
+// ====================== DADOS DO SEU BANCO SUPABASE ======================
+const SUPABASE_URL = "https://bpbnsiuwuamxgijhrcwrr.supabase.co";
+const SUPABASE_CHAVE = "sb_publishable_WyQm7RLLcqzblMOboyfxgg_45F-9bo5";
+// =========================================================================
+
+// Inicializar conexão
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_CHAVE);
+
+// Dados locais (caso ainda não exista tabela no Supabase, usa local)
+let clientes = [];
+let usuarioLogado = null;
+let editandoId = null;
+
+// Usuários permitidos
+const usuariosPermitidos = [
+    { usuario: "paulo", senha: "1234" },
+    { usuario: "michael", senha: "1234" }
+];
+
+// Tela de Login
+function entrar() {
+    const usu = document.getElementById("usuario").value.trim().toLowerCase();
+    const sen = document.getElementById("senha").value;
+    
+    const valido = usuariosPermitidos.find(u => u.usuario === usu && u.senha === sen);
+    if (valido) {
+        usuarioLogado = usu;
+        document.getElementById("telaLogin").style.display = "none";
+        document.getElementById("painel").style.display = "block";
+        document.getElementById("nomeUsuario").textContent = usu.toUpperCase();
+        carregarClientes();
+    } else {
+        alert("Usuário ou senha incorretos!");
+    }
+}
+
+function sair() {
+    usuarioLogado = null;
+    document.getElementById("painel").style.display = "none";
+    document.getElementById("telaLogin").style.display = "flex";
+    document.getElementById("usuario").value = "";
+    document.getElementById("senha").value = "";
+}
+
+// Carregar clientes (tenta Supabase, senão usa local)
+async function carregarClientes() {
+    try {
+        const { data, error } = await supabase.from('clientes').select('*').order('nome', { ascending: true });
+        if (data) {
+            clientes = data;
+        } else {
+            clientes = JSON.parse(localStorage.getItem('crm_clientes') || '[]');
+        }
+    } catch {
+        clientes = JSON.parse(localStorage.getItem('crm_clientes') || '[]');
+    }
+    atualizarTela();
+}
+
+// Salvar cliente
+async function salvarCliente() {
+    const nome = document.getElementById("nome").value.trim();
+    if (!nome) { alert("Preencha o nome!"); return; }
+
+    const cliente = {
+        nome: nome,
+        cidade: document.getElementById("cidade").value.trim(),
+        vendedor: document.getElementById("vendedor").value.trim(),
+        ultima_compra: document.getElementById("ultimaCompra").value,
+        status: document.getElementById("status").value,
+        observacoes: document.getElementById("observacoes").value.trim()
+    };
+
+    try {
+        if (editandoId) {
+            await supabase.from('clientes').update(cliente).eq('id', editandoId);
+            const idx = clientes.findIndex(c => c.id === editandoId);
+            if (idx >= 0) clientes[idx] = { ...cliente, id: editandoId };
+        } else {
+            const { data } = await supabase.from('clientes').insert(cliente).select();
+            if (data) clientes.unshift(data[0]);
+        }
+    } catch {
+        if (editandoId) {
+            const idx = clientes.findIndex(c => c.id === editandoId);
+            if (idx >= 0) clientes[idx] = { ...cliente, id: editandoId };
+        } else {
+            cliente.id = Date.now();
+            clientes.unshift(cliente);
+        }
+        localStorage.setItem('crm_clientes', JSON.stringify(clientes));
+    }
+
+    fecharModal();
+    atualizarTela();
+}
+
+// Excluir cliente
+async function excluirCliente(id) {
+    if (!confirm("Excluir este cliente?")) return;
+    try {
+        await supabase.from('clientes').delete().eq('id', id);
+    } catch {}
+    clientes = clientes.filter(c => c.id !== id);
+    localStorage.setItem('crm_clientes', JSON.stringify(clientes));
+    atualizarTela();
+}
+
+// Editar cliente
+function editarCliente(c) {
+    editandoId = c.id;
+    document.getElementById("nome").value = c.nome || "";
+    document.getElementById("cidade").value = c.cidade || "";
+    document.getElementById("vendedor").value = c.vendedor || "";
+    document.getElementById("ultimaCompra").value = c.ultima_compra || "";
+    document.getElementById("status").value = c.status || "Em Dia";
+    document.getElementById("observacoes").value = c.observacoes || "";
+    document.getElementById("tituloModal").textContent = "Editar Cliente";
+    document.getElementById("modalForm").classList.add("modal-aberto");
+}
+
+// Atualizar tabela e estatísticas
+function atualizarTela(lista = clientes) {
+    const corpo = document.getElementById("listaClientes");
+    corpo.innerHTML = "";
+
+    let emDia = 0, atencao = 0, inadimplentes = 0;
+
+    lista.forEach(c => {
+        if (c.status === "Em Dia") emDia++;
+        else if (c.status === "Atenção") atencao++;
+        else inadimplentes++;
+
+        const classe = c.status === "Em Dia" ? "status-em-dia" :
+                       c.status === "Atenção" ? "status-atencao" : "status-inadimplente";
+
+        corpo.innerHTML += `
+            <tr>
+                <td><strong>${c.nome}</strong></td>
+                <td>${c.cidade || "-"}</td>
+                <td>${c.vendedor || "-"}</td>
+                <td class="${classe}">${c.status}</td>
+                <td>${c.ultima_compra ? new Date(c.ultima_compra + "T00:00:00").toLocaleDateString('pt-BR') : "-"}</td>
+                <td>
+                    <button style="padding:0.3rem 0.6rem; width:auto; background:#ed8936; margin-right:0.3rem" onclick='editarCliente(${JSON.stringify(c).replace(/'/g, "\\'")})'>✏️</button>
+                    <button style="padding:0.3rem 0.6rem; width:auto; background:#e53e3e" onclick="excluirCliente(${c.id})">🗑️</button>
+                </td>
+            </tr>`;
+    });
+
+    document.getElementById("totalClientes").textContent = clientes.length;
+    document.getElementById("clientesEmDia").textContent = emDia;
+    document.getElementById("clientesAtencao").textContent = atencao;
+    document.getElementById("clientesInadimplentes").textContent = inadimplentes;
+}
+
+// Filtros
+function filtrarClientes() {
+    const busca = document.getElementById("busca").value.toLowerCase();
+    const status = document.getElementById("filtroStatus").value;
+    let filtrado = clientes;
+    if (busca) filtrado = filtrado.filter(c => 
+        (c.nome && c.nome.toLowerCase().includes(busca)) ||
+        (c.cidade && c.cidade.toLowerCase().includes(busca)) ||
+        (c.vendedor && c.vendedor.toLowerCase().includes(busca))
+    );
+    if (status !== "todos") filtrado = filtrado.filter(c => c.status === status);
+    atualizarTela(filtrado);
+}
+
+// Excel
+function exportarExcel() {
+    const dados = clientes.map(c => ({
+        "Razão Social / Nome": c.nome,
+        "Cidade / UF": c.cidade,
+        "Vendedor": c.vendedor,
+        "Última Compra": c.ultima_compra ? new Date(c.ultima_compra + "T00:00:00").toLocaleDateString('pt-BR') : "",
+        "Status": c.status,
+        "Observações": c.observacoes
+    }));
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(dados);
+    XLSX.utils.book_append_sheet(wb, ws, "Clientes");
+    XLSX.writeFile(wb, "CRM_Carteira_Clientes.xlsx");
+}
+
+function importarExcel(e) {
+    const arq = e.target.files[0];
+    if (!arq) return;
+    const leitor = new FileReader();
+    leitor.onload = async (evt) => {
+        const wb = XLSX.read(evt.target.result, { type: "binary" });
+        const linhas = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+        
+        const novos = linhas.map(l => ({
+            nome: l["Razão Social / Nome"] || l["Nome"] || "",
+            cidade: l["Cidade / UF"] || l["Cidade"] || "",
+            vendedor: l["Vendedor"] || "",
+            ultima_compra: l["Última Compra"] ? new Date(l["Última Compra"].split('/').reverse().join('-')).toISOString().split('T')[0] : "",
+            status: l["Status"] || "Em Dia",
+            observacoes: l["Observações"] || ""
+        })).filter(c => c.nome);
+
+        try {
+            for(const c of novos) await supabase.from('clientes').insert(c);
+        } catch {
+            clientes = [...clientes, ...novos.map(c => ({...c, id: Date.now() + Math.random()}))];
+            localStorage.setItem('crm_clientes', JSON.stringify(clientes));
+        }
+        carregarClientes();
+        alert(`${novos.length} clientes importados!`);
+    };
+    leitor.readAsBinaryString(arq);
+}
+
+// Modal
+function abrirModal() {
+    editandoId = null;
+    document.getElementById("nome").value = "";
+    document.getElementById("cidade").value = "";
+    document.getElementById("vendedor").value = "";
+    document.getElementById("ultimaCompra").value = "";
+    document.getElementById("status").value = "Em Dia";
+    document.getElementById("observacoes").value = "";
+    document.getElementById("tituloModal").textContent = "Cadastrar Cliente";
+    document.getElementById("modalForm").classList.add("modal-aberto");
+}
+
+function fecharModal() {
+    document.getElementById("modalForm").classList.remove("modal-aberto");
+    editandoId = null;
+}
+
+// Enter na tela de login
+document.getElementById("senha").addEventListener("keypress", e => {
+    if (e.key === "Enter") entrar();
+});
+</script>
+</body>
+</html>

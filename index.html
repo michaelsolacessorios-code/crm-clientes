@@ -1299,6 +1299,18 @@ async function editarContato(vendedorCodigo, clientCodigo, entryId, obs, vendeu,
   await safeSet('crm:contatos:'+vendedorCodigo, data);
 }
 
+// Remove um pedido/contato específico do histórico (usado pra apagar um pedido lançado errado,
+// antes de subir ele de novo corrigido). Some da meta e dos totais do mês automaticamente,
+// porque esses números são sempre recalculados a partir do histórico, nunca guardados à parte.
+async function excluirEntradaHistorico(vendedorCodigo, clientCodigo, entryId){
+  const data = await getContatos(vendedorCodigo);
+  const reg = data[clientCodigo];
+  if(!reg || !reg.historico) return;
+  reg.historico = reg.historico.filter(h => h.id !== entryId);
+  STATE.contatosCache[vendedorCodigo] = data;
+  await safeSet('crm:contatos:'+vendedorCodigo, data);
+}
+
 async function cancelarAgendamento(vendedorCodigo, clientCodigo){
   const data = await getContatos(vendedorCodigo);
   if(data[clientCodigo]) data[clientCodigo].agendadoPara = null;
@@ -1323,6 +1335,11 @@ function vendorPhotoSrc(v){
 // Número do vendedor visível — usamos o próprio código de cadastro como "número".
 function vendorNumero(v){
   return v && v.codigo > 0 ? v.codigo : '—';
+}
+// Nome do vendedor a partir do código (usado em rótulos rápidos, tipo "atual: Fulano").
+function vendorNome(codigo){
+  const v = STATE.vendors.find(v=>v.codigo===codigo);
+  return v ? v.nome : '';
 }
 
 // Lê um arquivo de imagem escolhido pelo usuário e devolve uma versão comprimida (JPEG, base64) pronta pra guardar.
@@ -2246,6 +2263,7 @@ function renderVendorLeads(main){
               <span class="day-pill">Retorno: ${fmtDatePt(l.agendadoPara)}</span>
               <button class="ghost-btn registrarContatoLeadBtn" data-id="${l.id}">Registrar contato</button>
               <button class="check-btn converterLeadBtn" data-id="${l.id}">Converter em cliente</button>
+              <button class="ghost-btn excluirLeadBtn" data-id="${l.id}" style="color:var(--danger); border-color:var(--danger);">🗑️ Excluir</button>
             </div>
           `).join('')}
         </div>
@@ -2262,6 +2280,7 @@ function renderVendorLeads(main){
               <div class="client-name">${l.empresa}</div>
               <div class="client-meta">Virou cliente Nº ${l.clienteCodigo} em ${fmtDatePt(l.convertidoEm)}</div>
             </div>
+            <button class="ghost-btn excluirLeadBtn" data-id="${l.id}" style="color:var(--danger); border-color:var(--danger);">🗑️ Excluir</button>
           </div>
         `).join('')}
       </div>
@@ -2274,6 +2293,16 @@ function renderVendorLeads(main){
   });
   main.querySelectorAll('.converterLeadBtn').forEach(btn=>{
     btn.onclick = () => abrirConverterLeadModal(btn.dataset.id);
+  });
+  main.querySelectorAll('.excluirLeadBtn').forEach(btn=>{
+    btn.onclick = async () => {
+      const lead = (STATE.leads||[]).find(l=>l.id===btn.dataset.id);
+      if(!lead) return;
+      if(!(await confirmarAcao(`Excluir o lead "${lead.empresa}"? Essa ação não pode ser desfeita.`))) return;
+      STATE.leads = (STATE.leads||[]).filter(l=>l.id!==btn.dataset.id);
+      await salvarLeads();
+      renderVendorLeads(main);
+    };
   });
 }
 
@@ -2704,6 +2733,46 @@ function abrirEditarMetaCliente(codigo){
   };
 }
 
+// Só o gerente vê esse controle: troca manualmente o vendedor responsável por um cliente,
+// direto na lista (sem precisar reimportar planilha). O histórico de contatos/vendas do
+// cliente fica registrado sob o vendedor de cada época — só o "responsável atual" muda.
+function abrirTrocarVendedorModal(codigo){
+  const c = STATE.roster.find(c=>c.codigo===codigo);
+  if(!c) return;
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal">
+      <h3>Trocar vendedor responsável</h3>
+      <p style="font-size:12.5px; color:var(--ink-soft); margin-bottom:14px;">${c.nome} <span class="client-num">Nº ${c.codigo}</span></p>
+      <label class="field-label">Novo vendedor responsável</label>
+      <select id="selectNovoVendedor" class="login-input">
+        ${STATE.vendors.map(v => `<option value="${v.codigo}" ${v.codigo===c.vendedorCodigo?'selected':''}>${v.nome} (Nº ${v.codigo})</option>`).join('')}
+      </select>
+      <div id="msgTrocarVendedor"></div>
+      <div class="modal-actions" style="margin-top:10px;">
+        <button class="ghost-btn" id="cancelarTrocarVendedor">Cancelar</button>
+        <button class="primary-btn" id="salvarTrocarVendedor">Salvar</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  backdrop.onclick = (e) => { if(e.target===backdrop) backdrop.remove(); };
+  backdrop.querySelector('#cancelarTrocarVendedor').onclick = () => backdrop.remove();
+  backdrop.querySelector('#salvarTrocarVendedor').onclick = async () => {
+    const novoCodigo = Number(backdrop.querySelector('#selectNovoVendedor').value);
+    if(novoCodigo === c.vendedorCodigo){ backdrop.remove(); return; }
+    const novoVendedor = STATE.vendors.find(v=>v.codigo===novoCodigo);
+    const existentesDoVendedor = clientsForVendor(novoCodigo).length;
+    c.vendedorCodigo = novoCodigo;
+    c.diaSemana = (existentesDoVendedor % 5) + 1;
+    await safeSet('crm:roster', STATE.roster);
+    backdrop.remove();
+    await avisar(`Cliente movido para a carteira de ${novoVendedor.nome}.`);
+    if(STATE.session.tipo==='vendedor') renderVendorShell(); else renderManagerShell();
+  };
+}
+
 // Marca/desmarca um cliente como inadimplente, com observação de contato/cobrança.
 // Cliente inadimplente nunca sai da carteira do vendedor — só fica destacado e sem meta de venda.
 function abrirInadimplenciaModal(codigo){
@@ -2803,6 +2872,11 @@ function clientRowHTML(c, status, doneToday, showDay, showCredito){
             <span class="inadimplente-editar" data-codigo="${c.codigo}" title="Clique para gerenciar inadimplência">${inadimplente ? '🖤 Gerenciar inadimplência' : '⚠️ Marcar como inadimplente'}</span>
           </div>
         ` : ''}
+        ${STATE.session.tipo==='gerente' ? `
+          <div class="meta-cliente-linha">
+            <span class="inadimplente-editar trocar-vendedor-editar" data-codigo="${c.codigo}" title="Clique para trocar o vendedor responsável">🔁 Trocar vendedor${vendorNome(c.vendedorCodigo) ? ' (atual: '+vendorNome(c.vendedorCodigo)+')' : ''}</span>
+          </div>
+        ` : ''}
       </div>
       ${showDay ? `<div class="day-pill">${DIAS_CURTO[c.diaSemana] || '—'}</div>` : ''}
       ${agendado ? `<span class="agenda-pill" data-codigo="${c.codigo}" title="Clique para cancelar o agendamento">Retorno ${fmtDatePt(c.agendadoPara)} ✕</span>` : ''}
@@ -2833,10 +2907,16 @@ function bindClientRows(container){
       abrirEditarMetaCliente(Number(el.dataset.codigo));
     };
   });
-  container.querySelectorAll('.inadimplente-editar').forEach(el=>{
+  container.querySelectorAll('.inadimplente-editar:not(.trocar-vendedor-editar)').forEach(el=>{
     el.onclick = (e) => {
       e.stopPropagation();
       abrirInadimplenciaModal(Number(el.dataset.codigo));
+    };
+  });
+  container.querySelectorAll('.trocar-vendedor-editar').forEach(el=>{
+    el.onclick = (e) => {
+      e.stopPropagation();
+      abrirTrocarVendedorModal(Number(el.dataset.codigo));
     };
   });
   container.querySelectorAll('.subir-pedido-btn').forEach(btn=>{
@@ -2872,9 +2952,14 @@ async function abrirDetalhesCliente(codigo){
     const contatos = await getContatos(v.codigo);
     const reg = contatos[codigo];
     if(reg && reg.historico){
-      reg.historico.forEach(h => entradas.push({...h, vendedorNome: v.nome}));
+      reg.historico.forEach(h => entradas.push({...h, vendedorNome: v.nome, vendedorCodigoHist: v.codigo}));
     }
   }
+  // Numera os pedidos (só as entradas com venda) em ordem cronológica de lançamento — Pedido nº 1 é o mais antigo.
+  const cronologica = [...entradas].sort((a,b) => a.data < b.data ? -1 : 1);
+  let contadorPedido = 0;
+  const numeroPorId = {};
+  cronologica.forEach(e => { if(e.vendeu){ contadorPedido++; numeroPorId[e.id] = contadorPedido; } });
   entradas.sort((a,b) => a.data < b.data ? 1 : -1);
 
   const backdrop = document.createElement('div');
@@ -2887,16 +2972,25 @@ async function abrirDetalhesCliente(codigo){
         ${vendedorAtual ? `<br>Vendedor responsável: <b>${vendedorAtual.nome}</b>` : (info ? '<br>Sem vendedor responsável hoje' : '')}
       </p>
       ${info ? creditoLineHTML(info) : ''}
+      ${info && info.vendedorCodigo ? `<button class="primary-btn" id="btnNovoPedidoDetalhes" style="width:100%; margin-bottom:12px;">📄 Subir novo pedido</button>` : ''}
       ${entradas.length===0 ? `<div class="empty-state">Nenhum contato registrado para este cliente ainda.</div>` : `
         <div class="client-list">
           ${entradas.map(e => `
-            <div class="client-row status-${e.vendeu?'ok':'warn'}" style="padding:11px 13px;">
+            <div class="client-row status-${e.vendeu?'ok':'warn'}" style="padding:11px 13px; flex-wrap:wrap;">
               <div class="client-info">
-                <div class="client-name" style="font-size:13px;">${e.vendedorNome}</div>
+                <div class="client-name" style="font-size:13px;">${e.vendeu ? `Pedido nº ${numeroPorId[e.id]}` : 'Contato'} — ${e.vendedorNome}</div>
                 <div class="client-meta">${e.obs ? e.obs : (e.vendeu ? 'Venda registrada' : 'Contato registrado')}</div>
+                ${e.vendeu && e.skus && e.skus.itens && e.skus.itens.length ? `
+                  <div class="client-meta" style="margin-top:3px;">
+                    <span>Volume: <b>${e.skus.qtdUnidades ?? e.skus.itens.reduce((s,i)=>s+(i.quantidade||0),0)} un.</b></span>
+                    <span>SKUs: <b>${e.skus.qtdSkus ?? e.skus.itens.length}</b></span>
+                  </div>
+                  <div class="client-meta" style="margin-top:2px; font-size:12px;">${e.skus.itens.map(i => `${i.codigo||i.descricao||'item'} (${i.quantidade})`).join(', ')}</div>
+                ` : ''}
               </div>
               ${e.vendeu ? `<span class="status-badge status-ok">${fmtMoney(e.valor)}</span>` : ''}
               <div class="day-pill">${fmtDatePt(e.data)}</div>
+              <button class="ghost-btn excluirEntradaBtn" data-id="${e.id}" data-vendedor="${e.vendedorCodigoHist}" style="color:var(--danger); border-color:var(--danger); padding:7px 10px; font-size:12px;">🗑️ Excluir</button>
             </div>
           `).join('')}
         </div>
@@ -2909,6 +3003,17 @@ async function abrirDetalhesCliente(codigo){
   document.body.appendChild(backdrop);
   backdrop.querySelector('#fecharDetalhes').onclick = () => backdrop.remove();
   backdrop.onclick = (e) => { if(e.target===backdrop) backdrop.remove(); };
+  const btnNovoPedido = backdrop.querySelector('#btnNovoPedidoDetalhes');
+  if(btnNovoPedido) btnNovoPedido.onclick = () => { backdrop.remove(); abrirSubirPedidoModal(codigo); };
+  backdrop.querySelectorAll('.excluirEntradaBtn').forEach(btn=>{
+    btn.onclick = async () => {
+      if(!(await confirmarAcao('Excluir esse registro do histórico? O valor sai da meta do mês. Essa ação não pode ser desfeita — depois é só usar "Subir novo pedido" se precisar lançar de novo.'))) return;
+      await excluirEntradaHistorico(Number(btn.dataset.vendedor), codigo, btn.dataset.id);
+      backdrop.remove();
+      abrirDetalhesCliente(codigo);
+      if(STATE.session.tipo==='vendedor') renderVendorShell(); else renderManagerShell();
+    };
+  });
 }
 
 // Modal reutilizável (vendedor ou gerente) pra buscar clientes em toda a base e vincular como mesmo grupo/CNPJ.
@@ -3260,7 +3365,9 @@ function renderManagerMetas(main){
       v.metaVolume = Number(document.querySelector(`.metaVolumeInput[data-codigo="${codigo}"]`).value) || 0;
       v.metaPositivacao = Number(document.querySelector(`.metaPositivacaoInput[data-codigo="${codigo}"]`).value) || 0;
       await safeSet('crm:vendors', STATE.vendors);
-      document.getElementById('msgMeta').innerHTML = `<div class="msg ok">Metas de ${v.nome} atualizadas.</div>`;
+      distribuirMetaClientesPorLimite(codigo, v.metaMes);
+      await safeSet('crm:roster', STATE.roster);
+      document.getElementById('msgMeta').innerHTML = `<div class="msg ok">Metas de ${v.nome} atualizadas — a meta de valores já foi redistribuída entre os clientes dele com base no limite de crédito de cada um.</div>`;
     };
   });
   document.getElementById('btnAplicarTodos').onclick = async () => {
@@ -3278,11 +3385,30 @@ function renderManagerMetas(main){
       if(sku !== '') v.metaSkus = Number(sku);
       if(volume !== '') v.metaVolume = Number(volume);
       if(positivacao !== '') v.metaPositivacao = Number(positivacao);
+      if(valor !== '') distribuirMetaClientesPorLimite(v.codigo, v.metaMes);
     });
     await safeSet('crm:vendors', STATE.vendors);
-    msg.innerHTML = `<div class="msg ok">Metas aplicadas a todos os vendedores.</div>`;
+    if(valor !== '') await safeSet('crm:roster', STATE.roster);
+    msg.innerHTML = `<div class="msg ok">Metas aplicadas a todos os vendedores${valor !== '' ? ' — valores redistribuídos entre os clientes de cada um pelo limite de crédito' : ''}.</div>`;
     renderManagerMetas(main);
   };
+}
+
+// Distribui a meta mensal (R$) do vendedor entre os clientes da carteira dele, proporcional
+// ao limite de crédito de cada um (quem tem limite maior recebe fatia maior da meta).
+// Clientes sem limite cadastrado entram com um peso mínimo, só pra não ficarem de fora da conta.
+// Clientes inadimplentes ficam sem meta (mesma regra que já existia pra meta individual).
+function distribuirMetaClientesPorLimite(vendedorCodigo, metaTotal){
+  const clientes = clientsForVendor(vendedorCodigo).filter(c => !c.inadimplente);
+  if(clientes.length === 0) return;
+  const PESO_MINIMO = 1000;
+  const pesos = clientes.map(c => (c.limiteCredito && c.limiteCredito > 0) ? c.limiteCredito : PESO_MINIMO);
+  const somaPesos = pesos.reduce((a,b)=>a+b, 0);
+  if(somaPesos <= 0) return;
+  clientes.forEach((c, i) => {
+    const parte = (metaTotal||0) * (pesos[i] / somaPesos);
+    c.metaCliente = Math.max(100, Math.round(parte / 50) * 50);
+  });
 }
 
 function vendorStats(codigo){

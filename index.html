@@ -1250,32 +1250,45 @@ function vendorInadimplenciaStats(vendedorCodigo){
   return {qtd: inadimplentes.length, total};
 }
 
-// Percentual da carteira (por número de clientes) em cada estado (UF) — usado no dashboard
-// do vendedor e, somando todo mundo, na visão geral do gerente. Cliente sem UF cadastrada
-// entra no grupo "—".
-function distribuicaoPorUF(clientes){
-  const total = clientes.length;
-  if(total === 0) return [];
+// Percentual das VENDAS (R$) do mês em cada UF — soma o valor vendido pra clientes de cada
+// estado, dentre os vendedores informados. Cliente sem UF cadastrada entra no grupo "—".
+function distribuicaoVendasPorUF(vendedoresCodigos, mesChave){
+  mesChave = mesChave || STATE.mesSelecionado || currentMonthKey();
   const porUf = {};
-  clientes.forEach(c => {
-    const uf = (c.uf && c.uf.trim()) ? c.uf.trim().toUpperCase() : '—';
-    porUf[uf] = (porUf[uf]||0) + 1;
+  let totalGeral = 0;
+  vendedoresCodigos.forEach(vc => {
+    const clientes = clientsForVendor(vc);
+    const contatos = STATE.contatosCache[vc] || {};
+    clientes.forEach(c => {
+      const uf = (c.uf && c.uf.trim()) ? c.uf.trim().toUpperCase() : '—';
+      const reg = contatos[c.codigo];
+      if(reg && reg.historico){
+        reg.historico.forEach(h => {
+          if(h.vendeu && h.data && h.data.slice(0,7)===mesChave){
+            porUf[uf] = (porUf[uf]||0) + (h.valor||0);
+            totalGeral += (h.valor||0);
+          }
+        });
+      }
+    });
   });
+  if(totalGeral <= 0) return [];
   return Object.entries(porUf)
-    .map(([uf, qtd]) => ({uf, qtd, pct: Math.round((qtd/total)*100)}))
-    .sort((a,b) => b.qtd - a.qtd);
+    .map(([uf, valor]) => ({uf, valor, pct: Math.round((valor/totalGeral)*100)}))
+    .sort((a,b) => b.valor - a.valor);
 }
-// Monta o HTML de uma barrinha de distribuição por UF (reaproveitado no vendedor e no gerente).
-function distribuicaoUfHTML(clientes){
-  const dist = distribuicaoPorUF(clientes);
-  if(dist.length === 0) return `<p class="hint">Nenhum cliente com dado suficiente ainda.</p>`;
+// Monta o HTML da barrinha de distribuição de vendas por UF (reaproveitado no vendedor e no gerente).
+function distribuicaoUfHTML(vendedoresCodigos, mesChave){
+  const dist = distribuicaoVendasPorUF(vendedoresCodigos, mesChave);
+  if(dist.length === 0) return `<p class="hint">Nenhuma venda registrada nesse mês ainda.</p>`;
   return `
+    <p style="font-size:13.5px; font-weight:600; margin-bottom:8px;">Você vendeu:</p>
     <div style="display:flex; flex-direction:column; gap:8px;">
       ${dist.map(d => `
         <div>
-          <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px;">
-            <span><b>${d.uf}</b></span>
-            <span class="hint" style="margin:0;">${d.pct}% · ${d.qtd} cliente${d.qtd===1?'':'s'}</span>
+          <div style="display:flex; justify-content:space-between; align-items:baseline; font-size:14.5px; margin-bottom:3px;">
+            <span><b>${d.pct}% ${d.uf}</b></span>
+            <span class="hint" style="margin:0; font-size:12px;">${fmtMoney(d.valor)}</span>
           </div>
           <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${d.pct}%; background:var(--accent);"></div></div>
         </div>
@@ -1988,9 +2001,9 @@ function renderVendorDashboard(main){
     </div>
 
     <div class="panel">
-      <h3>Distribuição da carteira por estado</h3>
-      <p class="hint">Percentual de clientes da sua carteira em cada UF.</p>
-      ${distribuicaoUfHTML(clientsForVendor(STATE.session.codigo))}
+      <h3>Distribuição das vendas por estado</h3>
+      <p class="hint">Percentual do valor vendido este mês em cada UF.</p>
+      ${distribuicaoUfHTML([STATE.session.codigo], s.mesChave)}
     </div>
 
     ${s.mesEhAtual && s.agendamentosHoje.length>0 ? `
@@ -3531,9 +3544,9 @@ function renderManagerOverview(main){
     </div>
 
     <div class="panel">
-      <h3>Distribuição da base por estado</h3>
-      <p class="hint">Percentual de clientes de toda a empresa (todos os vendedores somados) em cada UF.</p>
-      ${distribuicaoUfHTML(STATE.roster)}
+      <h3>Distribuição das vendas por estado</h3>
+      <p class="hint">Percentual do valor vendido este mês em cada UF (todos os vendedores somados).</p>
+      ${distribuicaoUfHTML(STATE.vendors.map(v=>v.codigo), STATE.mesSelecionado||currentMonthKey())}
     </div>
 
     <div class="panel" style="border-color:#111;">

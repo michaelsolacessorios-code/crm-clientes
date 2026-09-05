@@ -5284,15 +5284,21 @@ function renderManagerImportacoes(main){
     const vendedorCodigo = Number(document.getElementById('f_vendedor_import').value);
     const lines = raw.split('\n').map(l=>l.trim()).filter(Boolean);
     if(lines.length===0){ msg.innerHTML = `<div class="msg err">Cole ao menos uma linha.</div>`; return; }
+    // Trava de segurança: recusa linha cujo "nome" seja só número (ex: "0", "1", "2" — a coluna
+    // Status colada no lugar errado) ou um cabeçalho de planilha colado por engano.
+    const nomesInvalidos = new Set(['status','codigo','código','nome','datacadastro','data cadastro','vendedor','municipio','município','uf','telefone','contato','cnpj','','—','-']);
     let existentes = clientsForVendor(vendedorCodigo).length;
-    let count = 0;
+    let count = 0, recusados = 0;
     lines.forEach((line, idx) => {
       const parts = line.split('\t').map(p=>p.trim());
-      if(!parts[0]) return;
+      const nome = parts[0] || '';
+      const nomeNormalizado = nome.toLowerCase();
+      const ehSoNumero = /^\d+([.,]\d+)?$/.test(nome);
+      if(!nome || ehSoNumero || nomesInvalidos.has(nomeNormalizado)){ recusados++; return; }
       STATE.roster.push({
         id: 'c'+Date.now()+idx,
         codigo: Date.now()+idx,
-        nome: parts[0] || 'Sem nome',
+        nome,
         telefone: parts[1] || '',
         contato: parts[2] || '',
         municipio: parts[3] || '',
@@ -5303,7 +5309,9 @@ function renderManagerImportacoes(main){
       count++;
     });
     await safeSet('crm:roster', STATE.roster);
-    msg.innerHTML = `<div class="msg ok">${count} cliente(s) importado(s).</div>`;
+    msg.innerHTML = recusados > 0
+      ? `<div class="msg err">${count} cliente(s) importado(s). ⚠️ ${recusados} linha(s) foram recusadas por parecerem cabeçalho ou número solto (ex: "0", "Status") em vez de nome de cliente — confira se colou as colunas certas (Nome — Telefone — Contato — Município — UF).</div>`
+      : `<div class="msg ok">${count} cliente(s) importado(s).</div>`;
     document.getElementById('importArea').value = '';
   };
 

@@ -882,7 +882,7 @@ async function processarImportacaoBase(linhas, modoSincronizacao){
   const inativosByCodigo = new Map(inativosPool.map(c=>[c.codigo, c]));
   const vendedoresByCodigo = new Map(STATE.vendors.map(v=>[v.codigo, v]));
 
-  let atualizadosCarteira = 0, atualizadosInativos = 0, novosInativos = 0, novosNaCarteira = 0, ignorados = 0, reatribuidos = 0;
+  let atualizadosCarteira = 0, atualizadosInativos = 0, novosInativos = 0, novosNaCarteira = 0, ignorados = 0, reatribuidos = 0, reativadosDaFilaDeInativos = 0;
   const novosParaAdicionar = [];
   const novosRoster = [];
   const codigosNaPlanilha = new Set();
@@ -925,6 +925,19 @@ async function processarImportacaoBase(linhas, modoSincronizacao){
       if(ultimaCompra) c.ultimaCompra = ultimaCompra;
       if(limiteNum !== null) c.limiteCredito = limiteNum;
       if(saldoNum !== null) c.saldoDevedor = saldoNum;
+      // No modo sincronização, se a planilha diz que esse cliente é de um vendedor cadastrado,
+      // ele volta direto pra carteira dele (em vez de ficar esquecido na fila de inativos —
+      // isso é o que devolve um cliente pra carteira depois de um "Limpar minha carteira", por exemplo).
+      if(modoSincronizacao && vendedorCrm){
+        inativosPool.splice(inativosPool.indexOf(c), 1);
+        inativosByCodigo.delete(codigo);
+        c.vendedorCodigo = vendedorCrm.codigo;
+        const existentesDoVendedor = clientsForVendor(vendedorCrm.codigo).length + novosRoster.filter(n=>n.vendedorCodigo===vendedorCrm.codigo).length;
+        c.diaSemana = c.diaSemana || ((existentesDoVendedor % 5) + 1);
+        novosRoster.push(c);
+        reativadosDaFilaDeInativos++;
+        return;
+      }
       atualizadosInativos++;
       return;
     }
@@ -986,7 +999,7 @@ async function processarImportacaoBase(linhas, modoSincronizacao){
       await safeSet('crm:roster', STATE.roster);
       await safeSet('crm:inativos', inativosPool);
     },
-    resumo: {atualizadosCarteira, atualizadosInativos, novosInativos, novosNaCarteira, ignorados, reatribuidos, removidosDaCarteira, total: linhas.length},
+    resumo: {atualizadosCarteira, atualizadosInativos, novosInativos, novosNaCarteira, ignorados, reatribuidos, reativadosDaFilaDeInativos, removidosDaCarteira, total: linhas.length},
   };
 }
 
@@ -1808,7 +1821,7 @@ function renderLogin(){
 function sidebarHTML(items){
   const activePage = STATE.route.page;
   const vendorObj = STATE.session.tipo==='vendedor' ? STATE.vendors.find(v=>v.codigo===STATE.session.codigo) : null;
-  const foto = vendorObj ? vendorPhotoSrc(vendorObj) : null;
+  const foto = vendorObj ? vendorPhotoSrc(vendorObj) : (STATE.session.tipo==='gerente' ? (STATE.config.fotoGerente || null) : null);
   return `
     <div class="sidebar">
       <div class="brand"><div class="mark"><img src="${LOGO_SRC}" alt="TF Imports"></div><div class="name">TF Imports</div></div>
@@ -3749,7 +3762,11 @@ function renderManagerCredenciais(main){
     </div>
     <div class="panel">
       <h3>Sua conta de gerente</h3>
-      <p class="hint">Defina abaixo seu nome, cargo, usuário e senha de acesso.</p>
+      <p class="hint">Defina abaixo seu nome, cargo, usuário, senha e foto de acesso.</p>
+      <div class="form-row" style="align-items:center;">
+        ${STATE.config.fotoGerente ? `<img src="${STATE.config.fotoGerente}" alt="${STATE.config.nomeGerente||'Gerente'}" style="width:46px; height:46px; border-radius:50%; object-fit:cover; flex-shrink:0;">` : `<div class="whoami-avatar whoami-avatar-fallback" style="width:46px; height:46px; flex-shrink:0; background:var(--border); color:var(--ink-faint);">${(STATE.config.nomeGerente||'?')[0].toUpperCase()}</div>`}
+        <input type="file" id="f_foto_gerente" accept="image/*" style="max-width:220px;">
+      </div>
       <div class="form-row">
         <input type="text" id="novoNomeGerente" placeholder="Nome" value="${STATE.config.nomeGerente || ''}">
         <input type="text" id="novoCargoGerente" placeholder="Cargo" value="${STATE.config.cargoGerente || ''}">
@@ -3762,6 +3779,17 @@ function renderManagerCredenciais(main){
       <div id="msgGerente"></div>
     </div>
   `;
+  document.getElementById('f_foto_gerente').onchange = async () => {
+    const file = document.getElementById('f_foto_gerente').files[0];
+    if(!file) return;
+    try{
+      STATE.config.fotoGerente = await resizeImagemParaBase64(file);
+      await safeSet('crm:config', STATE.config);
+      renderManagerAdmin(main);
+    }catch(err){
+      document.getElementById('msgGerente').innerHTML = `<div class="msg err">Não consegui processar essa imagem.</div>`;
+    }
+  };
   document.querySelectorAll('.salvarSenhaBtn').forEach(btn => {
     btn.onclick = async () => {
       const codigo = Number(btn.dataset.codigo);
@@ -4333,7 +4361,7 @@ function renderManagerImportacoes(main){
           ${r.novosNaCarteira} cliente(s) novo(s) entram <b>direto na carteira do vendedor</b> indicado na planilha.<br>
           ${r.atualizadosInativos} cliente(s) na fila de inativos foram atualizados.<br>
           ${r.novosInativos} cliente(s) novo(s) (sem vendedor cadastrado no CRM) vão entrar na fila de inativos.<br>
-          ${modoSincronizacao ? `${r.reatribuidos} cliente(s) tiveram o <b>vendedor corrigido</b> (estava errado).<br>${r.removidosDaCarteira} cliente(s) <b>saem da carteira</b> (não apareceram mais na planilha pra esse vendedor) e voltam pra "Clientes inativos".<br>` : ''}
+          ${modoSincronizacao ? `${r.reatribuidos} cliente(s) tiveram o <b>vendedor corrigido</b> (estava errado).<br>${r.reativadosDaFilaDeInativos} cliente(s) <b>voltaram da fila de inativos</b> pra carteira do vendedor indicado na planilha.<br>${r.removidosDaCarteira} cliente(s) <b>saem da carteira</b> (não apareceram mais na planilha pra esse vendedor) e voltam pra "Clientes inativos".<br>` : ''}
           ${r.ignorados} linha(s) ignorada(s) (sem CNPJ, sem compra, ou dado incompleto).
         </div>
         <button class="primary-btn" id="btnConfirmarImportBase" style="margin-top:10px;">Confirmar e salvar</button>

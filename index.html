@@ -89,6 +89,16 @@
   .whoami-row{display:flex; align-items:center; gap:11px; margin-bottom:12px;}
   .whoami-avatar{width:46px; height:46px; border-radius:50%; object-fit:cover; flex-shrink:0; border:2px solid rgba(255,255,255,.3); box-shadow:0 2px 6px rgba(0,0,0,.2);}
   .whoami-avatar-fallback{display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.15); color:#fff; font-family:'Space Grotesk'; font-weight:700; font-size:16px;}
+  .topbar-user{
+    position:fixed; top:18px; right:24px; z-index:60;
+    display:flex; align-items:center; gap:9px;
+    background:var(--surface); border:1px solid var(--border); border-radius:30px;
+    padding:6px 8px 6px 6px; box-shadow:var(--shadow-hover);
+  }
+  .topbar-user .whoami-avatar{width:34px; height:34px; border:2px solid var(--border); box-shadow:none;}
+  .topbar-user .whoami-avatar-fallback{background:var(--primary-soft); color:var(--primary); font-size:13px;}
+  .topbar-user .whoami{font-size:12px; color:var(--ink-soft); line-height:1.3; margin-right:2px;}
+  .topbar-user .whoami b{color:var(--ink); display:block; font-size:13px; font-weight:600;}
   .whoami{font-size:12.5px; color:rgba(255,255,255,.65); margin-bottom:0; line-height:1.4;}
   .whoami b{color:#fff; display:block; font-size:14.5px; font-weight:600;}
   .logout-btn{
@@ -96,6 +106,10 @@
     font-size:12.5px; padding:8px 11px; border-radius:8px; cursor:pointer; width:100%;
   }
   .logout-btn:hover{background:rgba(255,255,255,.1);}
+  .topbar-user .logout-btn{
+    width:auto; border-color:var(--border); color:var(--ink-soft); padding:7px 10px;
+  }
+  .topbar-user .logout-btn:hover{background:var(--bg); border-color:var(--primary); color:var(--primary);}
 
   .main{flex:1; padding:32px 40px; overflow-y:auto; max-width:1140px;}
   .page-header{margin-bottom:24px;}
@@ -281,6 +295,8 @@
     .sidebar .brand{margin-bottom:0;}
     .sidebar nav{flex-direction:row;}
     .sidebar-footer{display:none;}
+    .topbar-user{top:8px; right:8px; padding:5px 7px 5px 5px; gap:6px;}
+    .topbar-user .whoami{display:none;}
     .main{padding:20px 16px;}
     .client-row{flex-wrap:wrap;}
   }
@@ -1234,6 +1250,40 @@ function vendorInadimplenciaStats(vendedorCodigo){
   return {qtd: inadimplentes.length, total};
 }
 
+// Percentual da carteira (por número de clientes) em cada estado (UF) — usado no dashboard
+// do vendedor e, somando todo mundo, na visão geral do gerente. Cliente sem UF cadastrada
+// entra no grupo "—".
+function distribuicaoPorUF(clientes){
+  const total = clientes.length;
+  if(total === 0) return [];
+  const porUf = {};
+  clientes.forEach(c => {
+    const uf = (c.uf && c.uf.trim()) ? c.uf.trim().toUpperCase() : '—';
+    porUf[uf] = (porUf[uf]||0) + 1;
+  });
+  return Object.entries(porUf)
+    .map(([uf, qtd]) => ({uf, qtd, pct: Math.round((qtd/total)*100)}))
+    .sort((a,b) => b.qtd - a.qtd);
+}
+// Monta o HTML de uma barrinha de distribuição por UF (reaproveitado no vendedor e no gerente).
+function distribuicaoUfHTML(clientes){
+  const dist = distribuicaoPorUF(clientes);
+  if(dist.length === 0) return `<p class="hint">Nenhum cliente com dado suficiente ainda.</p>`;
+  return `
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      ${dist.map(d => `
+        <div>
+          <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px;">
+            <span><b>${d.uf}</b></span>
+            <span class="hint" style="margin:0;">${d.pct}% · ${d.qtd} cliente${d.qtd===1?'':'s'}</span>
+          </div>
+          <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${d.pct}%; background:var(--accent);"></div></div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
 // Retorna a lista de códigos vinculados ao cliente (incluindo ele mesmo), ou null se não tem vínculo.
 function grupoDoCliente(codigo){
   const g = (STATE.grupos||[]).find(g => g.membros.includes(codigo));
@@ -1380,7 +1430,7 @@ function lerPdfComoBase64(file){
 }
 async function extrairPedidoDoPdf(file){
   const base64 = await lerPdfComoBase64(file);
-  const prompt = 'Analise este PDF de pedido/nota de venda. Pode ter ate 20 paginas e centenas de itens — leia o documento inteiro, todas as paginas, sem pular nada. Responda APENAS com um JSON valido, compacto, sem espacos desnecessarios, sem nenhum texto antes ou depois, sem comentarios, exatamente neste formato: {"valorTotal":0,"itens":[["codigo","descricao curta",0]]}. Cada item da lista "itens" e um array com 3 posicoes, nessa ordem: [0]=codigo do produto (coluna "Produto" ou "Codigo"), [1]=descricao BEM RESUMIDA do produto (no maximo 35 caracteres, corte se precisar), [2]=quantidade vendida (numero). valorTotal e o valor final do pedido em reais (o total que o cliente vai pagar — geralmente chamado de "Valor Liquido", "Valor Total" ou "Total Geral" no documento; se nao existir esse campo, use o total de mercadorias), como numero puro (sem R$, sem ponto de milhar, ponto para casas decimais). Inclua TODOS os itens de TODAS as paginas do pedido, sem excecao, mesmo que a lista tenha centenas de linhas. Se nao identificar o codigo de algum item, use "?" nesse campo, mas sempre inclua a linha.';
+  const prompt = 'Analise este PDF de pedido/nota de venda. Pode ter ate 20 paginas e centenas de itens — leia o documento inteiro, todas as paginas, sem pular nada. Responda APENAS com um JSON valido, compacto, sem espacos desnecessarios, sem nenhum texto antes ou depois, sem comentarios, exatamente neste formato: {"numeroPedido":"","valorTotal":0,"itens":[["codigo","descricao curta",0]]}. numeroPedido e o numero/identificador original do pedido tal como aparece no documento (procure por campos como "Pedido", "Nº do Pedido", "Pedido Nº", "Numero", "Nota" ou similar, geralmente perto do topo do documento) — inclua so o numero/codigo, sem o rotulo, como texto; se nao encontrar nenhum numero de pedido no documento, deixe essa string vazia. Cada item da lista "itens" e um array com 3 posicoes, nessa ordem: [0]=codigo do produto (coluna "Produto" ou "Codigo"), [1]=descricao BEM RESUMIDA do produto (no maximo 35 caracteres, corte se precisar), [2]=quantidade vendida (numero). valorTotal e o valor final do pedido em reais (o total que o cliente vai pagar — geralmente chamado de "Valor Liquido", "Valor Total" ou "Total Geral" no documento; se nao existir esse campo, use o total de mercadorias), como numero puro (sem R$, sem ponto de milhar, ponto para casas decimais). Inclua TODOS os itens de TODAS as paginas do pedido, sem excecao, mesmo que a lista tenha centenas de linhas. Se nao identificar o codigo de algum item, use "?" nesse campo, mas sempre inclua a linha.';
   // Chama nossa própria função no Vercel (api/analisar-pedido.js), que guarda a chave da Anthropic
   // em segredo no servidor — o navegador do vendedor nunca vê essa chave.
   const response = await fetch('/api/analisar-pedido', {
@@ -1417,6 +1467,7 @@ async function extrairPedidoDoPdf(file){
     return {codigo: i.codigo || '—', descricao: i.descricao || '', quantidade: Number(i.quantidade) || 0};
   });
   return {
+    numeroPedido: (parsed.numeroPedido || '').toString().trim(),
     valorTotal: Number(parsed.valorTotal) || 0,
     itens,
   };
@@ -1740,13 +1791,11 @@ function sidebarHTML(items){
       <nav>
         ${items.map(it => `<div class="nav-item ${activePage===it.page?'active':''}" data-page="${it.page}">${it.label}</div>`).join('')}
       </nav>
-      <div class="sidebar-footer">
-        <div class="whoami-row">
-          ${foto ? `<img class="whoami-avatar" src="${foto}" alt="${STATE.session.nome}">` : `<div class="whoami-avatar whoami-avatar-fallback">${(STATE.session.nome||'?')[0].toUpperCase()}</div>`}
-          <div class="whoami">Conectado como<b>${STATE.session.nome}${vendorObj?' · Nº '+vendorNumero(vendorObj):''}</b></div>
-        </div>
-        <button class="logout-btn" id="btn-logout">Sair</button>
-      </div>
+    </div>
+    <div class="topbar-user">
+      ${foto ? `<img class="whoami-avatar" src="${foto}" alt="${STATE.session.nome}">` : `<div class="whoami-avatar whoami-avatar-fallback">${(STATE.session.nome||'?')[0].toUpperCase()}</div>`}
+      <div class="whoami">Conectado como<b>${STATE.session.nome}${vendorObj?' · Nº '+vendorNumero(vendorObj):''}</b></div>
+      <button class="logout-btn" id="btn-logout">Sair</button>
     </div>
   `;
 }
@@ -1936,6 +1985,12 @@ function renderVendorDashboard(main){
         <button class="ghost-btn" id="btnBaixarSkusVendidos">⬇️ Baixar SKUs vendidos</button>
         <button class="ghost-btn" id="btnBaixarSkusNaoVendidos">⬇️ Baixar SKUs não vendidos</button>
       </div>
+    </div>
+
+    <div class="panel">
+      <h3>Distribuição da carteira por estado</h3>
+      <p class="hint">Percentual de clientes da sua carteira em cada UF.</p>
+      ${distribuicaoUfHTML(clientsForVendor(STATE.session.codigo))}
     </div>
 
     ${s.mesEhAtual && s.agendamentosHoje.length>0 ? `
@@ -2583,11 +2638,23 @@ function valorCompradoMesCliente(c){
 
 // Meta sugerida automaticamente: baseada no limite de crédito do cliente (potencial dele).
 // Sem dado de limite, cai num valor padrão baixo, só pra ter um alvo.
+// Meta sugerida automática do cliente: fatia proporcional da meta mensal do vendedor,
+// dividida entre os clientes dele conforme o limite de crédito de cada um. Calculada
+// sempre na hora — nunca fica desatualizada quando um cliente novo entra na carteira,
+// muda de vendedor, ou a meta do vendedor é alterada.
 function metaSugeridaCliente(c){
-  if(c.limiteCredito !== null && c.limiteCredito !== undefined && c.limiteCredito > 0){
-    return Math.max(300, Math.round((c.limiteCredito * 0.15) / 50) * 50);
-  }
-  return 500;
+  if(!c.vendedorCodigo) return 0;
+  const vendedor = STATE.vendors.find(v=>v.codigo===c.vendedorCodigo);
+  const metaTotal = vendedor ? (vendedor.metaMes||0) : 0;
+  if(metaTotal <= 0) return 0;
+  const PESO_MINIMO = 1000; // cliente sem limite cadastrado conta como se tivesse esse limite, só pra entrar na conta
+  const clientesDoVendedor = clientsForVendor(c.vendedorCodigo).filter(cl => !cl.inadimplente);
+  if(clientesDoVendedor.length === 0) return 0;
+  const pesoDoCliente = (c.limiteCredito && c.limiteCredito > 0) ? c.limiteCredito : PESO_MINIMO;
+  const somaPesos = clientesDoVendedor.reduce((soma, cl) => soma + ((cl.limiteCredito && cl.limiteCredito > 0) ? cl.limiteCredito : PESO_MINIMO), 0);
+  if(somaPesos <= 0) return 0;
+  const parte = metaTotal * (pesoDoCliente / somaPesos);
+  return Math.max(100, Math.round(parte / 50) * 50);
 }
 // Meta em uso: a que o vendedor definiu manualmente, ou a sugerida se ele nunca mexeu.
 function metaClienteAtual(c){
@@ -2622,7 +2689,7 @@ function abrirSubirPedidoModal(codigo){
   backdrop.querySelector('#fecharSubirPedido').onclick = () => backdrop.remove();
 
   backdrop.querySelector('#btnPreencherManual').onclick = () => {
-    renderRevisaoPedido({valorTotal: 0, itens: []});
+    renderRevisaoPedido({numeroPedido: '', valorTotal: 0, itens: []});
   };
 
   backdrop.querySelector('#btnAnalisarPedido').onclick = async () => {
@@ -2646,6 +2713,8 @@ function abrirSubirPedidoModal(codigo){
     step.style.display = 'block';
     step.innerHTML = `
       <p class="hint">Confira os dados antes de confirmar — dá pra corrigir qualquer campo.</p>
+      <label class="field-label">Número do pedido</label>
+      <input type="text" id="revisaoNumeroPedido" class="login-input" placeholder="Ex: 521110" value="${resultado.numeroPedido||''}">
       <label class="field-label">Valor total do pedido</label>
       <input type="number" id="revisaoValor" class="login-input" min="0" step="0.01" value="${resultado.valorTotal}">
       <label class="field-label">Itens / SKUs identificados</label>
@@ -2676,6 +2745,7 @@ function abrirSubirPedidoModal(codigo){
     step.querySelector('#btnAddItemPedido').onclick = () => { itens.push({codigo:'', descricao:'', quantidade:1}); drawItens(); };
 
     step.querySelector('#btnConfirmarPedido').onclick = async () => {
+      const numeroPedido = step.querySelector('#revisaoNumeroPedido').value.trim();
       const valor = Number(step.querySelector('#revisaoValor').value);
       const msgC = step.querySelector('#msgConfirmarPedido');
       if(!valor || valor <= 0){
@@ -2687,7 +2757,8 @@ function abrirSubirPedidoModal(codigo){
       const qtdUnidades = itensValidos.reduce((soma,i) => soma + i.quantidade, 0);
       const btnConf = step.querySelector('#btnConfirmarPedido');
       btnConf.disabled = true; btnConf.textContent = 'Salvando...';
-      await marcarContato(c.vendedorCodigo, codigo, 'Pedido enviado via PDF', true, valor, null, {itens: itensValidos, qtdSkus, qtdUnidades});
+      const obs = numeroPedido ? `Pedido nº ${numeroPedido} enviado via PDF` : 'Pedido enviado via PDF';
+      await marcarContato(c.vendedorCodigo, codigo, obs, true, valor, null, {itens: itensValidos, qtdSkus, qtdUnidades, numeroPedido});
       backdrop.remove();
       renderVendorShell();
     };
@@ -2975,7 +3046,7 @@ async function abrirDetalhesCliente(codigo){
           ${entradas.map(e => `
             <div class="client-row status-${e.vendeu?'ok':'warn'}" style="padding:11px 13px; flex-wrap:wrap;">
               <div class="client-info">
-                <div class="client-name" style="font-size:13px;">${e.vendeu ? `Pedido nº ${numeroPorId[e.id]}` : 'Contato'} — ${e.vendedorNome}</div>
+                <div class="client-name" style="font-size:13px;">${e.vendeu ? `Pedido nº ${(e.skus && e.skus.numeroPedido) ? e.skus.numeroPedido : numeroPorId[e.id]}` : 'Contato'} — ${e.vendedorNome}</div>
                 <div class="client-meta">${e.obs ? e.obs : (e.vendeu ? 'Venda registrada' : 'Contato registrado')}</div>
                 ${e.vendeu && e.skus && e.skus.itens && e.skus.itens.length ? `
                   <div class="client-meta" style="margin-top:3px;">
@@ -3362,9 +3433,7 @@ function renderManagerMetas(main){
       v.metaVolume = Number(document.querySelector(`.metaVolumeInput[data-codigo="${codigo}"]`).value) || 0;
       v.metaPositivacao = Number(document.querySelector(`.metaPositivacaoInput[data-codigo="${codigo}"]`).value) || 0;
       await safeSet('crm:vendors', STATE.vendors);
-      distribuirMetaClientesPorLimite(codigo, v.metaMes);
-      await safeSet('crm:roster', STATE.roster);
-      document.getElementById('msgMeta').innerHTML = `<div class="msg ok">Metas de ${v.nome} atualizadas — a meta de valores já foi redistribuída entre os clientes dele com base no limite de crédito de cada um.</div>`;
+      document.getElementById('msgMeta').innerHTML = `<div class="msg ok">Metas de ${v.nome} atualizadas — a meta de valores de cada cliente se ajusta automaticamente, com base no limite de crédito dele.</div>`;
     };
   });
   document.getElementById('btnAplicarTodos').onclick = async () => {
@@ -3382,30 +3451,11 @@ function renderManagerMetas(main){
       if(sku !== '') v.metaSkus = Number(sku);
       if(volume !== '') v.metaVolume = Number(volume);
       if(positivacao !== '') v.metaPositivacao = Number(positivacao);
-      if(valor !== '') distribuirMetaClientesPorLimite(v.codigo, v.metaMes);
     });
     await safeSet('crm:vendors', STATE.vendors);
-    if(valor !== '') await safeSet('crm:roster', STATE.roster);
-    msg.innerHTML = `<div class="msg ok">Metas aplicadas a todos os vendedores${valor !== '' ? ' — valores redistribuídos entre os clientes de cada um pelo limite de crédito' : ''}.</div>`;
+    msg.innerHTML = `<div class="msg ok">Metas aplicadas a todos os vendedores${valor !== '' ? ' — a meta de valores de cada cliente se ajusta automaticamente pelo limite de crédito' : ''}.</div>`;
     renderManagerMetas(main);
   };
-}
-
-// Distribui a meta mensal (R$) do vendedor entre os clientes da carteira dele, proporcional
-// ao limite de crédito de cada um (quem tem limite maior recebe fatia maior da meta).
-// Clientes sem limite cadastrado entram com um peso mínimo, só pra não ficarem de fora da conta.
-// Clientes inadimplentes ficam sem meta (mesma regra que já existia pra meta individual).
-function distribuirMetaClientesPorLimite(vendedorCodigo, metaTotal){
-  const clientes = clientsForVendor(vendedorCodigo).filter(c => !c.inadimplente);
-  if(clientes.length === 0) return;
-  const PESO_MINIMO = 1000;
-  const pesos = clientes.map(c => (c.limiteCredito && c.limiteCredito > 0) ? c.limiteCredito : PESO_MINIMO);
-  const somaPesos = pesos.reduce((a,b)=>a+b, 0);
-  if(somaPesos <= 0) return;
-  clientes.forEach((c, i) => {
-    const parte = (metaTotal||0) * (pesos[i] / somaPesos);
-    c.metaCliente = Math.max(100, Math.round(parte / 50) * 50);
-  });
 }
 
 function vendorStats(codigo){
@@ -3478,6 +3528,12 @@ function renderManagerOverview(main){
       ${mesEhAtual ? `<div class="stat-card accent"><div class="num display">${totalHojeFeitos}/${totalHoje}</div><div class="label">Contatados hoje</div></div>` : ''}
       <div class="stat-card" style="border-color:#111;"><div class="num display" style="color:#111;">${totalDevedores}</div><div class="label">Clientes devedores (inadimplentes)</div></div>
       <div class="stat-card" style="border-color:#111;"><div class="num display" style="color:#111; font-size:20px;">${fmtMoney(totalValorDevido)}</div><div class="label">Total em inadimplência (carteiras)</div></div>
+    </div>
+
+    <div class="panel">
+      <h3>Distribuição da base por estado</h3>
+      <p class="hint">Percentual de clientes de toda a empresa (todos os vendedores somados) em cada UF.</p>
+      ${distribuicaoUfHTML(STATE.roster)}
     </div>
 
     <div class="panel" style="border-color:#111;">

@@ -22,6 +22,8 @@
     --danger-soft:#F4E1DD;
     --warn:#C98A1D;
     --warn-soft:#F7EAD3;
+    --info:#2B6CB0;
+    --info-soft:#DCEAF7;
     --ok:#3E7A52;
     --ok-soft:#E2EEE4;
     --border:#D8DED4;
@@ -153,6 +155,7 @@
   .client-row:hover{box-shadow:var(--shadow-hover);}
   .client-row.status-ok{border-left-color:var(--ok);}
   .client-row.status-warn{border-left-color:var(--warn);}
+  .client-row.status-info{border-left-color:var(--info);}
   .client-row.status-danger{border-left-color:var(--danger);}
   .client-row.comprou-mes{background:var(--ok-soft);}
   .comprou-mes-linha{font-size:13px; color:var(--ok); font-weight:700; margin-top:3px;}
@@ -202,6 +205,7 @@
   }
   .status-badge.status-ok{background:var(--ok-soft); color:var(--ok);}
   .status-badge.status-warn{background:var(--warn-soft); color:var(--warn);}
+  .status-badge.status-info{background:var(--info-soft); color:var(--info);}
   .status-badge.status-danger{background:var(--danger-soft); color:var(--danger);}
   .check-btn{
     padding:10px 16px; border-radius:9px; border:1px solid var(--primary); background:var(--primary);
@@ -563,6 +567,13 @@ async function loadAll(){
     config.ultimaAtualizacaoBaseMes = currentMonthKey();
     await safeSet('crm:config', config);
   }
+  // Migração única: cria as credenciais padrão do usuário financeiro (cobrança), se ainda não existir.
+  if(!config.usuarioFinanceiro){
+    config.usuarioFinanceiro = 'financeiro';
+    config.senhaFinanceiro = 'financeiro123';
+    config.nomeFinanceiro = 'Financeiro';
+    await safeSet('crm:config', config);
+  }
   // Migração única: remove o placeholder "Vendedor 7" (sem uso, sem clientes) da base de vendedores.
   const vendedor7 = vendors.find(v => v.codigo === -1 && v.nome === 'Vendedor 7');
   if(vendedor7 && roster.filter(c=>c.vendedorCodigo===-1).length === 0){
@@ -595,6 +606,7 @@ async function loadAll(){
   STATE.config = config;
   STATE.grupos = (await safeGet('crm:grupos')) || [];
   STATE.leads = (await safeGet('crm:leads')) || [];
+  STATE.lixeira = (await safeGet('crm:lixeira')) || [];
   let diretores = await safeGet('crm:diretores');
   if(!diretores){
     diretores = [
@@ -611,6 +623,8 @@ async function loadAll(){
   }
   STATE.diretores = diretores;
   STATE.catalogoSkus = (await safeGet('crm:catalogo_skus')) || [];
+  STATE.promocao = (await safeGet('crm:promocao')) || [];
+  STATE.financeiro = (await safeGet('crm:financeiro')) || {};
 }
 
 // A lista de inativos é compartilhada e pode mudar por qualquer vendedor a qualquer momento,
@@ -975,9 +989,12 @@ async function processarImportacaoBase(linhas, modoSincronizacao){
   });
 
   // Modo sincronização: quem está numa carteira mas sumiu da planilha, sai (vai pra inativos).
+  // Exceção: clientes marcados como "Cliente não identificado" (registros temporários que guardam
+  // uma venda real presa a um código inventado) nunca são removidos automaticamente — só saem
+  // dessa condição quando alguém resolver o caso manualmente (apagar/reconciliar com o cliente real).
   let removidosDaCarteira = 0;
   const paraRemoverDaCarteira = modoSincronizacao
-    ? STATE.roster.filter(c => c.vendedorCodigo && !codigosNaPlanilha.has(c.codigo))
+    ? STATE.roster.filter(c => c.vendedorCodigo && !codigosNaPlanilha.has(c.codigo) && !(c.nome||'').startsWith('Cliente não identificado'))
     : [];
   removidosDaCarteira = paraRemoverDaCarteira.length;
 
@@ -1054,7 +1071,115 @@ function lerPlanilhaCatalogoSkus(file){
   });
 }
 
-// Gera e baixa uma planilha .xlsx direto no navegador (usa a mesma lib já carregada pro pedido em PDF).
+// Lê a planilha de itens em promoção do mês: Código, Descrição, Valor da promoção.
+// Substitui a lista inteira a cada upload (igual o catálogo de SKUs).
+function lerPlanilhaPromocao(file){
+  return new Promise((resolve, reject) => {
+    if(typeof XLSX === 'undefined'){ reject(new Error('Biblioteca de planilha não carregou. Tente recarregar a página.')); return; }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Falha ao ler o arquivo.'));
+    reader.onload = () => {
+      try{
+        const data = new Uint8Array(reader.result);
+        const wb = XLSX.read(data, {type:'array', cellDates:true});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const linhas = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
+        linhas.shift();
+        const promocao = linhas
+          .filter(row => row[0])
+          .map(row => ({
+            codigo: String(row[0]).trim().toUpperCase(),
+            descricao: row[1] || '',
+            valor: Number(row[2]) || 0,
+          }));
+        resolve(promocao);
+      }catch(err){
+        reject(new Error('Não consegui ler essa planilha. Confira se a primeira linha é o cabeçalho.'));
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// Mapa código -> item de promoção, pra consulta rápida.
+function promocaoMap(){
+  const map = new Map();
+  (STATE.promocao||[]).forEach(p => map.set(p.codigo, p));
+  return map;
+}
+
+// Indicadores da promoção do mês pra um vendedor: valor vendido (só a fatia dos itens em
+// promoção, pelo preço promocional cadastrado — não o valor do pedido inteiro), quantos SKUs
+// diferentes da promoção venderam, e o volume total (unidades) desses itens.
+function indicadoresPromocao(vendedorCodigo, mesChave){
+  mesChave = mesChave || STATE.mesSelecionado || currentMonthKey();
+  const map = promocaoMap();
+  if(map.size === 0) return null;
+  const contatos = STATE.contatosCache[vendedorCodigo] || {};
+  let valor = 0, volume = 0;
+  const skusVendidos = new Set();
+  Object.values(contatos).forEach(reg => {
+    (reg.historico||[]).forEach(h => {
+      if(!h.vendeu || !h.data || h.data.slice(0,7)!==mesChave) return;
+      const itens = (h.skus && h.skus.itens) || [];
+      itens.forEach(i => {
+        const cod = String(i.codigo||'').trim().toUpperCase();
+        if(map.has(cod)){
+          const promo = map.get(cod);
+          valor += (i.quantidade||0) * (promo.valor||0);
+          volume += (i.quantidade||0);
+          skusVendidos.add(cod);
+        }
+      });
+    });
+  });
+  return {valor, qtdSkus: skusVendidos.size, volume};
+}
+
+// Monta o "quadradinho" com os 3 números da promoção juntos, ou nada se não tiver promoção
+// cadastrada esse mês.
+function promocaoCardHTML(vendedorCodigo, mesChave){
+  const ind = indicadoresPromocao(vendedorCodigo, mesChave);
+  if(!ind) return '';
+  return `
+    <div class="stat-card accent">
+      <div class="num display" style="font-size:20px;">${fmtMoney(ind.valor)}</div>
+      <div class="label">Vendido em promoção</div>
+      <div style="display:flex; gap:14px; margin-top:8px; font-size:12.5px; color:var(--ink-soft);">
+        <span><b style="color:var(--ink);">${ind.qtdSkus}</b> SKU(s)</span>
+        <span><b style="color:var(--ink);">${ind.volume}</b> un. (volume)</span>
+      </div>
+    </div>
+  `;
+}
+// Mesmo quadradinho, mas somando todos os vendedores — usado na visão geral do gerente.
+function promocaoCardGeralHTML(mesChave){
+  if((STATE.promocao||[]).length === 0) return '';
+  let valor = 0, volume = 0;
+  const skusVendidos = new Set();
+  STATE.vendors.forEach(v => {
+    const ind = indicadoresPromocao(v.codigo, mesChave);
+    if(!ind) return;
+    valor += ind.valor; volume += ind.volume;
+    const map = promocaoMap();
+    const contatos = STATE.contatosCache[v.codigo] || {};
+    Object.values(contatos).forEach(reg => (reg.historico||[]).forEach(h => {
+      if(!h.vendeu || !h.data || h.data.slice(0, 7)!==(mesChave||STATE.mesSelecionado||currentMonthKey())) return;
+      ((h.skus&&h.skus.itens)||[]).forEach(i => { const cod=String(i.codigo||'').trim().toUpperCase(); if(map.has(cod)) skusVendidos.add(cod); });
+    }));
+  });
+  if(valor === 0 && volume === 0) return '';
+  return `
+    <div class="stat-card accent">
+      <div class="num display" style="font-size:20px;">${fmtMoney(valor)}</div>
+      <div class="label">Vendido em promoção (todos os vendedores)</div>
+      <div style="display:flex; gap:14px; margin-top:8px; font-size:12.5px; color:var(--ink-soft);">
+        <span><b style="color:var(--ink);">${skusVendidos.size}</b> SKU(s)</span>
+        <span><b style="color:var(--ink);">${volume}</b> un. (volume)</span>
+      </div>
+    </div>
+  `;
+}
 function baixarXlsx(dados, nomeAba, nomeArquivo){
   if(typeof XLSX === 'undefined'){ avisar('Biblioteca de planilha não carregou. Tente recarregar a página.'); return; }
   const ws = XLSX.utils.json_to_sheet(dados);
@@ -1207,6 +1332,184 @@ async function processarListaInadimplencia(linhas){
     },
     resumo: {marcados, desmarcados, naoEncontrados, ignorados, novosClientesCriados, movidosDeInativos, semVendedorQtd, semVendedorTotal, total: linhas.length},
   };
+}
+
+
+// Lê a planilha de títulos em aberto EXATAMENTE como ela sai do sistema (sem tratar nada
+// antes) — colunas fixas por posição: Empresa, Prefixo, Numero, Parcela, Numero Pedido,
+// Numero Nota, Valor Original, Saldo, Dias em Atraso, Vencimento, Codigo, Nome Cliente,
+// Status, Vendedor. Um cliente pode ter várias linhas (um título por parcela em aberto).
+function lerPlanilhaDevedores(file){
+  return new Promise((resolve, reject) => {
+    if(typeof XLSX === 'undefined'){ reject(new Error('Biblioteca de planilha não carregou. Tente recarregar a página.')); return; }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Falha ao ler o arquivo.'));
+    reader.onload = () => {
+      try{
+        const data = new Uint8Array(reader.result);
+        const wb = XLSX.read(data, {type:'array', cellDates:true});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const linhas = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
+        linhas.shift(); // cabeçalho
+        resolve(linhas);
+      }catch(err){
+        reject(new Error('Não consegui ler essa planilha. Confira se é o relatório de títulos em aberto.'));
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// Quantos dias um título está vencido, calculado na hora (nunca fica desatualizado, diferente
+// da coluna "Dias em Atraso" da planilha, que é uma foto do dia em que foi exportada).
+function diasAtrasoTitulo(vencimentoISO){
+  if(!vencimentoISO) return 0;
+  const venc = new Date(vencimentoISO+'T00:00:00');
+  const hoje = new Date(todayStr()+'T00:00:00');
+  return Math.max(0, Math.round((hoje-venc)/86400000));
+}
+
+// Situação financeira de um cliente: pega o título mais atrasado dele pra definir a cor,
+// e soma TODOS os títulos em aberto pro valor total devido.
+// < 30 dias = amarelo | 30 a 60 dias = azul | mais de 60 dias = vermelho (crítico)
+function statusFinanceiroCliente(codigo){
+  const fin = (STATE.financeiro||{})[codigo];
+  if(!fin || !fin.titulos || fin.titulos.length===0) return null;
+  const abertos = fin.titulos.filter(t => t.saldo > 0);
+  if(abertos.length===0) return null;
+  const diasMax = Math.max(...abertos.map(t => diasAtrasoTitulo(t.vencimento)));
+  const valor = abertos.reduce((s,t) => s+t.saldo, 0);
+  const cor = diasMax > 60 ? 'danger' : (diasMax >= 30 ? 'info' : 'warn');
+  const rotulo = diasMax > 60 ? 'Crítico (60+ dias)' : (diasMax >= 30 ? '30-60 dias' : 'Menos de 30 dias');
+  return {diasMax, valor, cor, rotulo, titulos: abertos};
+}
+
+// Processa a planilha bruta de títulos: agrupa por cliente, calcula o total devido, marca/
+// desmarca inadimplência (mesma regra de sempre: quem não aparece mais volta a ficar em dia),
+// e guarda o detalhe de cada título separadamente pra aba Financeira.
+async function processarImportacaoFinanceiro(linhas){
+  const rosterByCodigo = new Map(STATE.roster.map(c=>[c.codigo, c]));
+  const vendedoresByCodigo = new Map(STATE.vendors.map(v=>[v.codigo, v]));
+  const poolInativos = await getInativos();
+  const inativosByCodigo = new Map(poolInativos.map(c=>[c.codigo, c]));
+
+  const porCliente = new Map();
+  linhas.forEach(row => {
+    const codigo = Number(row[10]);
+    if(!codigo) return;
+    if(!porCliente.has(codigo)) porCliente.set(codigo, {nome: row[11], vendedorTexto: null, titulos: []});
+    const grupo = porCliente.get(codigo);
+    if(row[13] && !grupo.vendedorTexto) grupo.vendedorTexto = row[13];
+    grupo.titulos.push({
+      numero: row[2], parcela: row[3], numeroPedido: row[4], numeroNota: row[5],
+      valorOriginal: Number(row[6])||0, saldo: Number(row[7])||0,
+      vencimento: formatarDataExcel(row[9]),
+    });
+  });
+
+  const codigosNaLista = new Set(porCliente.keys());
+  let marcados=0, naoEncontrados=0, novosClientesCriados=0, movidosDeInativos=0, semVendedorQtd=0, semVendedorTotal=0;
+  const alteracoes = [];
+  const novosRoster = [];
+  const codigosParaRemoverDosInativos = new Set();
+  const financeiroNovo = {};
+
+  porCliente.forEach((grupo, codigo) => {
+    const valorTotal = grupo.titulos.reduce((s,t) => s+(t.saldo>0?t.saldo:0), 0);
+    const vencMaisAntigo = grupo.titulos.filter(t=>t.saldo>0).map(t=>t.vencimento).filter(Boolean).sort()[0] || todayStr();
+    const codigoVendedor = extrairCodigoVendedorTexto(grupo.vendedorTexto);
+    const vendedorDaLista = codigoVendedor !== null ? vendedoresByCodigo.get(codigoVendedor) : null;
+    financeiroNovo[codigo] = {titulos: grupo.titulos, vendedorCodigo: vendedorDaLista ? vendedorDaLista.codigo : null};
+
+    const existente = rosterByCodigo.get(codigo);
+    if(existente){
+      alteracoes.push({c: existente, novoStatus:true, data:vencMaisAntigo, valor:valorTotal});
+      marcados++;
+      return;
+    }
+    if(vendedorDaLista){
+      const doInativo = inativosByCodigo.get(codigo);
+      const existentesDoVendedor = clientsForVendor(vendedorDaLista.codigo).length + novosRoster.filter(n=>n.vendedorCodigo===vendedorDaLista.codigo).length;
+      const novoCliente = {
+        id: 'c'+vendedorDaLista.codigo+'-'+codigo,
+        codigo,
+        nome: (doInativo && doInativo.nome) || grupo.nome || ('Cliente Nº '+codigo),
+        municipio: (doInativo && doInativo.municipio) || '',
+        uf: (doInativo && doInativo.uf) || '',
+        telefone: (doInativo && doInativo.telefone) || '',
+        contato: (doInativo && doInativo.contato) || '',
+        cnpj: (doInativo && doInativo.cnpj) || '',
+        vendedorCodigo: vendedorDaLista.codigo,
+        diaSemana: (existentesDoVendedor % 5) + 1,
+        limiteCredito: doInativo ? doInativo.limiteCredito : null,
+        saldoDevedor: doInativo ? doInativo.saldoDevedor : null,
+        inadimplente: true, inadimplenteDesde: vencMaisAntigo, valorDevido: valorTotal,
+        inadimplenteObs: `Importado da lista financeira (${fmtDatePt(vencMaisAntigo)})${doInativo ? ' — saiu da fila de inativos' : ' — cliente novo'}, atrelado pelo vendedor Nº ${vendedorDaLista.codigo} informado na planilha.`,
+      };
+      novosRoster.push(novoCliente);
+      rosterByCodigo.set(codigo, novoCliente);
+      if(doInativo){ codigosParaRemoverDosInativos.add(codigo); movidosDeInativos++; }
+      novosClientesCriados++;
+      marcados++;
+    } else {
+      naoEncontrados++;
+      semVendedorQtd++;
+      semVendedorTotal += valorTotal;
+    }
+  });
+
+  let desmarcados = 0;
+  STATE.roster.forEach(c => {
+    if(c.inadimplente && !codigosNaLista.has(c.codigo)){
+      alteracoes.push({c, novoStatus:false});
+      desmarcados++;
+    }
+  });
+
+  return {
+    aplicar: async () => {
+      alteracoes.forEach(a => {
+        a.c.inadimplente = a.novoStatus;
+        if(a.novoStatus){
+          a.c.inadimplenteDesde = a.data;
+          a.c.valorDevido = a.valor;
+        } else {
+          a.c.inadimplenteDesde = null;
+          // Observações e agendamentos de cobrança NUNCA são apagados aqui — só o status muda.
+        }
+      });
+      novosRoster.forEach(n => STATE.roster.push(n));
+      await safeSet('crm:roster', STATE.roster);
+      if(codigosParaRemoverDosInativos.size > 0){
+        const novoPoolInativos = poolInativos.filter(c => !codigosParaRemoverDosInativos.has(c.codigo));
+        await safeSet('crm:inativos', novoPoolInativos);
+      }
+      STATE.financeiro = financeiroNovo;
+      await safeSet('crm:financeiro', financeiroNovo);
+    },
+    resumo: {marcados, desmarcados, naoEncontrados, novosClientesCriados, movidosDeInativos, semVendedorQtd, semVendedorTotal, totalTitulos: linhas.length, totalClientes: porCliente.size},
+  };
+}
+
+// Registra um contato de cobrança (feedback do cliente) e/ou agenda um retorno — funciona
+// tanto pra cliente que está na carteira ativa quanto pra quem está na fila de inativos.
+async function salvarCobranca(codigo, obs, agendarPara){
+  let c = STATE.roster.find(x => x.codigo===codigo);
+  if(c){
+    c.cobranca = c.cobranca || {historico: []};
+    if(obs) c.cobranca.historico.push({id: genId(), data: todayStr(), obs, por: STATE.session.nome});
+    c.cobranca.agendadoPara = agendarPara || null;
+    await safeSet('crm:roster', STATE.roster);
+    return;
+  }
+  const inativos = await getInativos();
+  c = inativos.find(x => x.codigo===codigo);
+  if(c){
+    c.cobranca = c.cobranca || {historico: []};
+    if(obs) c.cobranca.historico.push({id: genId(), data: todayStr(), obs, por: STATE.session.nome});
+    c.cobranca.agendadoPara = agendarPara || null;
+    await safeSet('crm:inativos', inativos);
+  }
 }
 
 
@@ -1388,13 +1691,53 @@ async function editarContato(vendedorCodigo, clientCodigo, entryId, obs, vendeu,
 // Remove um pedido/contato específico do histórico (usado pra apagar um pedido lançado errado,
 // antes de subir ele de novo corrigido). Some da meta e dos totais do mês automaticamente,
 // porque esses números são sempre recalculados a partir do histórico, nunca guardados à parte.
+// Guarda uma cópia de algo que está sendo excluído, antes de tirar de onde estava — nada some
+// de verdade, só vai pra área de "itens excluídos", de onde dá pra restaurar depois.
+async function moverParaLixeira(tipo, dados, extra){
+  STATE.lixeira = STATE.lixeira || [];
+  STATE.lixeira.push({
+    id: genId(),
+    tipo,
+    excluidoEm: todayStr(),
+    excluidoPor: STATE.session.nome,
+    dados,
+    ...extra,
+  });
+  await safeSet('crm:lixeira', STATE.lixeira);
+}
+
+// Remove um pedido/contato específico do histórico (usado pra apagar um pedido lançado errado,
+// antes de subir ele de novo corrigido) — guarda uma cópia na lixeira antes de tirar.
 async function excluirEntradaHistorico(vendedorCodigo, clientCodigo, entryId){
   const data = await getContatos(vendedorCodigo);
   const reg = data[clientCodigo];
   if(!reg || !reg.historico) return;
+  const entrada = reg.historico.find(h => h.id === entryId);
+  if(entrada) await moverParaLixeira('pedido', entrada, {vendedorCodigo, clienteCodigo: clientCodigo});
   reg.historico = reg.historico.filter(h => h.id !== entryId);
   STATE.contatosCache[vendedorCodigo] = data;
   await safeSet('crm:contatos:'+vendedorCodigo, data);
+}
+
+// Devolve pro histórico do cliente um pedido que estava na lixeira.
+async function restaurarDaLixeira(lixeiraId){
+  const item = (STATE.lixeira||[]).find(l => l.id === lixeiraId);
+  if(!item) return false;
+  if(item.tipo === 'pedido'){
+    const data = await getContatos(item.vendedorCodigo);
+    if(!data[item.clienteCodigo]) data[item.clienteCodigo] = {historico: []};
+    if(!data[item.clienteCodigo].historico) data[item.clienteCodigo].historico = [];
+    data[item.clienteCodigo].historico.push(item.dados);
+    STATE.contatosCache[item.vendedorCodigo] = data;
+    await safeSet('crm:contatos:'+item.vendedorCodigo, data);
+  } else if(item.tipo === 'lead'){
+    STATE.leads = STATE.leads || [];
+    STATE.leads.push(item.dados);
+    await salvarLeads();
+  }
+  STATE.lixeira = STATE.lixeira.filter(l => l.id !== lixeiraId);
+  await safeSet('crm:lixeira', STATE.lixeira);
+  return true;
 }
 
 async function cancelarAgendamento(vendedorCodigo, clientCodigo){
@@ -1466,7 +1809,7 @@ function lerPdfComoBase64(file){
 }
 async function extrairPedidoDoPdf(file){
   const base64 = await lerPdfComoBase64(file);
-  const prompt = 'Analise este PDF de pedido/nota de venda. Pode ter ate 20 paginas e centenas de itens — leia o documento inteiro, todas as paginas, sem pular nada. Responda APENAS com um JSON valido, compacto, sem espacos desnecessarios, sem nenhum texto antes ou depois, sem comentarios, exatamente neste formato: {"numeroPedido":"","uf":"","valorTotal":0,"itens":[["codigo","descricao curta",0]]}. numeroPedido e o numero do pedido, geralmente no topo do documento num campo literalmente chamado "Pedido:" seguido de um numero (exemplo: se o documento tem escrito "Pedido: 521784", numeroPedido deve ser "521784") — as vezes aparece como "Pedido Nº", "Nº do Pedido" ou "Numero do Pedido"; inclua so o numero, sem o rotulo, como texto; se realmente nao encontrar nenhum campo assim, deixe essa string vazia. uf e a sigla do estado (2 letras, ex: SP, RJ, MG) do CLIENTE que esta comprando, geralmente num campo chamado "UF:" perto do endereco/municipio do cliente no documento — inclua so a sigla de 2 letras maiuscula; se nao encontrar, deixe essa string vazia. Cada item da lista "itens" e um array com 3 posicoes, nessa ordem: [0]=codigo do produto (coluna "Produto" ou "Codigo"), [1]=descricao BEM RESUMIDA do produto (no maximo 35 caracteres, corte se precisar), [2]=quantidade vendida (numero). valorTotal e o valor final do pedido em reais (o total que o cliente vai pagar — geralmente chamado de "Valor Liquido", "Valor Total" ou "Total Geral" no documento; se nao existir esse campo, use o total de mercadorias), como numero puro (sem R$, sem ponto de milhar, ponto para casas decimais). Inclua TODOS os itens de TODAS as paginas do pedido, sem excecao, mesmo que a lista tenha centenas de linhas. Se nao identificar o codigo de algum item, use "?" nesse campo, mas sempre inclua a linha.';
+  const prompt = 'Analise este PDF de pedido/nota de venda. Pode ter ate 20 paginas e centenas de itens — leia o documento inteiro, todas as paginas, sem pular nada. Responda APENAS com um JSON valido, compacto, sem espacos desnecessarios, sem nenhum texto antes ou depois, sem comentarios, exatamente neste formato: {"numeroPedido":"","clienteCodigo":"","uf":"","valorTotal":0,"itens":[["codigo","descricao curta",0]]}. numeroPedido e o numero do pedido, geralmente no topo do documento num campo literalmente chamado "Pedido:" seguido de um numero (exemplo: se o documento tem escrito "Pedido: 521784", numeroPedido deve ser "521784") — as vezes aparece como "Pedido Nº", "Nº do Pedido" ou "Numero do Pedido"; inclua so o numero, sem o rotulo, como texto; se realmente nao encontrar nenhum campo assim, deixe essa string vazia. clienteCodigo e o numero de cadastro do CLIENTE que esta comprando (nao confundir com o numero do pedido) — geralmente aparece bem no inicio de um campo chamado "Cliente:", no formato "numero - nome da empresa" (exemplo: se o documento tem escrito "Cliente: 282 - B M MARCATTI ELETRONICA", clienteCodigo deve ser "282"); inclua so o numero, sem o nome, como texto; se nao encontrar, deixe vazia. uf e a sigla do estado (2 letras, ex: SP, RJ, MG) do CLIENTE que esta comprando, geralmente num campo chamado "UF:" perto do endereco/municipio do cliente no documento — inclua so a sigla de 2 letras maiuscula; se nao encontrar, deixe essa string vazia. Cada item da lista "itens" e um array com 3 posicoes, nessa ordem: [0]=codigo do produto (coluna "Produto" ou "Codigo"), [1]=descricao BEM RESUMIDA do produto (no maximo 35 caracteres, corte se precisar), [2]=quantidade vendida (numero). valorTotal e o valor final do pedido em reais (o total que o cliente vai pagar — geralmente chamado de "Valor Liquido", "Valor Total" ou "Total Geral" no documento; se nao existir esse campo, use o total de mercadorias), como numero puro (sem R$, sem ponto de milhar, ponto para casas decimais). Inclua TODOS os itens de TODAS as paginas do pedido, sem excecao, mesmo que a lista tenha centenas de linhas. Se nao identificar o codigo de algum item, use "?" nesse campo, mas sempre inclua a linha.';
   // Chama nossa própria função no Vercel (api/analisar-pedido.js), que guarda a chave da Anthropic
   // em segredo no servidor — o navegador do vendedor nunca vê essa chave.
   const response = await fetch('/api/analisar-pedido', {
@@ -1504,6 +1847,7 @@ async function extrairPedidoDoPdf(file){
   });
   return {
     numeroPedido: (parsed.numeroPedido || '').toString().trim(),
+    clienteCodigo: (parsed.clienteCodigo || '').toString().trim(),
     uf: (parsed.uf || '').toString().trim().toUpperCase(),
     valorTotal: Number(parsed.valorTotal) || 0,
     itens,
@@ -1692,6 +2036,7 @@ const app = document.getElementById('app');
 
 function render(){
   if(!STATE.session){ renderLogin(); return; }
+  if(STATE.session.tipo === 'financeiro'){ renderFinanceiroShell(); return; }
   if(baseDesatualizadaBloqueando()){
     if(STATE.session.tipo === 'gerente'){ renderBloqueioBaseGerente(app); }
     else { renderBloqueioBaseVendedor(app); }
@@ -1799,6 +2144,17 @@ function renderLogin(){
         }
         return;
       }
+      const usuarioFinanceiro = (STATE.config && STATE.config.usuarioFinanceiro) || 'financeiro';
+      if(user === usuarioFinanceiro){
+        const senhaFinanceiro = (STATE.config && STATE.config.senhaFinanceiro) || 'financeiro123';
+        if(pass === senhaFinanceiro){
+          const nomeFinanceiro = (STATE.config && STATE.config.nomeFinanceiro) || 'Financeiro';
+          STATE.session = {tipo:'financeiro', nome: nomeFinanceiro}; STATE.route={page:'financeira'}; STATE.mesSelecionado = currentMonthKey(); render();
+        } else {
+          errSlot.innerHTML = `<div class="login-error">Senha incorreta.</div>`;
+        }
+        return;
+      }
       const vendors = STATE.vendors || [];
       const v = vendors.find(v => v.usuario === user);
       if(v && v.senha === pass){
@@ -1849,6 +2205,8 @@ async function renderVendorShell(){
     {page:'dashboard', label:'Dashboard'},
     {page:'hoje', label:'Contatos hoje'},
     {page:'carteira', label:'Carteira completa'},
+    {page:'pedidos', label:'Pedidos'},
+    {page:'financeira', label:'Financeira'},
     {page:'leads', label:'Leads'},
     {page:'inativos', label:'Clientes inativos'},
     {page:'historico', label:'Histórico'},
@@ -1859,12 +2217,524 @@ async function renderVendorShell(){
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
   await getContatos(STATE.session.codigo);
   if(STATE.route.page==='dashboard') renderVendorDashboard(main);
-  else if(STATE.route.page==='hoje') renderVendorHoje(main);
+  else if(STATE.route.page==='hoje') await renderVendorHoje(main);
   else if(STATE.route.page==='carteira') renderVendorCarteira(main);
+  else if(STATE.route.page==='pedidos') await renderVendorPedidos(main);
+  else if(STATE.route.page==='financeira') await renderVendorFinanceira(main);
   else if(STATE.route.page==='leads') renderVendorLeads(main);
   else if(STATE.route.page==='inativos') await renderVendorInativos(main);
   else renderVendorHistorico(main);
 }
+
+// Junta todos os pedidos (contatos com venda) já registrados por um vendedor, num formato
+// prontinho pra listar/buscar/ordenar — usado na aba "Pedidos".
+async function pedidosDoVendedor(vendedorCodigo){
+  const contatos = await getContatos(vendedorCodigo);
+  const todosClientes = [...STATE.roster, ...(await getInativos())];
+  const nomeMap = new Map(todosClientes.map(c => [String(c.codigo), c.nome]));
+  const pedidos = [];
+  Object.entries(contatos).forEach(([codigoCliente, reg]) => {
+    (reg.historico||[]).forEach(h => {
+      if(!h.vendeu) return;
+      pedidos.push({
+        id: h.id,
+        clienteCodigo: codigoCliente,
+        clienteNome: nomeMap.get(String(codigoCliente)) || 'Cliente não encontrado',
+        numeroPedido: (h.skus && h.skus.numeroPedido) ? h.skus.numeroPedido : '',
+        valor: h.valor || 0,
+        data: h.data || '',
+        obs: h.obs || '',
+        uf: (h.skus && h.skus.uf) || '',
+        itens: (h.skus && h.skus.itens) || [],
+        qtdSkus: (h.skus && h.skus.qtdSkus) || 0,
+        qtdUnidades: (h.skus && h.skus.qtdUnidades) || 0,
+      });
+    });
+  });
+  // Numeração de reserva (quando o PDF não trouxe um número de pedido), em ordem cronológica.
+  const cronologica = [...pedidos].sort((a,b) => a.data < b.data ? -1 : 1);
+  cronologica.forEach((p, i) => { if(!p.numeroPedido) p.numeroPedidoExibicao = 'seq. '+(i+1); else p.numeroPedidoExibicao = p.numeroPedido; });
+  return pedidos;
+}
+
+// Move um pedido (já lançado) de um código de cliente pra outro — usado quando o vendedor
+// precisa corrigir a qual cliente um pedido realmente pertence, sem perder o valor/data/itens.
+async function moverPedidoParaCliente(vendedorCodigo, codigoAntigo, entryId, novoCodigo){
+  const data = await getContatos(vendedorCodigo);
+  const regAntigo = data[codigoAntigo];
+  if(!regAntigo || !regAntigo.historico) return false;
+  const idx = regAntigo.historico.findIndex(h => String(h.id)===String(entryId));
+  if(idx === -1) return false;
+  const [entry] = regAntigo.historico.splice(idx, 1);
+  if(!data[novoCodigo]) data[novoCodigo] = {historico: []};
+  if(!data[novoCodigo].historico) data[novoCodigo].historico = [];
+  data[novoCodigo].historico.push(entry);
+  STATE.contatosCache[vendedorCodigo] = data;
+  await safeSet('crm:contatos:'+vendedorCodigo, data);
+  return true;
+}
+
+// Modal simples pra corrigir a qual cliente um pedido pertence (usado quando o pedido ficou
+// "perdido" — por exemplo, presa a um código temporário — e o vendedor sabe qual é o cliente certo).
+function abrirTrocarClienteDoPedido(p, main){
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal">
+      <h3>Corrigir cliente do pedido</h3>
+      <p style="font-size:12.5px; color:var(--ink-soft); margin-bottom:14px;">Pedido nº ${p.numeroPedidoExibicao} — ${fmtMoney(p.valor)}<br>Atualmente em: ${p.clienteNome} (Nº ${p.clienteCodigo})</p>
+      <label class="field-label">Número do cliente correto</label>
+      <input type="number" id="novoCodigoClientePedido" class="login-input" placeholder="Ex: 448">
+      <div id="msgTrocarClientePedido"></div>
+      <div class="modal-actions" style="margin-top:10px;">
+        <button class="ghost-btn" id="cancelarTrocarClientePedido">Cancelar</button>
+        <button class="primary-btn" id="salvarTrocarClientePedido">Salvar</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  backdrop.onclick = (e) => { if(e.target===backdrop) backdrop.remove(); };
+  backdrop.querySelector('#cancelarTrocarClientePedido').onclick = () => backdrop.remove();
+  backdrop.querySelector('#salvarTrocarClientePedido').onclick = async () => {
+    const novoCodigo = backdrop.querySelector('#novoCodigoClientePedido').value.trim();
+    const msg = backdrop.querySelector('#msgTrocarClientePedido');
+    if(!novoCodigo){ msg.innerHTML = `<div class="msg err">Informe o número do cliente.</div>`; return; }
+    const clienteExiste = [...STATE.roster, ...(await getInativos())].find(c => String(c.codigo)===novoCodigo);
+    if(!clienteExiste){ msg.innerHTML = `<div class="msg err">Não achei nenhum cliente com esse número.</div>`; return; }
+    await moverPedidoParaCliente(STATE.session.codigo, p.clienteCodigo, p.id, novoCodigo);
+    backdrop.remove();
+    await avisar(`Pedido movido para ${clienteExiste.nome}.`);
+    await renderVendorPedidos(main);
+  };
+}
+
+async function renderVendorPedidos(main){
+  main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
+  const pedidos = await pedidosDoVendedor(STATE.session.codigo);
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Pedidos</div><h2>Todos os seus pedidos</h2></div>
+    <p style="font-size:13px; color:var(--ink-soft); margin-bottom:16px;">Clique num pedido pra ver os detalhes completos (itens, SKUs, volume).</p>
+    <div class="toolbar">
+      <input type="text" class="search-input" id="buscaPedido" placeholder="Buscar por número do pedido...">
+      <select class="filter-select" id="ordenarPedidos">
+        <option value="data_desc">Mais recentes primeiro</option>
+        <option value="data_asc">Mais antigos primeiro</option>
+        <option value="valor_desc">Maior valor primeiro</option>
+        <option value="valor_asc">Menor valor primeiro</option>
+        <option value="numero_asc">Número do pedido (A-Z)</option>
+      </select>
+      <button class="ghost-btn" id="btnExportarPedidos">⬇️ Exportar Excel</button>
+    </div>
+    <div id="contagemPedidos" style="font-size:12.5px; color:var(--ink-soft); margin-bottom:12px;"></div>
+    <div class="client-list" id="listaPedidos"></div>
+
+    <div class="panel" style="margin-top:22px;">
+      <h3>🗑️ Itens excluídos</h3>
+      <p class="hint">Pedidos e leads que você apagou continuam guardados aqui — nada se perde de verdade. Dá pra restaurar quando quiser.</p>
+      <div id="listaLixeira"></div>
+    </div>
+  `;
+  function drawLixeira(){
+    const meus = (STATE.lixeira||[]).filter(l => l.tipo==='lead' ? l.dados.vendedorCodigo===STATE.session.codigo : l.vendedorCodigo===STATE.session.codigo);
+    const box = document.getElementById('listaLixeira');
+    if(meus.length===0){ box.innerHTML = `<p class="hint">Nada excluído até agora.</p>`; return; }
+    box.innerHTML = meus.slice().reverse().map(l => `
+      <div class="client-row" style="padding:10px 14px;">
+        <div class="client-info">
+          <div class="client-name" style="font-size:13px;">${l.tipo==='pedido' ? `Pedido ${fmtMoney(l.dados.valor)}` : `Lead: ${l.dados.empresa}`}</div>
+          <div class="client-meta">Excluído em ${fmtDatePt(l.excluidoEm)} por ${l.excluidoPor}</div>
+        </div>
+        <button class="ghost-btn btnRestaurarLixeira" data-id="${l.id}">↩️ Restaurar</button>
+      </div>
+    `).join('');
+    box.querySelectorAll('.btnRestaurarLixeira').forEach(btn => {
+      btn.onclick = async () => {
+        await restaurarDaLixeira(btn.dataset.id);
+        await avisar('Item restaurado.');
+        await renderVendorPedidos(main);
+      };
+    });
+  }
+  drawLixeira();
+
+  function pedidosFiltrados(){
+    const q = document.getElementById('buscaPedido').value.trim().toLowerCase();
+    const ordem = document.getElementById('ordenarPedidos').value;
+    let filtrados = pedidos.filter(p => !q || p.numeroPedidoExibicao.toLowerCase().includes(q));
+    const cmp = {
+      data_desc: (a,b) => a.data < b.data ? 1 : -1,
+      data_asc: (a,b) => a.data < b.data ? -1 : 1,
+      valor_desc: (a,b) => b.valor - a.valor,
+      valor_asc: (a,b) => a.valor - b.valor,
+      numero_asc: (a,b) => a.numeroPedidoExibicao.localeCompare(b.numeroPedidoExibicao, 'pt-BR', {numeric:true}),
+    }[ordem];
+    filtrados.sort(cmp);
+    return filtrados;
+  }
+
+  function draw(){
+    const filtrados = pedidosFiltrados();
+    document.getElementById('contagemPedidos').textContent = `${filtrados.length} pedido(s) — total ${fmtMoney(filtrados.reduce((s,p)=>s+p.valor,0))}`;
+    const lista = document.getElementById('listaPedidos');
+    if(filtrados.length===0){ lista.innerHTML = `<div class="empty-state">Nenhum pedido encontrado.</div>`; return; }
+    lista.innerHTML = filtrados.map(p => `
+      <div class="client-row status-ok" data-id="${p.id}" style="cursor:pointer; flex-wrap:wrap;">
+        <div class="client-info">
+          <div class="client-name">Pedido nº ${p.numeroPedidoExibicao}</div>
+          <div class="client-meta">${p.clienteNome} <span class="client-num">Nº ${p.clienteCodigo}</span></div>
+        </div>
+        <span class="status-badge status-ok">${fmtMoney(p.valor)}</span>
+        <div class="day-pill">${fmtDatePt(p.data)}</div>
+        <button class="ghost-btn btnTrocarClientePedido" data-id="${p.id}" style="padding:7px 10px; font-size:12px;">🔁 Trocar cliente</button>
+        <button class="ghost-btn btnExcluirPedido" data-id="${p.id}" style="padding:7px 10px; font-size:12px; color:var(--danger); border-color:var(--danger);">🗑️ Excluir</button>
+      </div>
+    `).join('');
+    lista.querySelectorAll('.client-row').forEach(row => {
+      row.onclick = (e) => {
+        if(e.target.closest('button')) return;
+        const p = pedidos.find(x => String(x.id)===row.dataset.id);
+        if(p) abrirDetalhePedido(p);
+      };
+    });
+    lista.querySelectorAll('.btnTrocarClientePedido').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const p = pedidos.find(x => String(x.id)===btn.dataset.id);
+        if(p) abrirTrocarClienteDoPedido(p, main);
+      };
+    });
+    lista.querySelectorAll('.btnExcluirPedido').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        const p = pedidos.find(x => String(x.id)===btn.dataset.id);
+        if(!p) return;
+        if(!(await confirmarAcao(`Excluir de vez o pedido nº ${p.numeroPedidoExibicao} (${fmtMoney(p.valor)})? Só o vendedor pode fazer isso, e não tem como desfazer.`))) return;
+        await excluirEntradaHistorico(STATE.session.codigo, p.clienteCodigo, p.id);
+        await renderVendorPedidos(main);
+      };
+    });
+  }
+
+  document.getElementById('buscaPedido').oninput = draw;
+  document.getElementById('ordenarPedidos').onchange = draw;
+  document.getElementById('btnExportarPedidos').onclick = () => {
+    const filtrados = pedidosFiltrados();
+    const linhas = filtrados.map(p => ({
+      'Número do pedido': p.numeroPedidoExibicao,
+      'Cliente': p.clienteNome,
+      'Código do cliente': p.clienteCodigo,
+      'Data': p.data,
+      'Valor': p.valor,
+      'UF': p.uf,
+      'Qtd. SKUs': p.qtdSkus,
+      'Qtd. unidades': p.qtdUnidades,
+    }));
+    const ws = XLSX.utils.json_to_sheet(linhas);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Pedidos');
+    XLSX.writeFile(wb, `pedidos_${STATE.session.nome.replace(/\s+/g,'_')}.xlsx`);
+  };
+  draw();
+}
+
+// Modal de detalhe de um único pedido (aberto a partir da aba "Pedidos").
+function abrirDetalhePedido(p){
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal" style="max-width:440px; max-height:80vh; overflow-y:auto;">
+      <h3>Pedido nº ${p.numeroPedidoExibicao}</h3>
+      <p style="font-size:13px; color:var(--ink-soft); margin-bottom:14px; line-height:1.5;">
+        ${p.clienteNome} <span class="client-num">Nº ${p.clienteCodigo}</span><br>
+        ${fmtDatePt(p.data)}${p.uf ? ' · UF: '+p.uf : ''}
+      </p>
+      <div class="client-row status-ok" style="margin-bottom:14px;">
+        <div class="client-info"><div class="client-name">Valor total</div></div>
+        <span class="status-badge status-ok" style="font-size:14px;">${fmtMoney(p.valor)}</span>
+      </div>
+      ${p.itens && p.itens.length ? `
+        <p class="hint">Volume: <b>${p.qtdUnidades}</b> un. · SKUs: <b>${p.qtdSkus}</b></p>
+        <table class="cred-table">
+          <thead><tr><th>Código</th><th>Descrição</th><th>Qtd.</th></tr></thead>
+          <tbody>
+            ${p.itens.map(i => `<tr><td>${i.codigo||'?'}</td><td>${i.descricao||''}</td><td>${i.quantidade}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      ` : `<p class="hint">Nenhum item detalhado registrado nesse pedido.</p>`}
+      ${p.obs ? `<p class="hint" style="margin-top:10px;">Observação: ${p.obs}</p>` : ''}
+      <div class="modal-actions" style="margin-top:16px;">
+        <button class="ghost-btn" id="fecharDetalhePedido">Fechar</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  backdrop.onclick = (e) => { if(e.target===backdrop) backdrop.remove(); };
+  backdrop.querySelector('#fecharDetalhePedido').onclick = () => backdrop.remove();
+}
+
+// Junta os clientes inadimplentes que pertencem a esse vendedor (segundo a planilha financeira),
+// não importa se estão hoje na carteira ativa dele ou parados na fila de inativos.
+async function clientesFinanceiroDoVendedor(vendedorCodigo){
+  const todosClientes = [...STATE.roster, ...(await getInativos())];
+  const porCodigo = new Map(todosClientes.map(c => [c.codigo, c]));
+  const lista = [];
+  Object.entries(STATE.financeiro||{}).forEach(([codigo, fin]) => {
+    if(fin.vendedorCodigo !== vendedorCodigo) return;
+    const status = statusFinanceiroCliente(Number(codigo));
+    if(!status) return; // já quitou tudo
+    const c = porCodigo.get(Number(codigo));
+    lista.push({
+      codigo: Number(codigo),
+      nome: c ? c.nome : (fin.titulos[0] && fin.titulos[0].nome) || ('Cliente Nº '+codigo),
+      telefone: c ? c.telefone : '',
+      cobranca: c ? c.cobranca : null,
+      onde: c ? (STATE.roster.includes(c) ? 'Carteira ativa' : 'Clientes inativos') : 'Não cadastrado',
+      ...status,
+    });
+  });
+  lista.sort((a,b) => b.diasMax - a.diasMax);
+  return lista;
+}
+
+async function renderVendorFinanceira(main){
+  main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
+  const clientes = await clientesFinanceiroDoVendedor(STATE.session.codigo);
+  const totalDevido = clientes.reduce((s,c) => s+c.valor, 0);
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Financeira</div><h2>Cobrança de inadimplentes</h2></div>
+    <p style="font-size:13px; color:var(--ink-soft); margin-bottom:16px;">Clientes que somem da sua rotina diária normal — só voltam a aparecer se você agendar um retorno de cobrança. Cor pelo título mais atrasado, valor é a soma de tudo em aberto.</p>
+    <div class="progress-row" style="margin-bottom:18px;">
+      <div class="stat-card danger"><div class="num display">${clientes.length}</div><div class="label">Clientes inadimplentes</div></div>
+      <div class="stat-card danger"><div class="num display" style="font-size:20px;">${fmtMoney(totalDevido)}</div><div class="label">Total em aberto</div></div>
+    </div>
+    <div class="client-list" id="listaFinanceira"></div>
+  `;
+  const lista = document.getElementById('listaFinanceira');
+  if(clientes.length===0){ lista.innerHTML = `<div class="empty-state">Nenhum cliente inadimplente por aqui. 🎉</div>`; return; }
+  lista.innerHTML = clientes.map(c => `
+    <div class="client-row status-${c.cor}" style="cursor:pointer;" data-codigo="${c.codigo}">
+      <div class="client-info">
+        <div class="client-name">${c.nome} <span class="client-num">Nº ${c.codigo}</span></div>
+        <div class="client-meta">${c.onde} · ${c.titulos.length} título(s) em aberto${c.cobranca && c.cobranca.agendadoPara ? ' · Retorno agendado: '+fmtDatePt(c.cobranca.agendadoPara) : ''}</div>
+      </div>
+      <span class="status-badge status-${c.cor}">${c.rotulo}</span>
+      <span class="status-badge status-${c.cor}" style="font-weight:700;">${fmtMoney(c.valor)}</span>
+    </div>
+  `).join('');
+  lista.querySelectorAll('.client-row').forEach(row => {
+    row.onclick = () => abrirCobrancaModal(Number(row.dataset.codigo), () => renderVendorFinanceira(main));
+  });
+}
+
+// Modal de cobrança: mostra os títulos em aberto, deixa registrar o feedback do contato de
+// cobrança e agendar um retorno (que faz o cliente voltar a aparecer na agenda diária só
+// naquele dia específico).
+function abrirCobrancaModal(codigo, onSaved){
+  const status = statusFinanceiroCliente(codigo);
+  if(!status) return;
+  const c = STATE.roster.find(x=>x.codigo===codigo);
+  const nome = c ? c.nome : ('Cliente Nº '+codigo);
+  const cobrancaAtual = c ? c.cobranca : null;
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal" style="max-width:460px; max-height:85vh; overflow-y:auto;">
+      <h3>${nome} <span class="client-num" style="font-size:0.6em;">Nº ${codigo}</span></h3>
+      <p style="margin-bottom:12px;"><span class="status-badge status-${status.cor}">${status.rotulo}</span> <b style="margin-left:6px;">${fmtMoney(status.valor)}</b> em aberto</p>
+      <table class="cred-table" style="margin-bottom:16px;">
+        <thead><tr><th>Nº título</th><th>Vencimento</th><th>Dias</th><th>Saldo</th></tr></thead>
+        <tbody>
+          ${status.titulos.sort((a,b)=>a.vencimento<b.vencimento?-1:1).map(t => `
+            <tr><td>${t.numero||'—'}${t.parcela?'/'+t.parcela:''}</td><td>${fmtDatePt(t.vencimento)}</td><td>${diasAtrasoTitulo(t.vencimento)}</td><td>${fmtMoney(t.saldo)}</td></tr>
+          `).join('')}
+        </tbody>
+      </table>
+      ${cobrancaAtual && cobrancaAtual.historico && cobrancaAtual.historico.length ? `
+        <p class="field-label">Histórico de cobrança</p>
+        <div style="max-height:120px; overflow-y:auto; margin-bottom:14px;">
+          ${cobrancaAtual.historico.slice().reverse().map(h => `<p class="hint" style="margin-bottom:6px;">${fmtDatePt(h.data)} — ${h.obs} <i>(${h.por})</i></p>`).join('')}
+        </div>
+      ` : ''}
+      <label class="field-label">Feedback desse contato</label>
+      <textarea id="obsCobranca" class="import-area" style="min-height:70px;" placeholder="O que o cliente disse..."></textarea>
+      <label class="field-label">Agendar retorno (opcional)</label>
+      <input type="date" id="agendarCobranca" class="login-input" value="${cobrancaAtual && cobrancaAtual.agendadoPara ? cobrancaAtual.agendadoPara : ''}">
+      <p class="hint">Deixe em branco pra não agendar nada. Se já tinha uma data marcada e você limpar esse campo, o agendamento é cancelado.</p>
+      <div id="msgCobranca"></div>
+      <div class="modal-actions" style="margin-top:10px;">
+        <button class="ghost-btn" id="fecharCobranca">Fechar</button>
+        <button class="primary-btn" id="salvarCobrancaBtn">Salvar</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  backdrop.onclick = (e) => { if(e.target===backdrop) backdrop.remove(); };
+  backdrop.querySelector('#fecharCobranca').onclick = () => backdrop.remove();
+  backdrop.querySelector('#salvarCobrancaBtn').onclick = async () => {
+    const obs = backdrop.querySelector('#obsCobranca').value.trim();
+    const agendarPara = backdrop.querySelector('#agendarCobranca').value || null;
+    await salvarCobranca(codigo, obs, agendarPara);
+    backdrop.remove();
+    await avisar('Cobrança registrada.');
+    if(onSaved) await onSaved();
+  };
+}
+
+// Junta TODOS os clientes inadimplentes da empresa inteira (todos os vendedores) — usado
+// pelo usuário financeiro, que precisa ver 100% dos devedores, não só de um vendedor.
+async function todosClientesFinanceiro(){
+  const todosClientes = [...STATE.roster, ...(await getInativos())];
+  const porCodigo = new Map(todosClientes.map(c => [c.codigo, c]));
+  const lista = [];
+  Object.entries(STATE.financeiro||{}).forEach(([codigo, fin]) => {
+    const status = statusFinanceiroCliente(Number(codigo));
+    if(!status) return;
+    const c = porCodigo.get(Number(codigo));
+    const vendedor = STATE.vendors.find(v=>v.codigo===fin.vendedorCodigo);
+    lista.push({
+      codigo: Number(codigo),
+      nome: c ? c.nome : ('Cliente Nº '+codigo),
+      vendedorNome: vendedor ? vendedor.nome : 'Sem vendedor',
+      cobranca: c ? c.cobranca : null,
+      onde: c ? (STATE.roster.includes(c) ? 'Carteira ativa' : 'Clientes inativos') : 'Não cadastrado',
+      ...status,
+    });
+  });
+  return lista;
+}
+
+async function renderFinanceiroShell(){
+  const items = [{page:'financeira', label:'Financeira'}];
+  app.innerHTML = `<div class="shell">${sidebarHTML(items)}<div class="main" id="main"></div></div>`;
+  bindSidebar(renderFinanceiroShell);
+  const main = document.getElementById('main');
+  main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
+  const clientes = await todosClientesFinanceiro();
+
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Financeira</div><h2>Cobrança — todos os clientes</h2></div>
+
+    <div class="panel import-panel" style="border-left-color:#111;">
+      <div class="import-panel-title"><span class="import-badge" style="background:#111;">1</span><h3>Subir planilha de títulos em aberto</h3></div>
+      <p class="hint">Suba o relatório <b>exatamente como ele sai do sistema</b> — o CRM junta os títulos por cliente sozinho. Nada do que já foi registrado de observação/cobrança é apagado, não importa quantas vezes você subir de novo.</p>
+      <div class="form-row" style="align-items:center;">
+        <input type="file" id="f_financeiro" accept=".xlsx,.xls">
+        <button class="ghost-btn" id="btnProcessarFinanceiro">Processar planilha</button>
+      </div>
+      <div id="msgFinanceiro"></div>
+    </div>
+
+    <div class="progress-row" style="margin-bottom:6px;">
+      <div class="stat-card danger"><div class="num display">${clientes.length}</div><div class="label">Clientes inadimplentes (100%)</div></div>
+      <div class="stat-card danger"><div class="num display" style="font-size:20px;">${fmtMoney(clientes.reduce((s,c)=>s+c.valor,0))}</div><div class="label">Total em aberto</div></div>
+      <div class="stat-card"><div class="num display">${clientes.filter(c=>!c.cobranca || !c.cobranca.historico || c.cobranca.historico.length===0).length}</div><div class="label">Sem nenhum contato ainda</div></div>
+    </div>
+
+    <div class="toolbar">
+      <input type="text" class="search-input" id="buscaFinanceiro" placeholder="Buscar por número do cliente...">
+      <select class="filter-select" id="ordenarFinanceiro">
+        <option value="dias_desc">Mais atrasado primeiro</option>
+        <option value="valor_desc">Maior valor primeiro</option>
+        <option value="valor_asc">Menor valor primeiro</option>
+        <option value="numero_asc">Número do cliente</option>
+      </select>
+      <select class="filter-select" id="filtroContatoFinanceiro">
+        <option value="todos">Todos</option>
+        <option value="sem_contato">Só sem contato/observação</option>
+      </select>
+      <button class="ghost-btn" id="btnExportarFinanceiro">⬇️ Exportar Excel (100%)</button>
+    </div>
+    <div id="contagemFinanceiro" style="font-size:12.5px; color:var(--ink-soft); margin-bottom:12px;"></div>
+    <div class="client-list" id="listaFinanceiroGeral"></div>
+  `;
+
+  function filtrarOrdenar(){
+    const q = document.getElementById('buscaFinanceiro').value.trim();
+    const ordem = document.getElementById('ordenarFinanceiro').value;
+    const filtroContato = document.getElementById('filtroContatoFinanceiro').value;
+    let r = clientes.filter(c => !q || String(c.codigo).includes(q));
+    if(filtroContato === 'sem_contato') r = r.filter(c => !c.cobranca || !c.cobranca.historico || c.cobranca.historico.length===0);
+    const cmp = {
+      dias_desc: (a,b) => b.diasMax - a.diasMax,
+      valor_desc: (a,b) => b.valor - a.valor,
+      valor_asc: (a,b) => a.valor - b.valor,
+      numero_asc: (a,b) => a.codigo - b.codigo,
+    }[ordem];
+    r.sort(cmp);
+    return r;
+  }
+
+  function draw(){
+    const r = filtrarOrdenar();
+    document.getElementById('contagemFinanceiro').textContent = `${r.length} cliente(s) — total ${fmtMoney(r.reduce((s,c)=>s+c.valor,0))}`;
+    const lista = document.getElementById('listaFinanceiroGeral');
+    if(r.length===0){ lista.innerHTML = `<div class="empty-state">Nenhum cliente encontrado.</div>`; return; }
+    lista.innerHTML = r.map(c => `
+      <div class="client-row status-${c.cor}" style="cursor:pointer;" data-codigo="${c.codigo}">
+        <div class="client-info">
+          <div class="client-name">${c.nome} <span class="client-num">Nº ${c.codigo}</span></div>
+          <div class="client-meta">Vendedor: ${c.vendedorNome} · ${c.onde} · ${c.titulos.length} título(s)${c.cobranca && c.cobranca.historico && c.cobranca.historico.length ? ` · ${c.cobranca.historico.length} contato(s) registrado(s)` : ' · sem contato ainda'}${c.cobranca && c.cobranca.agendadoPara ? ' · Retorno: '+fmtDatePt(c.cobranca.agendadoPara) : ''}</div>
+        </div>
+        <span class="status-badge status-${c.cor}">${c.rotulo}</span>
+        <span class="status-badge status-${c.cor}" style="font-weight:700;">${fmtMoney(c.valor)}</span>
+      </div>
+    `).join('');
+    lista.querySelectorAll('.client-row').forEach(row => {
+      row.onclick = () => abrirCobrancaModal(Number(row.dataset.codigo), () => renderFinanceiroShell());
+    });
+  }
+  document.getElementById('buscaFinanceiro').oninput = draw;
+  document.getElementById('ordenarFinanceiro').onchange = draw;
+  document.getElementById('filtroContatoFinanceiro').onchange = draw;
+  draw();
+
+  document.getElementById('btnExportarFinanceiro').onclick = () => {
+    const linhas = clientes.slice().sort((a,b)=>b.diasMax-a.diasMax).map(c => ({
+      'Número do cliente': c.codigo,
+      'Cliente': c.nome,
+      'Vendedor': c.vendedorNome,
+      'Situação': c.rotulo,
+      'Dias em atraso (pior título)': c.diasMax,
+      'Valor devido (soma dos títulos)': c.valor,
+      'Retorno agendado': c.cobranca && c.cobranca.agendadoPara ? c.cobranca.agendadoPara : '',
+      'Observações registradas': c.cobranca && c.cobranca.historico ? c.cobranca.historico.map(h => `[${h.data} - ${h.por}] ${h.obs}`).join(' | ') : '',
+    }));
+    const ws = XLSX.utils.json_to_sheet(linhas);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Inadimplentes');
+    XLSX.writeFile(wb, `inadimplentes_${todayStr()}.xlsx`);
+  };
+
+  document.getElementById('btnProcessarFinanceiro').onclick = async () => {
+    const msg = document.getElementById('msgFinanceiro');
+    const file = document.getElementById('f_financeiro').files[0];
+    if(!file){ msg.innerHTML = `<div class="msg err">Escolha o arquivo primeiro.</div>`; return; }
+    msg.innerHTML = `<div class="hint">Lendo planilha...</div>`;
+    try{
+      const linhas = await lerPlanilhaDevedores(file);
+      const resultado = await processarImportacaoFinanceiro(linhas);
+      const r = resultado.resumo;
+      msg.innerHTML = `
+        <div class="msg ok">
+          Planilha lida: ${r.totalTitulos} título(s), agrupados em ${r.totalClientes} cliente(s).<br>
+          ${r.marcados} cliente(s) serão marcados/atualizados como inadimplentes.<br>
+          ${r.desmarcados} cliente(s) voltam a "em dia" (não apareceram nessa lista).<br>
+          ${r.semVendedorQtd} cliente(s) sem vendedor cadastrado — entram só no total (${fmtMoney(r.semVendedorTotal)}).
+        </div>
+        <button class="primary-btn" id="btnConfirmarFinanceiro" style="margin-top:10px;">Confirmar e salvar</button>
+      `;
+      document.getElementById('btnConfirmarFinanceiro').onclick = async () => {
+        document.getElementById('btnConfirmarFinanceiro').textContent = 'Salvando...';
+        await resultado.aplicar();
+        msg.innerHTML = `<div class="msg ok">Atualizado com sucesso — nenhuma observação de cobrança foi apagada.</div>`;
+        setTimeout(() => renderFinanceiroShell(), 1200);
+      };
+    }catch(err){
+      msg.innerHTML = `<div class="msg err">${err.message}</div>`;
+    }
+  };
+}
+
 
 async function renderVendorInativos(main){
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
@@ -1967,6 +2837,7 @@ function renderVendorDashboard(main){
         <div class="label">Vendido no mês (${s.pctMetaVendas}% da meta)</div>
         <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${s.pctMetaVendas}%; background:${s.pctMetaVendas>=100?'var(--ok)':'var(--accent)'}"></div></div>
       </div>
+      ${promocaoCardHTML(STATE.session.codigo, s.mesChave)}
       ${s.mesEhAtual ? `
       <div class="stat-card accent">
         <div class="num display">${s.hojeFeitos}/${s.hojeTotal}</div>
@@ -2157,12 +3028,37 @@ function renderVendorDashboard(main){
   });
 }
 
-function renderVendorHoje(main){
+async function renderVendorHoje(main){
   const wd = todayWeekday();
   const contatos = STATE.contatosCache[STATE.session.codigo] || {};
-  const meusClientes = clientsForVendor(STATE.session.codigo);
+  const meusClientes = clientsForVendor(STATE.session.codigo).filter(c => !c.inadimplente);
   const dataToday = new Date();
   const dataFmt = dataToday.toLocaleDateString('pt-BR', {weekday:'long', day:'2-digit', month:'long'});
+
+  const clientesFinanceiro = await clientesFinanceiroDoVendedor(STATE.session.codigo);
+  const cobrancaHoje = clientesFinanceiro.filter(c => c.cobranca && c.cobranca.agendadoPara === todayStr());
+  const cobrancaPanelHTML = cobrancaHoje.length===0 ? '' : `
+    <div class="panel" style="border-color:#111;">
+      <h3>💰 Cobrança agendada pra hoje</h3>
+      <p class="hint">Clientes inadimplentes com retorno de cobrança marcado pra hoje.</p>
+      <div class="client-list">
+        ${cobrancaHoje.map(c => `
+          <div class="client-row status-${c.cor} cobranca-hoje-row" data-codigo="${c.codigo}" style="cursor:pointer;">
+            <div class="client-info">
+              <div class="client-name">${c.nome} <span class="client-num">Nº ${c.codigo}</span></div>
+              <div class="client-meta">${c.titulos.length} título(s) em aberto</div>
+            </div>
+            <span class="status-badge status-${c.cor}" style="font-weight:700;">${fmtMoney(c.valor)}</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+  function bindCobrancaPanel(){
+    document.querySelectorAll('.cobranca-hoje-row').forEach(row => {
+      row.onclick = () => abrirCobrancaModal(Number(row.dataset.codigo), () => renderVendorHoje(main));
+    });
+  }
 
   const leadsHoje = leadsDoVendedor(STATE.session.codigo)
     .filter(l => l.status !== 'convertido' && l.agendadoPara <= todayStr())
@@ -2206,6 +3102,7 @@ function renderVendorHoje(main){
         <h2>Fim de semana</h2>
       </div>
       ${leadsPanelHTML}
+      ${cobrancaPanelHTML}
       <div class="panel">
         <h3>Sem contatos hoje</h3>
         <p class="hint">Os contatos diários rodam de segunda a sexta. ${atrasados > 0 ? `Você tem <b>${atrasados}</b> cliente(s) atrasado(s) — dá pra adiantar pela aba "Carteira completa".` : 'Sua carteira está em dia. Bom descanso.'}</p>
@@ -2214,6 +3111,7 @@ function renderVendorHoje(main){
     `;
     document.getElementById('ver-carteira').onclick = () => { STATE.route={page:'carteira'}; renderVendorShell(); };
     bindLeadsPanel();
+    bindCobrancaPanel();
     return;
   }
 
@@ -2235,6 +3133,7 @@ function renderVendorHoje(main){
       <h2>Contatos de ${DIAS[wd]}</h2>
     </div>
     ${leadsPanelHTML}
+    ${cobrancaPanelHTML}
     <div class="panel">
       <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:4px;">
         <span style="font-size:13px; color:var(--ink-soft); font-weight:600;">${feitos} de ${hoje.length} contatados hoje</span>
@@ -2246,6 +3145,7 @@ function renderVendorHoje(main){
     <div class="client-list" id="lista"></div>
   `;
   bindLeadsPanel();
+  bindCobrancaPanel();
   const lista = document.getElementById('lista');
   if(hoje.length===0){
     lista.innerHTML = `<div class="empty-state">Nenhum cliente designado para hoje.</div>`;
@@ -2382,7 +3282,8 @@ function renderVendorLeads(main){
     btn.onclick = async () => {
       const lead = (STATE.leads||[]).find(l=>l.id===btn.dataset.id);
       if(!lead) return;
-      if(!(await confirmarAcao(`Excluir o lead "${lead.empresa}"? Essa ação não pode ser desfeita.`))) return;
+      if(!(await confirmarAcao(`Excluir o lead "${lead.empresa}"? Ele vai pra área de itens excluídos, dá pra restaurar depois se precisar.`))) return;
+      await moverParaLixeira('lead', lead);
       STATE.leads = (STATE.leads||[]).filter(l=>l.id!==btn.dataset.id);
       await salvarLeads();
       renderVendorLeads(main);
@@ -2737,7 +3638,19 @@ function abrirSubirPedidoModal(codigo){
     btn.disabled = true; btn.textContent = 'Lendo o pedido...';
     try{
       const resultado = await extrairPedidoDoPdf(file);
-      renderRevisaoPedido(resultado);
+      // Trava de segurança: o PDF precisa ser do MESMO cliente que está sendo aberto aqui.
+      // Evita subir por engano o pedido de um cliente na ficha de outro.
+      if(resultado.clienteCodigo && resultado.clienteCodigo !== String(codigo)){
+        msg.innerHTML = `
+          <div class="msg err">
+            Esse PDF é do cliente <b>Nº ${resultado.clienteCodigo}</b>, mas você está subindo pro cliente <b>Nº ${codigo}</b>. Confira se é o arquivo certo.
+          </div>
+          <button type="button" class="ghost-btn" id="btnForcarPedidoMesmoAssim" style="margin-top:6px; width:100%;">Confirmo que é o pedido certo — subir mesmo assim</button>
+        `;
+        msg.querySelector('#btnForcarPedidoMesmoAssim').onclick = () => renderRevisaoPedido(resultado);
+      } else {
+        renderRevisaoPedido(resultado);
+      }
     }catch(err){
       msg.innerHTML = `<div class="msg err">A leitura automática não está disponível nesse ambiente (${err.message}). Use "Preencher manualmente" abaixo pra lançar o pedido mesmo assim.</div>`;
     }
@@ -3569,6 +4482,7 @@ function renderManagerOverview(main){
       ${mesEhAtual ? `<div class="stat-card accent"><div class="num display">${totalHojeFeitos}/${totalHoje}</div><div class="label">Contatados hoje</div></div>` : ''}
       <div class="stat-card" style="border-color:#111;"><div class="num display" style="color:#111;">${totalDevedores}</div><div class="label">Clientes devedores (inadimplentes)</div></div>
       <div class="stat-card" style="border-color:#111;"><div class="num display" style="color:#111; font-size:20px;">${fmtMoney(totalValorDevido)}</div><div class="label">Total em inadimplência (carteiras)</div></div>
+      ${promocaoCardGeralHTML(STATE.mesSelecionado||currentMonthKey())}
     </div>
 
     <div class="panel">
@@ -3778,7 +4692,36 @@ function renderManagerCredenciais(main){
       </div>
       <div id="msgGerente"></div>
     </div>
+
+    <div class="panel">
+      <h3>Usuário Financeiro (cobrança)</h3>
+      <p class="hint">Esse usuário só tem acesso à aba Financeira — vê os inadimplentes de todos os vendedores, sobe a planilha de títulos em aberto e registra cobrança. Nada mais do sistema fica visível pra ele.</p>
+      <div class="form-row">
+        <input type="text" id="novoNomeFinanceiro" placeholder="Nome" value="${STATE.config.nomeFinanceiro || ''}">
+        <input type="text" id="novoUsuarioFinanceiro" placeholder="Usuário" value="${STATE.config.usuarioFinanceiro || 'financeiro'}">
+        <input type="text" id="novaSenhaFinanceiro" placeholder="Senha" value="${STATE.config.senhaFinanceiro || ''}">
+        <button class="primary-btn" id="btnSalvarFinanceiro">Salvar</button>
+      </div>
+      <div id="msgFinanceiroConta"></div>
+    </div>
   `;
+  document.getElementById('btnSalvarFinanceiro').onclick = async () => {
+    const nome = document.getElementById('novoNomeFinanceiro').value.trim();
+    const usuario = document.getElementById('novoUsuarioFinanceiro').value.trim().toLowerCase();
+    const senha = document.getElementById('novaSenhaFinanceiro').value.trim();
+    const msg = document.getElementById('msgFinanceiroConta');
+    if(!usuario || !senha){ msg.innerHTML = `<div class="msg err">Preencha usuário e senha.</div>`; return; }
+    const emUsoPorOutro =
+      (STATE.config.usuarioGerente||GERENTE_USUARIO_PADRAO)===usuario ||
+      (STATE.diretores||[]).some(d=>d.usuario===usuario) ||
+      STATE.vendors.some(v=>v.usuario===usuario);
+    if(emUsoPorOutro){ msg.innerHTML = `<div class="msg err">Esse nome de usuário já está em uso por outra conta.</div>`; return; }
+    STATE.config.nomeFinanceiro = nome || 'Financeiro';
+    STATE.config.usuarioFinanceiro = usuario;
+    STATE.config.senhaFinanceiro = senha;
+    await safeSet('crm:config', STATE.config);
+    msg.innerHTML = `<div class="msg ok">Credenciais do usuário financeiro atualizadas.</div>`;
+  };
   document.getElementById('f_foto_gerente').onchange = async () => {
     const file = document.getElementById('f_foto_gerente').files[0];
     if(!file) return;
@@ -4232,7 +5175,7 @@ async function renderManagerAdmin(main){
 
 function renderManagerImportacoes(main){
   main.innerHTML = `
-    <div class="page-header"><div class="eyebrow">Administração</div><h2>📥 Importações</h2></div>
+    <div class="page-header"><div class="eyebrow">Administração</div><h2>Importações</h2></div>
     <p style="font-size:13px; color:var(--ink-soft); margin-bottom:20px;">Sempre nessa ordem, se for atualizar tudo de uma vez: inadimplentes → base completa → base por vendedor → base de SKU.</p>
 
     <div class="panel import-panel" style="border-left-color:#111;">
@@ -4285,6 +5228,28 @@ function renderManagerImportacoes(main){
         <button class="ghost-btn" id="btnProcessarCatalogo">Atualizar catálogo</button>
       </div>
       <div id="msgCatalogoSkus"></div>
+    </div>
+
+    <div class="panel import-panel" style="border-left-color:#8E44AD;">
+      <div class="import-panel-title"><span class="import-badge" style="background:#8E44AD;">5</span><h3>Promoção do mês</h3></div>
+      <p class="hint">Suba aqui os itens que estão em promoção esse mês — colunas nessa ordem: <b>Código</b>, <b>Descrição</b>, <b>Valor da promoção</b> (o preço unitário promocional). Isso alimenta o indicador "Vendido em promoção" no dashboard de cada vendedor, contando só as vendas dos itens dessa lista. Toda vez que subir de novo, substitui a lista inteira pela mais recente.</p>
+      <p class="hint">${(STATE.promocao||[]).length > 0 ? `Promoção atual: <b>${STATE.promocao.length} item(ns)</b> cadastrados.` : 'Nenhuma promoção cadastrada ainda.'}</p>
+      <div class="form-row" style="align-items:center;">
+        <input type="file" id="f_promocao" accept=".xlsx,.xls">
+        <button class="ghost-btn" id="btnProcessarPromocao">Atualizar promoção</button>
+      </div>
+      <div id="msgPromocao"></div>
+    </div>
+
+    <div class="panel import-panel" style="border-left-color:#111;">
+      <div class="import-panel-title"><span class="import-badge" style="background:#111;">6</span><h3>Financeiro — títulos em aberto</h3></div>
+      <p class="hint">Suba aqui o relatório de títulos em aberto <b>exatamente como ele sai do seu sistema</b>, sem precisar tratar nada antes — colunas fixas: Empresa, Prefixo, Número, Parcela, Número Pedido, Número Nota, Valor Original, Saldo, Dias em Atraso, Vencimento, Código, Nome Cliente, Status, Vendedor. Um cliente pode aparecer em várias linhas (um título por parcela em aberto) — o sistema junta tudo automaticamente: a cor de cada cliente na aba Financeira é definida pelo título mais atrasado dele, e o valor mostrado é a soma de todos os títulos em aberto.</p>
+      <p class="hint">Isso alimenta a aba <b>"Financeira"</b> de cada vendedor. Clientes que não aparecerem mais numa próxima planilha voltam a ficar "em dia" automaticamente.</p>
+      <div class="form-row" style="align-items:center;">
+        <input type="file" id="f_financeiro" accept=".xlsx,.xls">
+        <button class="ghost-btn" id="btnProcessarFinanceiro">Processar planilha</button>
+      </div>
+      <div id="msgFinanceiro"></div>
     </div>
 
     <div class="panel" style="border-color:var(--warn); background:var(--warn-soft);">
@@ -4430,6 +5395,56 @@ function renderManagerImportacoes(main){
       await safeSet('crm:catalogo_skus', catalogo);
       msg.innerHTML = `<div class="msg ok">Catálogo atualizado: ${catalogo.length} SKU(s). Já vale pro botão "Baixar SKUs não vendidos" de todos os vendedores.</div>`;
       document.getElementById('f_catalogo_skus').value = '';
+    }catch(err){
+      msg.innerHTML = `<div class="msg err">${err.message}</div>`;
+    }
+  };
+
+  document.getElementById('btnProcessarPromocao').onclick = async () => {
+    const msg = document.getElementById('msgPromocao');
+    const file = document.getElementById('f_promocao').files[0];
+    if(!file){ msg.innerHTML = `<div class="msg err">Escolha o arquivo .xlsx primeiro.</div>`; return; }
+    msg.innerHTML = `<div class="hint">Lendo promoção...</div>`;
+    try{
+      const promocao = await lerPlanilhaPromocao(file);
+      STATE.promocao = promocao;
+      await safeSet('crm:promocao', promocao);
+      msg.innerHTML = `<div class="msg ok">Promoção atualizada: ${promocao.length} item(ns). Já vale pro indicador "Vendido em promoção" de todos os vendedores.</div>`;
+      document.getElementById('f_promocao').value = '';
+    }catch(err){
+      msg.innerHTML = `<div class="msg err">${err.message}</div>`;
+    }
+  };
+
+  let PENDING_FINANCEIRO_LOCAL = null;
+  document.getElementById('btnProcessarFinanceiro').onclick = async () => {
+    const msg = document.getElementById('msgFinanceiro');
+    const file = document.getElementById('f_financeiro').files[0];
+    if(!file){ msg.innerHTML = `<div class="msg err">Escolha o arquivo primeiro.</div>`; return; }
+    msg.innerHTML = `<div class="hint">Lendo planilha...</div>`;
+    try{
+      const linhas = await lerPlanilhaDevedores(file);
+      const resultado = await processarImportacaoFinanceiro(linhas);
+      PENDING_FINANCEIRO_LOCAL = resultado;
+      const r = resultado.resumo;
+      msg.innerHTML = `
+        <div class="msg ok">
+          Planilha lida: ${r.totalTitulos} título(s), agrupados em ${r.totalClientes} cliente(s).<br>
+          ${r.marcados} cliente(s) serão marcados/atualizados como inadimplentes.<br>
+          ${r.novosClientesCriados > 0 ? `${r.novosClientesCriados} desses são clientes novos (ou que estavam na fila de inativos), atrelados automaticamente ao vendedor indicado na planilha${r.movidosDeInativos > 0 ? ` (${r.movidosDeInativos} saem da fila de "Clientes inativos")` : ''}.<br>` : ''}
+          ${r.desmarcados} cliente(s) que estavam marcados vão voltar a "em dia" (não apareceram nessa lista).<br>
+          ${r.semVendedorQtd} cliente(s) com vendedor não cadastrado no sistema — entram só no total geral (${fmtMoney(r.semVendedorTotal)}), sem carteira.
+        </div>
+        <button class="primary-btn" id="btnConfirmarFinanceiro" style="margin-top:10px;">Confirmar e salvar</button>
+      `;
+      document.getElementById('btnConfirmarFinanceiro').onclick = async () => {
+        if(!PENDING_FINANCEIRO_LOCAL) return;
+        document.getElementById('btnConfirmarFinanceiro').textContent = 'Salvando...';
+        await PENDING_FINANCEIRO_LOCAL.aplicar();
+        PENDING_FINANCEIRO_LOCAL = null;
+        msg.innerHTML = `<div class="msg ok">Financeiro atualizado com sucesso.</div>`;
+        document.getElementById('f_financeiro').value = '';
+      };
     }catch(err){
       msg.innerHTML = `<div class="msg err">${err.message}</div>`;
     }

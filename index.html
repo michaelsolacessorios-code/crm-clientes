@@ -1251,7 +1251,7 @@ function vendorInadimplenciaStats(vendedorCodigo){
 }
 
 // Percentual das VENDAS (R$) do mês em cada UF — soma o valor vendido pra clientes de cada
-// estado, dentre os vendedores informados. Cliente sem UF cadastrada entra no grupo "—".
+// estado, dentre os vendedores informados. Cliente sem UF cadastrada entra num grupo à parte.
 function distribuicaoVendasPorUF(vendedoresCodigos, mesChave){
   mesChave = mesChave || STATE.mesSelecionado || currentMonthKey();
   const porUf = {};
@@ -1260,7 +1260,8 @@ function distribuicaoVendasPorUF(vendedoresCodigos, mesChave){
     const clientes = clientsForVendor(vc);
     const contatos = STATE.contatosCache[vc] || {};
     clientes.forEach(c => {
-      const uf = (c.uf && c.uf.trim()) ? c.uf.trim().toUpperCase() : '—';
+      const ufBruta = (c.uf || '').toString().trim();
+      const uf = ufBruta ? ufBruta.toUpperCase() : 'SEM UF';
       const reg = contatos[c.codigo];
       if(reg && reg.historico){
         reg.historico.forEach(h => {

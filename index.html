@@ -1250,8 +1250,13 @@ function vendorInadimplenciaStats(vendedorCodigo){
   return {qtd: inadimplentes.length, total};
 }
 
+// Só essas siglas contam como UF de verdade — qualquer outra coisa (campo vazio, data
+// bagunçada, texto errado vindo de alguma importação) cai no grupo "SEM UF" em vez de
+// aparecer lixo na tela.
+const UFS_VALIDAS = new Set(['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO']);
+
 // Percentual das VENDAS (R$) do mês em cada UF — soma o valor vendido pra clientes de cada
-// estado, dentre os vendedores informados. Cliente sem UF cadastrada entra num grupo à parte.
+// estado, dentre os vendedores informados. Cliente sem UF válida cadastrada entra num grupo à parte.
 function distribuicaoVendasPorUF(vendedoresCodigos, mesChave){
   mesChave = mesChave || STATE.mesSelecionado || currentMonthKey();
   const porUf = {};
@@ -1260,12 +1265,16 @@ function distribuicaoVendasPorUF(vendedoresCodigos, mesChave){
     const clientes = clientsForVendor(vc);
     const contatos = STATE.contatosCache[vc] || {};
     clientes.forEach(c => {
-      const ufBruta = (c.uf || '').toString().trim();
-      const uf = ufBruta ? ufBruta.toUpperCase() : 'SEM UF';
       const reg = contatos[c.codigo];
       if(reg && reg.historico){
         reg.historico.forEach(h => {
           if(h.vendeu && h.data && h.data.slice(0,7)===mesChave){
+            // Prioriza a UF lida direto do pedido (mais confiável); só usa o cadastro do
+            // cliente como reserva se o pedido não tiver essa informação.
+            const ufDoPedido = (h.skus && h.skus.uf) ? h.skus.uf.toString().trim().toUpperCase() : '';
+            const ufDoCadastro = (c.uf || '').toString().trim().toUpperCase();
+            const ufEscolhida = ufDoPedido || ufDoCadastro;
+            const uf = UFS_VALIDAS.has(ufEscolhida) ? ufEscolhida : 'SEM UF';
             porUf[uf] = (porUf[uf]||0) + (h.valor||0);
             totalGeral += (h.valor||0);
           }
@@ -1444,7 +1453,7 @@ function lerPdfComoBase64(file){
 }
 async function extrairPedidoDoPdf(file){
   const base64 = await lerPdfComoBase64(file);
-  const prompt = 'Analise este PDF de pedido/nota de venda. Pode ter ate 20 paginas e centenas de itens — leia o documento inteiro, todas as paginas, sem pular nada. Responda APENAS com um JSON valido, compacto, sem espacos desnecessarios, sem nenhum texto antes ou depois, sem comentarios, exatamente neste formato: {"numeroPedido":"","valorTotal":0,"itens":[["codigo","descricao curta",0]]}. numeroPedido e o numero/identificador original do pedido tal como aparece no documento (procure por campos como "Pedido", "Nº do Pedido", "Pedido Nº", "Numero", "Nota" ou similar, geralmente perto do topo do documento) — inclua so o numero/codigo, sem o rotulo, como texto; se nao encontrar nenhum numero de pedido no documento, deixe essa string vazia. Cada item da lista "itens" e um array com 3 posicoes, nessa ordem: [0]=codigo do produto (coluna "Produto" ou "Codigo"), [1]=descricao BEM RESUMIDA do produto (no maximo 35 caracteres, corte se precisar), [2]=quantidade vendida (numero). valorTotal e o valor final do pedido em reais (o total que o cliente vai pagar — geralmente chamado de "Valor Liquido", "Valor Total" ou "Total Geral" no documento; se nao existir esse campo, use o total de mercadorias), como numero puro (sem R$, sem ponto de milhar, ponto para casas decimais). Inclua TODOS os itens de TODAS as paginas do pedido, sem excecao, mesmo que a lista tenha centenas de linhas. Se nao identificar o codigo de algum item, use "?" nesse campo, mas sempre inclua a linha.';
+  const prompt = 'Analise este PDF de pedido/nota de venda. Pode ter ate 20 paginas e centenas de itens — leia o documento inteiro, todas as paginas, sem pular nada. Responda APENAS com um JSON valido, compacto, sem espacos desnecessarios, sem nenhum texto antes ou depois, sem comentarios, exatamente neste formato: {"numeroPedido":"","uf":"","valorTotal":0,"itens":[["codigo","descricao curta",0]]}. numeroPedido e o numero do pedido, geralmente no topo do documento num campo literalmente chamado "Pedido:" seguido de um numero (exemplo: se o documento tem escrito "Pedido: 521784", numeroPedido deve ser "521784") — as vezes aparece como "Pedido Nº", "Nº do Pedido" ou "Numero do Pedido"; inclua so o numero, sem o rotulo, como texto; se realmente nao encontrar nenhum campo assim, deixe essa string vazia. uf e a sigla do estado (2 letras, ex: SP, RJ, MG) do CLIENTE que esta comprando, geralmente num campo chamado "UF:" perto do endereco/municipio do cliente no documento — inclua so a sigla de 2 letras maiuscula; se nao encontrar, deixe essa string vazia. Cada item da lista "itens" e um array com 3 posicoes, nessa ordem: [0]=codigo do produto (coluna "Produto" ou "Codigo"), [1]=descricao BEM RESUMIDA do produto (no maximo 35 caracteres, corte se precisar), [2]=quantidade vendida (numero). valorTotal e o valor final do pedido em reais (o total que o cliente vai pagar — geralmente chamado de "Valor Liquido", "Valor Total" ou "Total Geral" no documento; se nao existir esse campo, use o total de mercadorias), como numero puro (sem R$, sem ponto de milhar, ponto para casas decimais). Inclua TODOS os itens de TODAS as paginas do pedido, sem excecao, mesmo que a lista tenha centenas de linhas. Se nao identificar o codigo de algum item, use "?" nesse campo, mas sempre inclua a linha.';
   // Chama nossa própria função no Vercel (api/analisar-pedido.js), que guarda a chave da Anthropic
   // em segredo no servidor — o navegador do vendedor nunca vê essa chave.
   const response = await fetch('/api/analisar-pedido', {
@@ -1482,6 +1491,7 @@ async function extrairPedidoDoPdf(file){
   });
   return {
     numeroPedido: (parsed.numeroPedido || '').toString().trim(),
+    uf: (parsed.uf || '').toString().trim().toUpperCase(),
     valorTotal: Number(parsed.valorTotal) || 0,
     itens,
   };
@@ -2703,7 +2713,7 @@ function abrirSubirPedidoModal(codigo){
   backdrop.querySelector('#fecharSubirPedido').onclick = () => backdrop.remove();
 
   backdrop.querySelector('#btnPreencherManual').onclick = () => {
-    renderRevisaoPedido({numeroPedido: '', valorTotal: 0, itens: []});
+    renderRevisaoPedido({numeroPedido: '', uf: '', valorTotal: 0, itens: []});
   };
 
   backdrop.querySelector('#btnAnalisarPedido').onclick = async () => {
@@ -2729,6 +2739,8 @@ function abrirSubirPedidoModal(codigo){
       <p class="hint">Confira os dados antes de confirmar — dá pra corrigir qualquer campo.</p>
       <label class="field-label">Número do pedido</label>
       <input type="text" id="revisaoNumeroPedido" class="login-input" placeholder="Ex: 521110" value="${resultado.numeroPedido||''}">
+      <label class="field-label">UF do cliente</label>
+      <input type="text" id="revisaoUf" class="login-input" placeholder="Ex: SP" maxlength="2" style="text-transform:uppercase;" value="${resultado.uf||''}">
       <label class="field-label">Valor total do pedido</label>
       <input type="number" id="revisaoValor" class="login-input" min="0" step="0.01" value="${resultado.valorTotal}">
       <label class="field-label">Itens / SKUs identificados</label>
@@ -2760,6 +2772,7 @@ function abrirSubirPedidoModal(codigo){
 
     step.querySelector('#btnConfirmarPedido').onclick = async () => {
       const numeroPedido = step.querySelector('#revisaoNumeroPedido').value.trim();
+      const uf = step.querySelector('#revisaoUf').value.trim().toUpperCase();
       const valor = Number(step.querySelector('#revisaoValor').value);
       const msgC = step.querySelector('#msgConfirmarPedido');
       if(!valor || valor <= 0){
@@ -2772,7 +2785,7 @@ function abrirSubirPedidoModal(codigo){
       const btnConf = step.querySelector('#btnConfirmarPedido');
       btnConf.disabled = true; btnConf.textContent = 'Salvando...';
       const obs = numeroPedido ? `Pedido nº ${numeroPedido} enviado via PDF` : 'Pedido enviado via PDF';
-      await marcarContato(c.vendedorCodigo, codigo, obs, true, valor, null, {itens: itensValidos, qtdSkus, qtdUnidades, numeroPedido});
+      await marcarContato(c.vendedorCodigo, codigo, obs, true, valor, null, {itens: itensValidos, qtdSkus, qtdUnidades, numeroPedido, uf});
       backdrop.remove();
       renderVendorShell();
     };
@@ -3066,6 +3079,7 @@ async function abrirDetalhesCliente(codigo){
                   <div class="client-meta" style="margin-top:3px;">
                     <span>Volume: <b>${e.skus.qtdUnidades ?? e.skus.itens.reduce((s,i)=>s+(i.quantidade||0),0)} un.</b></span>
                     <span>SKUs: <b>${e.skus.qtdSkus ?? e.skus.itens.length}</b></span>
+                    ${e.skus.uf ? `<span>UF: <b>${e.skus.uf}</b></span>` : ''}
                   </div>
                   <div class="client-meta" style="margin-top:2px; font-size:12px;">${e.skus.itens.map(i => `${i.codigo||i.descricao||'item'} (${i.quantidade})`).join(', ')}</div>
                 ` : ''}

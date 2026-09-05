@@ -1479,13 +1479,16 @@ async function processarImportacaoFinanceiro(linhas){
         }
       });
       novosRoster.forEach(n => STATE.roster.push(n));
-      await safeSet('crm:roster', STATE.roster);
+      const ok1 = await safeSet('crm:roster', STATE.roster);
+      if(!ok1) throw new Error('Não consegui salvar os clientes atualizados. Confira sua conexão com a internet e tente de novo.');
       if(codigosParaRemoverDosInativos.size > 0){
         const novoPoolInativos = poolInativos.filter(c => !codigosParaRemoverDosInativos.has(c.codigo));
-        await safeSet('crm:inativos', novoPoolInativos);
+        const ok2 = await safeSet('crm:inativos', novoPoolInativos);
+        if(!ok2) throw new Error('Não consegui salvar a fila de inativos. Tente de novo.');
       }
       STATE.financeiro = financeiroNovo;
-      await safeSet('crm:financeiro', financeiroNovo);
+      const ok3 = await safeSet('crm:financeiro', financeiroNovo);
+      if(!ok3) throw new Error('Não consegui salvar os dados financeiros. Tente de novo.');
     },
     resumo: {marcados, desmarcados, naoEncontrados, novosClientesCriados, movidosDeInativos, semVendedorQtd, semVendedorTotal, totalTitulos: linhas.length, totalClientes: porCliente.size},
   };
@@ -2725,9 +2728,13 @@ async function renderFinanceiroShell(){
       `;
       document.getElementById('btnConfirmarFinanceiro').onclick = async () => {
         document.getElementById('btnConfirmarFinanceiro').textContent = 'Salvando...';
-        await resultado.aplicar();
-        msg.innerHTML = `<div class="msg ok">Atualizado com sucesso — nenhuma observação de cobrança foi apagada.</div>`;
-        setTimeout(() => renderFinanceiroShell(), 1200);
+        try{
+          await resultado.aplicar();
+          msg.innerHTML = `<div class="msg ok">Atualizado com sucesso — nenhuma observação de cobrança foi apagada.</div>`;
+          setTimeout(() => renderFinanceiroShell(), 1200);
+        }catch(errSalvar){
+          msg.innerHTML = `<div class="msg err">Não salvou: ${errSalvar.message}</div>`;
+        }
       };
     }catch(err){
       msg.innerHTML = `<div class="msg err">${err.message}</div>`;
@@ -5448,10 +5455,14 @@ function renderManagerImportacoes(main){
       document.getElementById('btnConfirmarFinanceiro').onclick = async () => {
         if(!PENDING_FINANCEIRO_LOCAL) return;
         document.getElementById('btnConfirmarFinanceiro').textContent = 'Salvando...';
-        await PENDING_FINANCEIRO_LOCAL.aplicar();
-        PENDING_FINANCEIRO_LOCAL = null;
-        msg.innerHTML = `<div class="msg ok">Financeiro atualizado com sucesso.</div>`;
-        document.getElementById('f_financeiro').value = '';
+        try{
+          await PENDING_FINANCEIRO_LOCAL.aplicar();
+          PENDING_FINANCEIRO_LOCAL = null;
+          msg.innerHTML = `<div class="msg ok">Financeiro atualizado com sucesso.</div>`;
+          document.getElementById('f_financeiro').value = '';
+        }catch(errSalvar){
+          msg.innerHTML = `<div class="msg err">Não salvou: ${errSalvar.message}</div>`;
+        }
       };
     }catch(err){
       msg.innerHTML = `<div class="msg err">${err.message}</div>`;

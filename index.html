@@ -5183,20 +5183,10 @@ async function renderManagerAdmin(main){
 function renderManagerImportacoes(main){
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Administração</div><h2>Importações</h2></div>
-    <p style="font-size:13px; color:var(--ink-soft); margin-bottom:20px;">Sempre nessa ordem, se for atualizar tudo de uma vez: inadimplentes → base completa → base por vendedor → base de SKU.</p>
-
-    <div class="panel import-panel" style="border-left-color:#111;">
-      <div class="import-panel-title"><span class="import-badge" style="background:#111;">1</span><h3>Inadimplentes</h3></div>
-      <p class="hint">Suba aqui só a lista de quem está inadimplente hoje — planilha simples com as colunas, nessa ordem: <b>Número do cliente</b>, <b>Nome</b>, <b>Data</b>, <b>Vendedor</b> (código + nome, ex: "24-Paulo") e <b>Valor devido</b>. Quem já está numa carteira é marcado como inadimplente sem trocar de vendedor. Cliente novo é atrelado automaticamente ao vendedor indicado na planilha, <b>se</b> esse número de vendedor já existir cadastrado no CRM. Se o vendedor da planilha não existir no sistema, o cliente entra só no total geral, sem ser atribuído a ninguém. Quem estava marcado antes e não aparece mais na lista volta a ficar "em dia". Ninguém é removido da carteira.</p>
-      <div class="form-row" style="align-items:center;">
-        <input type="file" id="f_inadimplencia" accept=".xlsx,.xls">
-        <button class="ghost-btn" id="btnProcessarInadimplencia">Processar lista</button>
-      </div>
-      <div id="msgInadimplenciaImport"></div>
-    </div>
+    <p style="font-size:13px; color:var(--ink-soft); margin-bottom:20px;">Sempre nessa ordem, se for atualizar tudo de uma vez: base completa → base por vendedor → base de SKU → promoção → financeiro.</p>
 
     <div class="panel import-panel" style="border-left-color:var(--primary);">
-      <div class="import-panel-title"><span class="import-badge" style="background:var(--primary);">2</span><h3>Base completa de clientes</h3></div>
+      <div class="import-panel-title"><span class="import-badge" style="background:var(--primary);">1</span><h3>Base completa de clientes</h3></div>
       <p class="hint">Suba aqui a planilha .xlsx completa da empresa (o mesmo arquivo "clientes.xlsx" de sempre), semanal ou mensalmente, pra manter a base em dia. Cliente novo entra <b>direto na carteira do vendedor</b> indicado na coluna "Vendedor" da planilha, se esse vendedor já existir cadastrado no CRM. Se não existir, vai pra fila de "Clientes inativos".</p>
       <p class="hint">É obrigatório atualizar todo primeiro dia útil do mês — o sistema fica bloqueado pra todo mundo (inclusive você) até isso ser feito. ${STATE.config.ultimaAtualizacaoBaseMes ? `Última atualização registrada: <b>${STATE.config.ultimaAtualizacaoBaseMes===currentMonthKey() ? 'já feita esse mês' : STATE.config.ultimaAtualizacaoBaseMes}</b>.` : ''}</p>
       <label style="display:flex; align-items:flex-start; gap:10px; padding:12px 14px; border:1px solid var(--border); border-radius:10px; margin-bottom:14px; cursor:pointer; background:var(--bg);">
@@ -5215,7 +5205,7 @@ function renderManagerImportacoes(main){
     </div>
 
     <div class="panel import-panel" style="border-left-color:var(--ok);">
-      <div class="import-panel-title"><span class="import-badge" style="background:var(--ok);">3</span><h3>Base por vendedor</h3></div>
+      <div class="import-panel-title"><span class="import-badge" style="background:var(--ok);">2</span><h3>Base por vendedor</h3></div>
       <p class="hint">Cole linhas copiadas do Excel, uma por cliente, nesta ordem separada por TAB: <b>Nome — Telefone — Contato — Município — UF</b>. Escolha o vendedor abaixo — os dias da semana são distribuídos automaticamente entre os clientes dele.</p>
       <div class="form-row">
         <select id="f_vendedor_import">${STATE.vendors.map(v=>`<option value="${v.codigo}">${v.nome} (Nº ${vendorNumero(v)})</option>`).join('')}</select>
@@ -5227,7 +5217,7 @@ function renderManagerImportacoes(main){
     </div>
 
     <div class="panel import-panel" style="border-left-color:var(--accent);">
-      <div class="import-panel-title"><span class="import-badge" style="background:var(--accent);">4</span><h3>Base de SKU (catálogo de produtos)</h3></div>
+      <div class="import-panel-title"><span class="import-badge" style="background:var(--accent);">3</span><h3>Base de SKU (catálogo de produtos)</h3></div>
       <p class="hint">Suba aqui a lista completa dos seus produtos — colunas nessa ordem: <b>Código</b>, <b>Descrição</b>, <b>Estoque</b> (opcional). Isso alimenta o botão "Baixar SKUs não vendidos" no dashboard de cada vendedor, mostrando o que ele ainda não vendeu esse mês e quanto tem disponível pra oferecer. Toda vez que subir de novo, substitui o catálogo inteiro pelo mais recente.</p>
       <p class="hint">${(STATE.catalogoSkus||[]).length > 0 ? `Catálogo atual: <b>${STATE.catalogoSkus.length} SKU(s)</b> cadastrados.` : 'Nenhum catálogo cadastrado ainda.'}</p>
       <div class="form-row" style="align-items:center;">
@@ -5238,7 +5228,7 @@ function renderManagerImportacoes(main){
     </div>
 
     <div class="panel import-panel" style="border-left-color:#8E44AD;">
-      <div class="import-panel-title"><span class="import-badge" style="background:#8E44AD;">5</span><h3>Promoção do mês</h3></div>
+      <div class="import-panel-title"><span class="import-badge" style="background:#8E44AD;">4</span><h3>Promoção do mês</h3></div>
       <p class="hint">Suba aqui os itens que estão em promoção esse mês — colunas nessa ordem: <b>Código</b>, <b>Descrição</b>, <b>Valor da promoção</b> (o preço unitário promocional). Isso alimenta o indicador "Vendido em promoção" no dashboard de cada vendedor, contando só as vendas dos itens dessa lista. Toda vez que subir de novo, substitui a lista inteira pela mais recente.</p>
       <p class="hint">${(STATE.promocao||[]).length > 0 ? `Promoção atual: <b>${STATE.promocao.length} item(ns)</b> cadastrados.` : 'Nenhuma promoção cadastrada ainda.'}</p>
       <div class="form-row" style="align-items:center;">
@@ -5249,7 +5239,7 @@ function renderManagerImportacoes(main){
     </div>
 
     <div class="panel import-panel" style="border-left-color:#111;">
-      <div class="import-panel-title"><span class="import-badge" style="background:#111;">6</span><h3>Financeiro — títulos em aberto</h3></div>
+      <div class="import-panel-title"><span class="import-badge" style="background:#111;">5</span><h3>Financeiro — títulos em aberto</h3></div>
       <p class="hint">Suba aqui o relatório de títulos em aberto <b>exatamente como ele sai do seu sistema</b>, sem precisar tratar nada antes — colunas fixas: Empresa, Prefixo, Número, Parcela, Número Pedido, Número Nota, Valor Original, Saldo, Dias em Atraso, Vencimento, Código, Nome Cliente, Status, Vendedor. Um cliente pode aparecer em várias linhas (um título por parcela em aberto) — o sistema junta tudo automaticamente: a cor de cada cliente na aba Financeira é definida pelo título mais atrasado dele, e o valor mostrado é a soma de todos os títulos em aberto.</p>
       <p class="hint">Isso alimenta a aba <b>"Financeira"</b> de cada vendedor. Clientes que não aparecerem mais numa próxima planilha voltam a ficar "em dia" automaticamente.</p>
       <div class="form-row" style="align-items:center;">
@@ -5362,42 +5352,6 @@ function renderManagerImportacoes(main){
     }
   };
 
-  let PENDING_INADIMPLENCIA_LOCAL = null;
-  document.getElementById('btnProcessarInadimplencia').onclick = async () => {
-    const msg = document.getElementById('msgInadimplenciaImport');
-    const file = document.getElementById('f_inadimplencia').files[0];
-    if(!file){ msg.innerHTML = `<div class="msg err">Escolha o arquivo .xlsx primeiro.</div>`; return; }
-    msg.innerHTML = `<div class="hint">Lendo planilha...</div>`;
-    try{
-      const linhas = await lerPlanilhaInadimplencia(file);
-      const resultado = await processarListaInadimplencia(linhas);
-      PENDING_INADIMPLENCIA_LOCAL = resultado;
-      const r = resultado.resumo;
-      msg.innerHTML = `
-        <div class="msg ok">
-          Planilha lida: ${r.total} linha(s).<br>
-          ${r.marcados} cliente(s) serão marcados como inadimplentes.<br>
-          ${r.novosClientesCriados > 0 ? `${r.novosClientesCriados} desses são clientes novos (ou que estavam na fila de inativos), que serão criados/movidos e atrelados automaticamente ao vendedor indicado na planilha${r.movidosDeInativos > 0 ? ` (${r.movidosDeInativos} deles saem da fila de "Clientes inativos")` : ''}.<br>` : ''}
-          ${r.desmarcados} cliente(s) que estavam marcados vão voltar a "em dia" (não apareceram nessa lista).<br>
-          ${r.semVendedorQtd} cliente(s) com vendedor não cadastrado no sistema — entram só no total geral (${fmtMoney(r.semVendedorTotal)}), sem carteira.<br>
-          ${r.ignorados} linha(s) ignorada(s) (sem número de cliente).
-        </div>
-        <button class="primary-btn" id="btnConfirmarInadimplencia" style="margin-top:10px;">Confirmar e salvar</button>
-      `;
-      document.getElementById('btnConfirmarInadimplencia').onclick = async () => {
-        if(!PENDING_INADIMPLENCIA_LOCAL) return;
-        document.getElementById('btnConfirmarInadimplencia').textContent = 'Salvando...';
-        await PENDING_INADIMPLENCIA_LOCAL.aplicar();
-        PENDING_INADIMPLENCIA_LOCAL = null;
-        STATE.config.ultimaAtualizacaoBaseData = new Date().toISOString();
-        await safeSet('crm:config', STATE.config);
-        msg.innerHTML = `<div class="msg ok">Lista de inadimplência atualizada com sucesso.</div>`;
-        document.getElementById('f_inadimplencia').value = '';
-      };
-    }catch(err){
-      msg.innerHTML = `<div class="msg err">${err.message}</div>`;
-    }
-  };
 
   document.getElementById('btnProcessarCatalogo').onclick = async () => {
     const msg = document.getElementById('msgCatalogoSkus');

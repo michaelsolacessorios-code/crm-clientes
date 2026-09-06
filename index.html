@@ -2141,7 +2141,7 @@ function renderLogin(){
       const diretor = (STATE.diretores||[]).find(d => d.usuario === user);
       if(diretor){
         if(diretor.senha === pass){
-          STATE.session = {tipo:'gerente', nome: diretor.nome}; STATE.route={page:'visao-geral'}; STATE.mesSelecionado = currentMonthKey(); render();
+          STATE.session = {tipo:'gerente', nome: diretor.nome, foto: diretor.foto||null}; STATE.route={page:'visao-geral'}; STATE.mesSelecionado = currentMonthKey(); render();
         } else {
           errSlot.innerHTML = `<div class="login-error">Senha incorreta.</div>`;
         }
@@ -2180,7 +2180,11 @@ function renderLogin(){
 function sidebarHTML(items){
   const activePage = STATE.route.page;
   const vendorObj = STATE.session.tipo==='vendedor' ? STATE.vendors.find(v=>v.codigo===STATE.session.codigo) : null;
-  const foto = vendorObj ? vendorPhotoSrc(vendorObj) : (STATE.session.tipo==='gerente' ? (STATE.config.fotoGerente || null) : null);
+  const foto = vendorObj ? vendorPhotoSrc(vendorObj)
+    : STATE.session.foto ? STATE.session.foto
+    : STATE.session.tipo==='gerente' ? (STATE.config.fotoGerente || null)
+    : STATE.session.tipo==='financeiro' ? (STATE.config.fotoFinanceiro || null)
+    : null;
   return `
     <div class="sidebar">
       <div class="brand"><div class="mark"><img src="${LOGO_SRC}" alt="TF Imports"></div><div class="name">TF Imports</div></div>
@@ -2611,6 +2615,13 @@ async function renderFinanceiroShell(){
   app.innerHTML = `<div class="shell">${sidebarHTML(items)}<div class="main" id="main"></div></div>`;
   bindSidebar(renderFinanceiroShell);
   const main = document.getElementById('main');
+  await renderFinanceiroBody(main, renderFinanceiroShell);
+}
+
+// Corpo da tela financeira "geral" (todos os vendedores) — reaproveitado tanto pelo usuário
+// Financeiro (tela única) quanto pelo próprio gerente (dentro do painel dele, que às vezes
+// também faz cobrança e precisa acompanhar/se comunicar com o time sobre isso).
+async function renderFinanceiroBody(main, rerender){
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
   const clientes = await todosClientesFinanceiro();
 
@@ -2683,7 +2694,7 @@ async function renderFinanceiroShell(){
       </div>
     `).join('');
     lista.querySelectorAll('.client-row').forEach(row => {
-      row.onclick = () => abrirCobrancaModal(Number(row.dataset.codigo), () => renderFinanceiroShell());
+      row.onclick = () => abrirCobrancaModal(Number(row.dataset.codigo), rerender);
     });
   }
   document.getElementById('buscaFinanceiro').oninput = draw;
@@ -2731,7 +2742,7 @@ async function renderFinanceiroShell(){
         try{
           await resultado.aplicar();
           msg.innerHTML = `<div class="msg ok">Atualizado com sucesso — nenhuma observação de cobrança foi apagada.</div>`;
-          setTimeout(() => renderFinanceiroShell(), 1200);
+          setTimeout(() => rerender(), 1200);
         }catch(errSalvar){
           msg.innerHTML = `<div class="msg err">Não salvou: ${errSalvar.message}</div>`;
         }
@@ -4244,7 +4255,8 @@ async function renderManagerShell(){
     {page:'vendedores', label:'Vendedores'},
     {page:'inativos', label:'Clientes inativos'},
     {page:'metas', label:'Metas de vendas'},
-    {page:'importacoes', label:'📥 Importações'},
+    {page:'financeira', label:'Financeira'},
+    {page:'importacoes', label:'Importações'},
     {page:'credenciais', label:'Credenciais de acesso'},
     {page:'admin', label:'Administração'},
   ];
@@ -4257,6 +4269,7 @@ async function renderManagerShell(){
   else if(STATE.route.page==='vendedores') renderManagerVendorDetail(main);
   else if(STATE.route.page==='inativos') await renderManagerInativos(main);
   else if(STATE.route.page==='metas') renderManagerMetas(main);
+  else if(STATE.route.page==='financeira') await renderFinanceiroBody(main, () => renderManagerShell());
   else if(STATE.route.page==='importacoes') renderManagerImportacoes(main);
   else if(STATE.route.page==='credenciais') renderManagerCredenciais(main);
   else await renderManagerAdmin(main);
@@ -4680,10 +4693,14 @@ function renderManagerCredenciais(main){
       <h3>Diretores (mesmo acesso do gerente)</h3>
       <p class="hint">Contas com privilégio total, igual ao do gerente — veem e controlam tudo. Edite nome, usuário ou senha, ou cadastre um novo diretor abaixo.</p>
       <table class="cred-table">
-        <thead><tr><th>Nome</th><th>Usuário</th><th>Senha</th><th></th></tr></thead>
+        <thead><tr><th>Foto</th><th>Nome</th><th>Usuário</th><th>Senha</th><th></th></tr></thead>
         <tbody id="diretoresBody">
           ${STATE.diretores.map(d => `
             <tr data-id="${d.id}">
+              <td>
+                ${d.foto ? `<img src="${d.foto}" alt="${d.nome}" style="width:32px; height:32px; border-radius:50%; object-fit:cover;">` : `<div class="whoami-avatar whoami-avatar-fallback" style="width:32px; height:32px; background:var(--border); color:var(--ink-faint); font-size:12px;">${(d.nome||'?')[0].toUpperCase()}</div>`}
+                <input type="file" class="diretorFotoInput" accept="image/*" data-id="${d.id}" style="max-width:90px; font-size:11px; margin-top:4px;">
+              </td>
               <td><input type="text" class="diretorNomeInput" value="${d.nome}" data-id="${d.id}"></td>
               <td><input type="text" class="diretorUsuarioInput" value="${d.usuario}" data-id="${d.id}"></td>
               <td><input type="text" class="diretorSenhaInput" value="${d.senha}" data-id="${d.id}"></td>
@@ -4726,6 +4743,10 @@ function renderManagerCredenciais(main){
     <div class="panel">
       <h3>Usuário Financeiro (cobrança)</h3>
       <p class="hint">Esse usuário só tem acesso à aba Financeira — vê os inadimplentes de todos os vendedores, sobe a planilha de títulos em aberto e registra cobrança. Nada mais do sistema fica visível pra ele.</p>
+      <div class="form-row" style="align-items:center;">
+        ${STATE.config.fotoFinanceiro ? `<img src="${STATE.config.fotoFinanceiro}" alt="${STATE.config.nomeFinanceiro||'Financeiro'}" style="width:46px; height:46px; border-radius:50%; object-fit:cover; flex-shrink:0;">` : `<div class="whoami-avatar whoami-avatar-fallback" style="width:46px; height:46px; flex-shrink:0; background:var(--border); color:var(--ink-faint);">${(STATE.config.nomeFinanceiro||'?')[0].toUpperCase()}</div>`}
+        <input type="file" id="f_foto_financeiro" accept="image/*" style="max-width:220px;">
+      </div>
       <div class="form-row">
         <input type="text" id="novoNomeFinanceiro" placeholder="Nome" value="${STATE.config.nomeFinanceiro || ''}">
         <input type="text" id="novoUsuarioFinanceiro" placeholder="Usuário" value="${STATE.config.usuarioFinanceiro || 'financeiro'}">
@@ -4751,6 +4772,17 @@ function renderManagerCredenciais(main){
     STATE.config.senhaFinanceiro = senha;
     await safeSet('crm:config', STATE.config);
     msg.innerHTML = `<div class="msg ok">Credenciais do usuário financeiro atualizadas.</div>`;
+  };
+  document.getElementById('f_foto_financeiro').onchange = async () => {
+    const file = document.getElementById('f_foto_financeiro').files[0];
+    if(!file) return;
+    try{
+      STATE.config.fotoFinanceiro = await resizeImagemParaBase64(file);
+      await safeSet('crm:config', STATE.config);
+      renderManagerAdmin(main);
+    }catch(err){
+      document.getElementById('msgFinanceiroConta').innerHTML = `<div class="msg err">Não consegui processar essa imagem.</div>`;
+    }
   };
   document.getElementById('f_foto_gerente').onchange = async () => {
     const file = document.getElementById('f_foto_gerente').files[0];
@@ -4796,6 +4828,21 @@ function renderManagerCredenciais(main){
       d.nome = novoNome; d.usuario = novoUsuario; d.senha = novaSenha;
       await safeSet('crm:diretores', STATE.diretores);
       msg.innerHTML = `<div class="msg ok">Dados de ${d.nome} atualizados.</div>`;
+    };
+  });
+  document.querySelectorAll('.diretorFotoInput').forEach(input => {
+    input.onchange = async () => {
+      const id = input.dataset.id;
+      const d = STATE.diretores.find(d=>d.id===id);
+      const file = input.files[0];
+      if(!d || !file) return;
+      try{
+        d.foto = await resizeImagemParaBase64(file);
+        await safeSet('crm:diretores', STATE.diretores);
+        renderManagerCredenciais(main);
+      }catch(err){
+        document.getElementById('msgDiretores').innerHTML = `<div class="msg err">Não consegui processar essa imagem.</div>`;
+      }
     };
   });
   document.querySelectorAll('.removerDiretorBtn').forEach(btn => {

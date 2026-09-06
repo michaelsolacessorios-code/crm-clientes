@@ -4431,6 +4431,26 @@ function vendorStats(codigo){
   return {total: clientes.length, emDia, atencao, atrasados, hojeTotal: hojeList.length, hojeFeitos};
 }
 
+function totalSkusEVolumeEquipe(mesChave){
+  mesChave = mesChave || STATE.mesSelecionado || currentMonthKey();
+  const skuCodesUnicos = new Set();
+  let totalUnidades = 0;
+  STATE.vendors.forEach(v => {
+    const contatos = STATE.contatosCache[v.codigo] || {};
+    Object.values(contatos).forEach(reg => {
+      (reg.historico||[]).forEach(h => {
+        if(!h.vendeu || !h.data || h.data.slice(0,7)!==mesChave) return;
+        ((h.skus && h.skus.itens) || []).forEach(item => {
+          const cod = (item.codigo||'').trim().toUpperCase();
+          if(cod && cod!=='—' && cod!=='?') skuCodesUnicos.add(cod);
+          totalUnidades += (item.quantidade||0);
+        });
+      });
+    });
+  });
+  return {totalSkus: skuCodesUnicos.size, totalUnidades};
+}
+
 function renderManagerOverview(main){
   const totalClientes = STATE.roster.length;
   let totalAtrasados = 0, totalHojeFeitos = 0, totalHoje = 0, totalVendas = 0, totalValorVendas = 0, totalPositivados = 0, totalContatadosMes = 0, totalMetaVendas = 0, totalDevedores = 0, totalValorDevido = 0;
@@ -4444,6 +4464,7 @@ function renderManagerOverview(main){
     totalValorDevido += inad.total;
   });
   const naoCadastrados = STATE.config.inadimplenciaNaoCadastrados || {qtd:0, total:0};
+  const totalSkusVolume = totalSkusEVolumeEquipe(STATE.mesSelecionado||currentMonthKey());
   const pctPositivacaoGeral = totalClientes ? Math.round(totalPositivados/totalClientes*100) : 0;
   const pctContatoGeral = totalClientes ? Math.round(totalContatadosMes/totalClientes*100) : 0;
   const pctVendasGeral = totalMetaVendas ? Math.min(100, Math.round(totalValorVendas/totalMetaVendas*100)) : 0;
@@ -4489,6 +4510,8 @@ function renderManagerOverview(main){
       ${mesEhAtual ? `<div class="stat-card accent"><div class="num display">${totalHojeFeitos}/${totalHoje}</div><div class="label">Contatados hoje</div></div>` : ''}
       <div class="stat-card" style="border-color:#111;"><div class="num display" style="color:#111;">${totalDevedores}</div><div class="label">Clientes devedores (inadimplentes)</div></div>
       <div class="stat-card" style="border-color:#111;"><div class="num display" style="color:#111; font-size:20px;">${fmtMoney(totalValorDevido)}</div><div class="label">Total em inadimplência (carteiras)</div></div>
+      <div class="stat-card"><div class="num display">${totalSkusVolume.totalSkus}</div><div class="label">SKUs diferentes vendidos (variedade, toda a equipe)</div></div>
+      <div class="stat-card"><div class="num display">${totalSkusVolume.totalUnidades}</div><div class="label">Volume vendido (unidades, toda a equipe)</div></div>
       ${promocaoCardGeralHTML(STATE.mesSelecionado||currentMonthKey())}
     </div>
 

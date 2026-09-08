@@ -2950,14 +2950,21 @@ async function renderFinanceiroShell(){
   await renderFinanceiroBody(main, renderFinanceiroShell);
 }
 
-// Tela do usuário de Compras (Roberto) — só cuida da Previsão de Compras: sobe planilha de
-// container, vê as intenções de venda registradas pelos vendedores, e dá entrada quando chega.
+// Tela do usuário de Compras (Roberto) — cuida da Previsão de Compras (sobe planilha,
+// intenções, dá entrada) e agora também vê a Visão Geral completa, pra analisar os números
+// junto com o gerente.
 async function renderComprasShell(){
-  const items = [{page:'previsao', label:'Previsão de Compras'}];
+  const items = [
+    {page:'previsao', label:'Previsão de Compras'},
+    {page:'visao-geral', label:'Visão geral'},
+  ];
   app.innerHTML = `<div class="shell">${sidebarHTML(items)}<div class="main" id="main"></div></div>`;
   bindSidebar(renderComprasShell);
   const main = document.getElementById('main');
-  await renderPrevisaoCompras(main);
+  main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
+  await Promise.all(STATE.vendors.map(v => getContatos(v.codigo)));
+  if(STATE.route.page==='visao-geral') renderManagerOverview(main);
+  else await renderPrevisaoCompras(main);
 }
 
 // Corpo da tela financeira "geral" (todos os vendedores) — reaproveitado tanto pelo usuário
@@ -4905,7 +4912,7 @@ function renderManagerOverview(main){
   `;
   document.getElementById('seletorMesVisaoGeral').onchange = (e) => {
     STATE.mesSelecionado = e.target.value;
-    renderManagerShell();
+    if(STATE.session.tipo === 'gerente') renderManagerShell(); else renderComprasShell();
   };
   const cards = document.getElementById('cards');
   cards.innerHTML = STATE.vendors.map(v => {
@@ -4937,6 +4944,7 @@ function renderManagerOverview(main){
   }).join('');
   cards.querySelectorAll('.vendor-card').forEach(el=>{
     el.onclick = () => {
+      if(STATE.session.tipo !== 'gerente') return; // Roberto (compras) só tem Visão geral, não o detalhe por vendedor.
       STATE.route = {page:'vendedores', codigo:Number(el.dataset.codigo)};
       renderManagerShell();
     };

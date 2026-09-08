@@ -625,6 +625,7 @@ async function loadAll(){
   STATE.diretores = diretores;
   STATE.catalogoSkus = (await safeGet('crm:catalogo_skus')) || [];
   STATE.promocao = (await safeGet('crm:promocao')) || [];
+  STATE.previsoes = (await safeGet('crm:previsoes')) || [];
   STATE.financeiro = (await safeGet('crm:financeiro')) || {};
 }
 
@@ -1074,6 +1075,233 @@ function lerPlanilhaCatalogoSkus(file){
 
 // Lê a planilha de itens em promoção do mês: Código, Descrição, Valor da promoção.
 // Substitui a lista inteira a cada upload (igual o catálogo de SKUs).
+// Lê a planilha de previsão de compras (o que vem no container): Código, Descrição,
+// Quantidade que vai chegar.
+function lerPlanilhaPrevisao(file){
+  return new Promise((resolve, reject) => {
+    if(typeof XLSX === 'undefined'){ reject(new Error('Biblioteca de planilha não carregou. Tente recarregar a página.')); return; }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Falha ao ler o arquivo.'));
+    reader.onload = () => {
+      try{
+        const data = new Uint8Array(reader.result);
+        const wb = XLSX.read(data, {type:'array', cellDates:true});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const linhas = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
+        linhas.shift();
+        const itens = linhas
+          .filter(row => row[0])
+          .map((row, idx) => ({
+            id: 'item'+Date.now()+idx,
+            codigo: String(row[0]).trim().toUpperCase(),
+            descricao: row[1] || '',
+            quantidade: Number(row[2]) || 0,
+            intencoes: [],
+          }));
+        resolve(itens);
+      }catch(err){
+        reject(new Error('Não consegui ler essa planilha. Confira se a primeira linha é o cabeçalho.'));
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// Soma quanto já foi reservado (intenção de venda) de um item, e quanto ainda está livre.
+function resumoItemPrevisao(item){
+  const reservado = (item.intencoes||[]).reduce((s,i) => s + i.quantidade, 0);
+  const pct = item.quantidade > 0 ? Math.round((reservado/item.quantidade)*100) : 0;
+  return {reservado, livre: Math.max(0, item.quantidade - reservado), pct};
+}
+// Soma todos os itens de um container pra saber o % geral já vendido dele.
+function resumoContainerPrevisao(container){
+  let totalChegando = 0, totalReservado = 0;
+  container.itens.forEach(item => {
+    totalChegando += item.quantidade;
+    totalReservado += (item.intencoes||[]).reduce((s,i) => s + i.quantidade, 0);
+  });
+  const pct = totalChegando > 0 ? Math.round((totalReservado/totalChegando)*100) : 0;
+  return {totalChegando, totalReservado, pct};
+}
+
+// Registra a intenção de venda de um vendedor pra um item de um container específico.
+async function registrarIntencaoVenda(containerId, itemId, clienteCodigo, quantidade){
+  const container = STATE.previsoes.find(c => c.id === containerId);
+  if(!container) return;
+  const item = container.itens.find(i => i.id === itemId);
+  if(!item) return;
+  const cliente = [...STATE.roster, ...(await getInativos())].find(c => c.codigo === clienteCodigo);
+  item.intencoes.push({
+    id: genId(),
+    vendedorCodigo: STATE.session.codigo,
+    vendedorNome: STATE.session.nome,
+    clienteCodigo,
+    clienteNome: cliente ? cliente.nome : ('Cliente Nº '+clienteCodigo),
+    quantidade,
+    data: todayStr(),
+  });
+  await safeSet('crm:previsoes', STATE.previsoes);
+}
+
+// Remove uma intenção de venda já registrada (só quem registrou ou o gerente deveria mexer
+// nisso — a tela já só mostra o botão de excluir pra quem pode).
+async function excluirIntencaoVenda(containerId, itemId, intencaoId){
+  const container = STATE.previsoes.find(c => c.id === containerId);
+  if(!container) return;
+  const item = container.itens.find(i => i.id === itemId);
+  if(!item) return;
+  item.intencoes = item.intencoes.filter(i => i.id !== intencaoId);
+  await safeSet('crm:previsoes', STATE.previsoes);
+}
+
+// Tela de Previsão de Compras — reaproveitada tanto pelo gerente/diretor (que sobe a
+// planilha) quanto pelo vendedor (que só registra intenção de venda).
+async function renderPrevisaoCompras(main){
+  const podeSubir = STATE.session.tipo === 'gerente';
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Previsão de Compras</div><h2>Containers a caminho</h2></div>
+    ${podeSubir ? `
+      <div class="panel import-panel" style="border-left-color:var(--accent);">
+        <div class="import-panel-title"><span class="import-badge" style="background:var(--accent);">+</span><h3>Subir novo container</h3></div>
+        <p class="hint">Planilha com 3 colunas, nessa ordem: <b>Código</b>, <b>Descrição</b>, <b>Quantidade</b> que vai chegar.</p>
+        <div class="form-row">
+          <input type="text" id="nomeContainer" placeholder="Ex: TF2605" style="max-width:160px;">
+          <input type="file" id="f_previsao" accept=".xlsx,.xls">
+          <button class="primary-btn" id="btnProcessarPrevisao">Adicionar container</button>
+        </div>
+        <div id="msgPrevisao"></div>
+      </div>
+    ` : ''}
+    <div id="listaContainers"></div>
+  `;
+
+  function drawContainers(){
+    const box = document.getElementById('listaContainers');
+    if((STATE.previsoes||[]).length === 0){ box.innerHTML = `<div class="empty-state">Nenhum container cadastrado ainda.</div>`; return; }
+    box.innerHTML = STATE.previsoes.slice().reverse().map(cont => {
+      const resumoCont = resumoContainerPrevisao(cont);
+      return `
+      <div class="panel">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <h3 style="margin-bottom:0;">📦 ${cont.nome}</h3>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span class="hint" style="margin:0;">Cadastrado em ${fmtDatePt(cont.criadoEm)}</span>
+            ${podeSubir ? `<button class="ghost-btn btnRemoverContainer" data-id="${cont.id}" style="color:var(--danger); border-color:var(--danger); padding:6px 10px; font-size:12px;">🗑️ Remover container</button>` : ''}
+          </div>
+        </div>
+        <div style="margin-bottom:14px;">
+          <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px;">
+            <span><b>${resumoCont.pct}% do container vendido</b></span>
+            <span class="hint" style="margin:0;">${resumoCont.totalReservado} de ${resumoCont.totalChegando} un.</span>
+          </div>
+          <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${resumoCont.pct}%; background:${resumoCont.pct>=100?'var(--ok)':'var(--accent)'};"></div></div>
+        </div>
+        <div class="client-list">
+          ${cont.itens.map(item => {
+            const r = resumoItemPrevisao(item);
+            return `
+              <div class="client-row" style="flex-wrap:wrap; align-items:flex-start;">
+                <div class="client-info">
+                  <div class="client-name">${item.codigo} — ${item.descricao}</div>
+                  <div class="client-meta">Chegando: <b>${item.quantidade}</b> · Reservado: <b>${r.reservado}</b> · Livre: <b style="color:${r.livre>0?'var(--ok)':'var(--danger)'};">${r.livre}</b> · <b style="color:var(--accent);">${r.pct}% vendido</b></div>
+                  <div class="progress-bar-track" style="margin-top:4px; max-width:220px;"><div class="progress-bar-fill" style="width:${r.pct}%; background:${r.pct>=100?'var(--ok)':'var(--accent)'};"></div></div>
+                  ${item.intencoes.length ? `
+                    <div style="margin-top:6px; display:flex; flex-direction:column; gap:3px;">
+                      ${item.intencoes.map(i => `
+                        <div class="hint" style="margin:0; display:flex; justify-content:space-between; gap:8px;">
+                          <span><b>${i.quantidade}</b> un. — ${i.vendedorNome} → ${i.clienteNome} (Nº ${i.clienteCodigo})</span>
+                          ${(i.vendedorCodigo===STATE.session.codigo || STATE.session.tipo==='gerente') ? `<button class="ghost-btn btnExcluirIntencao" data-container="${cont.id}" data-item="${item.id}" data-intencao="${i.id}" style="padding:2px 8px; font-size:11px;">excluir</button>` : ''}
+                        </div>
+                      `).join('')}
+                    </div>
+                  ` : ''}
+                </div>
+                ${STATE.session.tipo==='vendedor' ? `<button class="ghost-btn btnNovaIntencao" data-container="${cont.id}" data-item="${item.id}">+ Registrar intenção</button>` : ''}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    `;
+    }).join('');
+
+    box.querySelectorAll('.btnNovaIntencao').forEach(btn => {
+      btn.onclick = () => abrirModalIntencao(btn.dataset.container, btn.dataset.item, main);
+    });
+    box.querySelectorAll('.btnExcluirIntencao').forEach(btn => {
+      btn.onclick = async () => {
+        if(!(await confirmarAcao('Excluir essa intenção de venda?'))) return;
+        await excluirIntencaoVenda(btn.dataset.container, btn.dataset.item, btn.dataset.intencao);
+        drawContainers();
+      };
+    });
+    box.querySelectorAll('.btnRemoverContainer').forEach(btn => {
+      btn.onclick = async () => {
+        if(!(await confirmarAcao('Remover esse container inteiro da previsão de compras?'))) return;
+        STATE.previsoes = STATE.previsoes.filter(c => c.id !== btn.dataset.id);
+        await safeSet('crm:previsoes', STATE.previsoes);
+        drawContainers();
+      };
+    });
+  }
+  drawContainers();
+
+  if(podeSubir){
+    document.getElementById('btnProcessarPrevisao').onclick = async () => {
+      const msg = document.getElementById('msgPrevisao');
+      const nome = document.getElementById('nomeContainer').value.trim();
+      const file = document.getElementById('f_previsao').files[0];
+      if(!nome){ msg.innerHTML = `<div class="msg err">Dá um nome pro container (ex: TF2605).</div>`; return; }
+      if(!file){ msg.innerHTML = `<div class="msg err">Escolha o arquivo.</div>`; return; }
+      msg.innerHTML = `<div class="hint">Lendo planilha...</div>`;
+      try{
+        const itens = await lerPlanilhaPrevisao(file);
+        STATE.previsoes = STATE.previsoes || [];
+        STATE.previsoes.push({id: 'cont'+Date.now(), nome, criadoEm: todayStr(), itens});
+        await safeSet('crm:previsoes', STATE.previsoes);
+        msg.innerHTML = `<div class="msg ok">Container ${nome} adicionado com ${itens.length} item(ns).</div>`;
+        document.getElementById('nomeContainer').value = '';
+        document.getElementById('f_previsao').value = '';
+        drawContainers();
+      }catch(err){
+        msg.innerHTML = `<div class="msg err">${err.message}</div>`;
+      }
+    };
+  }
+}
+
+// Modal pra vendedor registrar a intenção de venda de um item (quantidade + cliente).
+function abrirModalIntencao(containerId, itemId, main){
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal">
+      <h3>Registrar intenção de venda</h3>
+      <label class="field-label">Número do cliente</label>
+      <input type="number" id="clienteIntencao" class="login-input" placeholder="Ex: 448">
+      <label class="field-label">Quantidade</label>
+      <input type="number" id="qtdIntencao" class="login-input" min="1">
+      <div id="msgIntencao"></div>
+      <div class="modal-actions" style="margin-top:10px;">
+        <button class="ghost-btn" id="cancelarIntencao">Cancelar</button>
+        <button class="primary-btn" id="salvarIntencao">Salvar</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  backdrop.onclick = (e) => { if(e.target===backdrop) backdrop.remove(); };
+  backdrop.querySelector('#cancelarIntencao').onclick = () => backdrop.remove();
+  backdrop.querySelector('#salvarIntencao').onclick = async () => {
+    const clienteCodigo = Number(backdrop.querySelector('#clienteIntencao').value);
+    const quantidade = Number(backdrop.querySelector('#qtdIntencao').value);
+    const msg = backdrop.querySelector('#msgIntencao');
+    if(!clienteCodigo || !quantidade || quantidade<=0){ msg.innerHTML = `<div class="msg err">Preencha o número do cliente e a quantidade.</div>`; return; }
+    await registrarIntencaoVenda(containerId, itemId, clienteCodigo, quantidade);
+    backdrop.remove();
+    await renderPrevisaoCompras(main);
+  };
+}
+
 function lerPlanilhaPromocao(file){
   return new Promise((resolve, reject) => {
     if(typeof XLSX === 'undefined'){ reject(new Error('Biblioteca de planilha não carregou. Tente recarregar a página.')); return; }
@@ -2203,6 +2431,7 @@ async function renderVendorShell(){
     {page:'carteira', label:'Carteira completa'},
     {page:'pedidos', label:'Pedidos'},
     {page:'financeira', label:'Financeira'},
+    {page:'previsao', label:'Previsão de Compras'},
     {page:'leads', label:'Leads'},
     {page:'inativos', label:'Clientes inativos'},
     {page:'historico', label:'Histórico'},
@@ -2217,6 +2446,7 @@ async function renderVendorShell(){
   else if(STATE.route.page==='carteira') renderVendorCarteira(main);
   else if(STATE.route.page==='pedidos') await renderVendorPedidos(main);
   else if(STATE.route.page==='financeira') await renderVendorFinanceira(main);
+  else if(STATE.route.page==='previsao') await renderPrevisaoCompras(main);
   else if(STATE.route.page==='leads') renderVendorLeads(main);
   else if(STATE.route.page==='inativos') await renderVendorInativos(main);
   else renderVendorHistorico(main);
@@ -4245,6 +4475,7 @@ async function renderManagerShell(){
     {page:'inativos', label:'Clientes inativos'},
     {page:'metas', label:'Metas de vendas'},
     {page:'financeira', label:'Financeira'},
+    {page:'previsao', label:'Previsão de Compras'},
     {page:'importacoes', label:'Importações'},
     {page:'credenciais', label:'Credenciais de acesso'},
     {page:'admin', label:'Administração'},
@@ -4259,6 +4490,7 @@ async function renderManagerShell(){
   else if(STATE.route.page==='inativos') await renderManagerInativos(main);
   else if(STATE.route.page==='metas') renderManagerMetas(main);
   else if(STATE.route.page==='financeira') await renderFinanceiroBody(main, () => renderManagerShell());
+  else if(STATE.route.page==='previsao') await renderPrevisaoCompras(main);
   else if(STATE.route.page==='importacoes') renderManagerImportacoes(main);
   else if(STATE.route.page==='credenciais') renderManagerCredenciais(main);
   else await renderManagerAdmin(main);

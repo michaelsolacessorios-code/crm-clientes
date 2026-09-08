@@ -4137,6 +4137,7 @@ function abrirTrocarVendedorModal(codigo){
       <label class="field-label">Novo vendedor responsável</label>
       <select id="selectNovoVendedor" class="login-input">
         ${STATE.vendors.map(v => `<option value="${v.codigo}" ${v.codigo===c.vendedorCodigo?'selected':''}>${v.nome} (Nº ${v.codigo})</option>`).join('')}
+        <option value="SEM_VENDEDOR">— Sem vendedor (fila de inativos) —</option>
       </select>
       <div id="msgTrocarVendedor"></div>
       <div class="modal-actions" style="margin-top:10px;">
@@ -4149,7 +4150,26 @@ function abrirTrocarVendedorModal(codigo){
   backdrop.onclick = (e) => { if(e.target===backdrop) backdrop.remove(); };
   backdrop.querySelector('#cancelarTrocarVendedor').onclick = () => backdrop.remove();
   backdrop.querySelector('#salvarTrocarVendedor').onclick = async () => {
-    const novoCodigo = Number(backdrop.querySelector('#selectNovoVendedor').value);
+    const valorSelecionado = backdrop.querySelector('#selectNovoVendedor').value;
+
+    if(valorSelecionado === 'SEM_VENDEDOR'){
+      // Tira o cliente da carteira ativa e devolve pra fila de "Clientes inativos".
+      STATE.roster = STATE.roster.filter(x => x.codigo !== codigo);
+      await safeSet('crm:roster', STATE.roster);
+      const inativos = await getInativos();
+      inativos.push({
+        codigo: c.codigo, nome: c.nome, municipio: c.municipio||'', uf: c.uf||'',
+        cnpj: c.cnpj||'', telefone: c.telefone||'', contato: c.contato||'',
+        ultimaCompra: c.ultimaCompra||null, limiteCredito: c.limiteCredito, saldoDevedor: c.saldoDevedor,
+      });
+      await safeSet('crm:inativos', inativos);
+      backdrop.remove();
+      await avisar(`${c.nome} foi movido para a fila de "Clientes inativos".`);
+      if(STATE.session.tipo==='vendedor') renderVendorShell(); else renderManagerShell();
+      return;
+    }
+
+    const novoCodigo = Number(valorSelecionado);
     if(novoCodigo === c.vendedorCodigo){ backdrop.remove(); return; }
     const novoVendedor = STATE.vendors.find(v=>v.codigo===novoCodigo);
     const existentesDoVendedor = clientsForVendor(novoCodigo).length;

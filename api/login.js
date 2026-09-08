@@ -98,6 +98,19 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: false, message: 'Senha incorreta.' });
     }
 
+    // Compras (só cuida da Previsão de Compras)
+    const usuarioCompras = config.usuarioCompras || 'roberto';
+    if (usuario === usuarioCompras) {
+      if (senhaConfere(senha, config.senhaCompras)) {
+        if (precisaMigrar(config.senhaCompras)) {
+          config.senhaCompras = novoHash(senha);
+          await setKV(SUPABASE_URL, 'crm:config', config, headers);
+        }
+        return res.status(200).json({ ok: true, tipo: 'compras', nome: config.nomeCompras || 'Compras', foto: config.fotoCompras || null });
+      }
+      return res.status(200).json({ ok: false, message: 'Senha incorreta.' });
+    }
+
     // Vendedor
     const vendedor = vendors.find(v => v.usuario === usuario);
     if (vendedor) {

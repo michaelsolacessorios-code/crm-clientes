@@ -4898,11 +4898,47 @@ function renderManagerCredenciais(main){
   };
 }
 
+// Baixa TUDO que está guardado no banco (clientes, vendas, pedidos, financeiro, tudo) num
+// único arquivo, direto pro computador de quem clicar — pra guardar como cópia de segurança
+// onde quiser (servidor próprio, Google Drive, pendrive).
+async function baixarBackupCompleto(botao){
+  const textoOriginal = botao.textContent;
+  botao.disabled = true; botao.textContent = 'Preparando backup...';
+  try{
+    const chaves = ['crm:vendors','crm:roster','crm:inativos','crm:leads','crm:config','crm:diretores','crm:catalogo_skus','crm:promocao','crm:financeiro','crm:lixeira'];
+    STATE.vendors.forEach(v => chaves.push('crm:contatos:'+v.codigo));
+    const backup = {geradoEm: new Date().toISOString(), dados: {}};
+    for(const chave of chaves){
+      backup.dados[chave] = await safeGet(chave);
+    }
+    const blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `backup_crm_tfimports_${todayStr()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }catch(err){
+    alert('Não consegui gerar o backup: ' + err.message);
+  }
+  botao.disabled = false; botao.textContent = textoOriginal;
+}
+
 async function renderManagerAdmin(main){
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
   const poolInativos = await getInativos();
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Administração</div><h2>Adicionar e importar</h2></div>
+
+    <div class="admin-section-title">💾 Backup</div>
+
+    <div class="panel">
+      <h3>Baixar backup completo</h3>
+      <p class="hint">Baixa um arquivo com tudo que está no sistema hoje — clientes, carteiras, vendas, pedidos, financeiro, tudo — pra guardar onde quiser. Recomendado fazer isso todo fim de dia.</p>
+      <button class="primary-btn" id="btnBaixarBackup">⬇️ Baixar backup completo</button>
+    </div>
 
     <div class="admin-section-title">👥 Vendedores</div>
 
@@ -4983,6 +5019,7 @@ async function renderManagerAdmin(main){
     </div>
   `;
 
+  document.getElementById('btnBaixarBackup').onclick = (e) => baixarBackupCompleto(e.target);
   const renameList = document.getElementById('renameList');
   renameList.innerHTML = STATE.vendors.map(v => {
     const numClientes = clientsForVendor(v.codigo).length;

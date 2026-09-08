@@ -458,45 +458,46 @@ function genId(){
   return 'h'+Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 }
 
-// ---------------- ARMAZENAMENTO (Supabase) ----------------
-// Substitui o antigo window.storage (que só funciona dentro de um Artifact do Claude)
-// por chamadas diretas à API REST do Supabase (PostgREST), guardadas na tabela crm_kv
-// como pares chave/valor — mantém a mesma estrutura de chaves (crm:vendors, crm:roster, etc.)
-// que o resto do código já usa, então nada mais precisou mudar.
-const SUPABASE_URL = 'https://bpbnsiuwuamxgjhrcwrr.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_WyQm7RLLcqzblMOboyfxgg_45F-9bo5';
-
+// ---------------- ARMAZENAMENTO (via função no Vercel — nunca fala direto com o Supabase) ----------------
+// O navegador chama só /api/kv, que é uma "portaria" no servidor do Vercel. A chave de
+// verdade do Supabase fica guardada em segredo lá (variável de ambiente), nunca aparece
+// no código que roda aqui — quem abrir "Ver código-fonte" da página não vê mais nada
+// sensível. Mantém a mesma estrutura de chaves de sempre (crm:vendors, crm:roster, etc.).
 async function safeGet(key, shared=true){
   try{
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/crm_kv?key=eq.${encodeURIComponent(key)}&select=value`, {
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-      },
-    });
+    const res = await fetch(`/api/kv?key=${encodeURIComponent(key)}`);
     if(!res.ok) throw new Error('falha ao buscar '+key);
-    const rows = await res.json();
-    return rows.length ? rows[0].value : null;
+    const data = await res.json();
+    return data.value;
   }catch(e){ console.error('safeGet', key, e); return null; }
 }
 async function safeSet(key, value, shared=true){
   try{
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/crm_kv?on_conflict=key`, {
+    const res = await fetch('/api/kv', {
       method: 'POST',
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates,return=minimal',
-      },
-      body: JSON.stringify({ key, value, updated_at: new Date().toISOString() }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, value }),
     });
     if(!res.ok) throw new Error('falha ao salvar '+key);
     return true;
-  }catch(e){ return false; }
+  }catch(e){ console.error('safeSet', key, e); return false; }
 }
 
 const META_PADRAO = 300000;
+
+// Pede pro servidor criptografar uma senha nova antes de gravar — o navegador nunca faz
+// esse cálculo sozinho nem guarda a senha em texto puro.
+async function hashSenha(senha){
+  const res = await fetch('/api/hash-senha', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({senha}),
+  });
+  if(!res.ok) throw new Error('Não consegui criptografar a senha. Tente de novo.');
+  const data = await res.json();
+  return data.hash;
+}
+
 
 async function loadAll(){
   let vendors = await safeGet('crm:vendors');
@@ -2120,58 +2121,44 @@ function renderLogin(){
       </div>
     </div>
   `;
-  function doLogin(){
+  async function doLogin(){
     const errSlot = document.getElementById('loginErrorSlot');
+    const btn = document.getElementById('loginSubmitBtn');
+    const user = document.getElementById('loginUser').value.trim().toLowerCase();
+    const pass = document.getElementById('loginPass').value.trim();
+    if(!user || !pass){
+      errSlot.innerHTML = `<div class="login-error">Preencha usuário e senha.</div>`;
+      return;
+    }
+    btn.disabled = true; btn.textContent = 'Entrando...';
     try{
-      const user = document.getElementById('loginUser').value.trim().toLowerCase();
-      const pass = document.getElementById('loginPass').value.trim();
-      if(!user || !pass){
-        errSlot.innerHTML = `<div class="login-error">Preencha usuário e senha.</div>`;
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({usuario: user, senha: pass}),
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Falha ao entrar.');
+      if(!data.ok){
+        errSlot.innerHTML = `<div class="login-error">${data.message || 'Usuário ou senha incorretos.'}</div>`;
         return;
       }
-      const usuarioGerente = (STATE.config && STATE.config.usuarioGerente) || GERENTE_USUARIO_PADRAO;
-      if(user === usuarioGerente){
-        const senhaGerente = (STATE.config && STATE.config.senhaGerente) || GERENTE_SENHA_PADRAO;
-        if(pass === senhaGerente){
-          const nomeGerente = (STATE.config && STATE.config.nomeGerente) || GERENTE_NOME_PADRAO;
-          STATE.session = {tipo:'gerente', nome: nomeGerente}; STATE.route={page:'visao-geral'}; STATE.mesSelecionado = currentMonthKey(); render();
-        } else {
-          errSlot.innerHTML = `<div class="login-error">Senha incorreta.</div>`;
-        }
-        return;
-      }
-      const diretor = (STATE.diretores||[]).find(d => d.usuario === user);
-      if(diretor){
-        if(diretor.senha === pass){
-          STATE.session = {tipo:'gerente', nome: diretor.nome, foto: diretor.foto||null}; STATE.route={page:'visao-geral'}; STATE.mesSelecionado = currentMonthKey(); render();
-        } else {
-          errSlot.innerHTML = `<div class="login-error">Senha incorreta.</div>`;
-        }
-        return;
-      }
-      const usuarioFinanceiro = (STATE.config && STATE.config.usuarioFinanceiro) || 'financeiro';
-      if(user === usuarioFinanceiro){
-        const senhaFinanceiro = (STATE.config && STATE.config.senhaFinanceiro) || 'financeiro123';
-        if(pass === senhaFinanceiro){
-          const nomeFinanceiro = (STATE.config && STATE.config.nomeFinanceiro) || 'Financeiro';
-          STATE.session = {tipo:'financeiro', nome: nomeFinanceiro}; STATE.route={page:'financeira'}; STATE.mesSelecionado = currentMonthKey(); render();
-        } else {
-          errSlot.innerHTML = `<div class="login-error">Senha incorreta.</div>`;
-        }
-        return;
-      }
-      const vendors = STATE.vendors || [];
-      const v = vendors.find(v => v.usuario === user);
-      if(v && v.senha === pass){
-        STATE.session = {tipo:'vendedor', codigo:v.codigo, nome:v.nome};
-        STATE.route = {page:'dashboard'};
-        STATE.mesSelecionado = currentMonthKey();
-        render();
+      if(data.tipo === 'gerente'){
+        STATE.session = {tipo:'gerente', nome: data.nome, foto: data.foto||null};
+        STATE.route = {page:'visao-geral'};
+      } else if(data.tipo === 'financeiro'){
+        STATE.session = {tipo:'financeiro', nome: data.nome, foto: data.foto||null};
+        STATE.route = {page:'financeira'};
       } else {
-        errSlot.innerHTML = `<div class="login-error">Usuário ou senha incorretos.</div>`;
+        STATE.session = {tipo:'vendedor', codigo: data.codigo, nome: data.nome};
+        STATE.route = {page:'dashboard'};
       }
+      STATE.mesSelecionado = currentMonthKey();
+      render();
     }catch(err){
       errSlot.innerHTML = `<div class="login-error">Erro ao entrar: ${err.message}</div>`;
+    }finally{
+      btn.disabled = false; btn.textContent = 'Entrar';
     }
   }
   document.getElementById('loginSubmitBtn').onclick = doLogin;
@@ -4683,7 +4670,7 @@ function renderManagerCredenciais(main){
               <td>${vendorNumero(v)}</td>
               <td>${v.nome}</td>
               <td>${v.usuario}</td>
-              <td><input type="text" class="senhaInput" value="${v.senha}" data-codigo="${v.codigo}"></td>
+              <td><input type="text" class="senhaInput" placeholder="Deixe em branco pra manter a atual" data-codigo="${v.codigo}"></td>
               <td><button class="ghost-btn salvarSenhaBtn" data-codigo="${v.codigo}">Salvar</button></td>
             </tr>
           `).join('')}
@@ -4705,7 +4692,7 @@ function renderManagerCredenciais(main){
               </td>
               <td><input type="text" class="diretorNomeInput" value="${d.nome}" data-id="${d.id}"></td>
               <td><input type="text" class="diretorUsuarioInput" value="${d.usuario}" data-id="${d.id}"></td>
-              <td><input type="text" class="diretorSenhaInput" value="${d.senha}" data-id="${d.id}"></td>
+              <td><input type="text" class="diretorSenhaInput" placeholder="Deixe em branco pra manter a atual" data-id="${d.id}"></td>
               <td style="display:flex; gap:6px;">
                 <button class="ghost-btn salvarDiretorBtn" data-id="${d.id}">Salvar</button>
                 <button class="ghost-btn removerDiretorBtn" data-id="${d.id}" style="color:var(--danger); border-color:var(--danger);">Remover</button>
@@ -4736,7 +4723,7 @@ function renderManagerCredenciais(main){
       </div>
       <div class="form-row">
         <input type="text" id="novoUsuarioGerente" placeholder="Usuário" value="${STATE.config.usuarioGerente || GERENTE_USUARIO_PADRAO}">
-        <input type="text" id="novaSenhaGerente" placeholder="Senha" value="${STATE.config.senhaGerente}">
+        <input type="text" id="novaSenhaGerente" placeholder="Deixe em branco pra manter a atual">
         <button class="primary-btn" id="btnSalvarSenhaGerente">Salvar</button>
       </div>
       <div id="msgGerente"></div>
@@ -4752,7 +4739,7 @@ function renderManagerCredenciais(main){
       <div class="form-row">
         <input type="text" id="novoNomeFinanceiro" placeholder="Nome" value="${STATE.config.nomeFinanceiro || ''}">
         <input type="text" id="novoUsuarioFinanceiro" placeholder="Usuário" value="${STATE.config.usuarioFinanceiro || 'financeiro'}">
-        <input type="text" id="novaSenhaFinanceiro" placeholder="Senha" value="${STATE.config.senhaFinanceiro || ''}">
+        <input type="text" id="novaSenhaFinanceiro" placeholder="Deixe em branco pra manter a atual">
         <button class="primary-btn" id="btnSalvarFinanceiro">Salvar</button>
       </div>
       <div id="msgFinanceiroConta"></div>
@@ -4763,7 +4750,7 @@ function renderManagerCredenciais(main){
     const usuario = document.getElementById('novoUsuarioFinanceiro').value.trim().toLowerCase();
     const senha = document.getElementById('novaSenhaFinanceiro').value.trim();
     const msg = document.getElementById('msgFinanceiroConta');
-    if(!usuario || !senha){ msg.innerHTML = `<div class="msg err">Preencha usuário e senha.</div>`; return; }
+    if(!usuario){ msg.innerHTML = `<div class="msg err">Preencha o usuário.</div>`; return; }
     const emUsoPorOutro =
       (STATE.config.usuarioGerente||GERENTE_USUARIO_PADRAO)===usuario ||
       (STATE.diretores||[]).some(d=>d.usuario===usuario) ||
@@ -4771,8 +4758,9 @@ function renderManagerCredenciais(main){
     if(emUsoPorOutro){ msg.innerHTML = `<div class="msg err">Esse nome de usuário já está em uso por outra conta.</div>`; return; }
     STATE.config.nomeFinanceiro = nome || 'Financeiro';
     STATE.config.usuarioFinanceiro = usuario;
-    STATE.config.senhaFinanceiro = senha;
+    if(senha) STATE.config.senhaFinanceiro = await hashSenha(senha);
     await safeSet('crm:config', STATE.config);
+    document.getElementById('novaSenhaFinanceiro').value = '';
     msg.innerHTML = `<div class="msg ok">Credenciais do usuário financeiro atualizadas.</div>`;
   };
   document.getElementById('f_foto_financeiro').onchange = async () => {
@@ -4802,9 +4790,13 @@ function renderManagerCredenciais(main){
       const codigo = Number(btn.dataset.codigo);
       const input = document.querySelector(`.senhaInput[data-codigo="${codigo}"]`);
       const v = STATE.vendors.find(v=>v.codigo===codigo);
-      v.senha = input.value.trim() || v.senha;
+      const novaSenha = input.value.trim();
+      const msg = document.getElementById('msgCred');
+      if(!novaSenha){ msg.innerHTML = `<div class="msg ok">Nada digitado — a senha de ${v.nome} continua a mesma.</div>`; return; }
+      v.senha = await hashSenha(novaSenha);
       await safeSet('crm:vendors', STATE.vendors);
-      document.getElementById('msgCred').innerHTML = `<div class="msg ok">Senha de ${v.nome} atualizada.</div>`;
+      input.value = '';
+      msg.innerHTML = `<div class="msg ok">Senha de ${v.nome} atualizada.</div>`;
     };
   });
   document.querySelectorAll('.salvarDiretorBtn').forEach(btn => {
@@ -4816,8 +4808,8 @@ function renderManagerCredenciais(main){
       const novoUsuario = document.querySelector(`.diretorUsuarioInput[data-id="${id}"]`).value.trim().toLowerCase();
       const novaSenha = document.querySelector(`.diretorSenhaInput[data-id="${id}"]`).value.trim();
       const msg = document.getElementById('msgDiretores');
-      if(!novoNome || !novoUsuario || !novaSenha){
-        msg.innerHTML = `<div class="msg err">Nome, usuário e senha são obrigatórios.</div>`;
+      if(!novoNome || !novoUsuario){
+        msg.innerHTML = `<div class="msg err">Nome e usuário são obrigatórios.</div>`;
         return;
       }
       const conflito = STATE.vendors.some(v=>v.usuario===novoUsuario) ||
@@ -4827,8 +4819,10 @@ function renderManagerCredenciais(main){
         msg.innerHTML = `<div class="msg err">Esse usuário já está em uso por outra conta.</div>`;
         return;
       }
-      d.nome = novoNome; d.usuario = novoUsuario; d.senha = novaSenha;
+      d.nome = novoNome; d.usuario = novoUsuario;
+      if(novaSenha) d.senha = await hashSenha(novaSenha);
       await safeSet('crm:diretores', STATE.diretores);
+      document.querySelector(`.diretorSenhaInput[data-id="${id}"]`).value = '';
       msg.innerHTML = `<div class="msg ok">Dados de ${d.nome} atualizados.</div>`;
     };
   });
@@ -4874,7 +4868,7 @@ function renderManagerCredenciais(main){
       msg.innerHTML = `<div class="msg err">Já existe uma conta com esse usuário.</div>`;
       return;
     }
-    STATE.diretores.push({id:'dir'+Date.now(), nome, cargo:'Diretor', usuario, senha});
+    STATE.diretores.push({id:'dir'+Date.now(), nome, cargo:'Diretor', usuario, senha: await hashSenha(senha)});
     await safeSet('crm:diretores', STATE.diretores);
     msg.innerHTML = `<div class="msg ok">${nome} cadastrado como diretor.</div>`;
     renderManagerShell();
@@ -4885,20 +4879,21 @@ function renderManagerCredenciais(main){
     const cargo = document.getElementById('novoCargoGerente').value.trim();
     const usuario = document.getElementById('novoUsuarioGerente').value.trim().toLowerCase();
     const msg = document.getElementById('msgGerente');
-    if(!senha || !usuario){
-      msg.innerHTML = `<div class="msg err">Usuário e senha são obrigatórios.</div>`;
+    if(!usuario){
+      msg.innerHTML = `<div class="msg err">Usuário é obrigatório.</div>`;
       return;
     }
     if(STATE.vendors.some(v=>v.usuario===usuario)){
       msg.innerHTML = `<div class="msg err">Esse usuário já pertence a um vendedor.</div>`;
       return;
     }
-    STATE.config.senhaGerente = senha;
     STATE.config.usuarioGerente = usuario;
+    if(senha) STATE.config.senhaGerente = await hashSenha(senha);
     if(nome) STATE.config.nomeGerente = nome;
     if(cargo) STATE.config.cargoGerente = cargo;
     STATE.session.nome = STATE.config.nomeGerente;
     await safeSet('crm:config', STATE.config);
+    document.getElementById('novaSenhaGerente').value = '';
     msg.innerHTML = `<div class="msg ok">Dados do gerente atualizados.</div>`;
   };
 }
@@ -5107,7 +5102,7 @@ async function renderManagerAdmin(main){
       msg.innerHTML = `<div class="msg err">Já existe um vendedor com esse número.</div>`;
       return;
     }
-    const novoVendedor = {codigo: numero, nome, usuario, senha, metaMes: META_PADRAO};
+    const novoVendedor = {codigo: numero, nome, usuario, senha: await hashSenha(senha), metaMes: META_PADRAO};
     if(fotoFile){
       try{
         novoVendedor.foto = await resizeImagemParaBase64(fotoFile);

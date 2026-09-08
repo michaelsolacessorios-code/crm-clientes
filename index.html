@@ -1124,6 +1124,74 @@ function resumoContainerPrevisao(container){
   return {totalChegando, totalReservado, pct};
 }
 
+// Depois que o container "dá entrada", a gente para de rastrear intenção de venda e passa a
+// contar vendas de verdade — quantas unidades dos itens daquele container um vendedor vendeu
+// naquele mês, e quantos SKUs diferentes dele já saíram.
+function indicadoresContainerVendedor(vendedorCodigo, container, mesChave){
+  mesChave = mesChave || STATE.mesSelecionado || currentMonthKey();
+  const codes = new Set(container.itens.map(i => i.codigo));
+  const contatos = STATE.contatosCache[vendedorCodigo] || {};
+  let volume = 0, valor = 0;
+  const skusVendidos = new Set();
+  Object.values(contatos).forEach(reg => {
+    (reg.historico||[]).forEach(h => {
+      if(!h.vendeu || !h.data || h.data.slice(0,7)!==mesChave) return;
+      const itens = (h.skus && h.skus.itens) || [];
+      let pedidoTemItemDoContainer = false;
+      itens.forEach(i => {
+        const cod = (i.codigo||'').trim().toUpperCase();
+        if(codes.has(cod)){ volume += (i.quantidade||0); skusVendidos.add(cod); pedidoTemItemDoContainer = true; }
+      });
+      // O valor do pedido inteiro conta pro container se ele tiver ao menos um item dele
+      // (os itens não têm preço próprio cadastrado, então usamos o valor real do pedido).
+      if(pedidoTemItemDoContainer) valor += (h.valor||0);
+    });
+  });
+  return {volume, valor, qtdSkus: skusVendidos.size};
+}
+// Mesma coisa, mas somando todos os vendedores — usado no dashboard do gerente.
+function indicadoresContainerGeral(container, mesChave){
+  mesChave = mesChave || STATE.mesSelecionado || currentMonthKey();
+  const codes = new Set(container.itens.map(i => i.codigo));
+  let volume = 0, valor = 0;
+  const skusVendidos = new Set();
+  STATE.vendors.forEach(v => {
+    const contatos = STATE.contatosCache[v.codigo] || {};
+    Object.values(contatos).forEach(reg => {
+      (reg.historico||[]).forEach(h => {
+        if(!h.vendeu || !h.data || h.data.slice(0,7)!==mesChave) return;
+        const itens = (h.skus && h.skus.itens) || [];
+        let pedidoTemItemDoContainer = false;
+        itens.forEach(i => {
+          const cod = (i.codigo||'').trim().toUpperCase();
+          if(codes.has(cod)){ volume += (i.quantidade||0); skusVendidos.add(cod); pedidoTemItemDoContainer = true; }
+        });
+        if(pedidoTemItemDoContainer) valor += (h.valor||0);
+      });
+    });
+  });
+  return {volume, valor, qtdSkus: skusVendidos.size};
+}
+// Monta os quadradinhos de "vendas do container" pra colocar no dashboard — um por container
+// que já deu entrada. geral=true soma todos os vendedores (gerente); senão é só de um vendedor.
+function containersChegadosCardsHTML(mesChave, vendedorCodigo){
+  const chegados = (STATE.previsoes||[]).filter(c => c.status==='chegou');
+  if(chegados.length===0) return '';
+  return chegados.map(cont => {
+    const ind = vendedorCodigo ? indicadoresContainerVendedor(vendedorCodigo, cont, mesChave) : indicadoresContainerGeral(cont, mesChave);
+    return `
+      <div class="stat-card accent">
+        <div class="num display" style="font-size:20px;">${fmtMoney(ind.valor)}</div>
+        <div class="label">Vendido do container ${cont.nome}${vendedorCodigo?'':' (equipe)'}</div>
+        <div style="display:flex; gap:14px; margin-top:8px; font-size:12.5px; color:var(--ink-soft);">
+          <span><b style="color:var(--ink);">${ind.qtdSkus}</b> SKU(s)</span>
+          <span><b style="color:var(--ink);">${ind.volume}</b> un. (volume)</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
 // Registra a intenção de venda de um vendedor pra um item de um container específico.
 async function registrarIntencaoVenda(containerId, itemId, clienteCodigo, quantidade){
   const container = STATE.previsoes.find(c => c.id === containerId);
@@ -1177,26 +1245,30 @@ async function renderPrevisaoCompras(main){
 
   function drawContainers(){
     const box = document.getElementById('listaContainers');
-    if((STATE.previsoes||[]).length === 0){ box.innerHTML = `<div class="empty-state">Nenhum container cadastrado ainda.</div>`; return; }
-    box.innerHTML = STATE.previsoes.slice().reverse().map(cont => {
+    const pendentes = (STATE.previsoes||[]).filter(c => c.status !== 'chegou');
+    if(pendentes.length === 0){ box.innerHTML = `<div class="empty-state">Nenhum container em previsão no momento.</div>`; return; }
+    box.innerHTML = pendentes.slice().reverse().map(cont => {
       const resumoCont = resumoContainerPrevisao(cont);
       return `
       <div class="panel">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-          <h3 style="margin-bottom:0;">📦 ${cont.nome}</h3>
-          <div style="display:flex; align-items:center; gap:10px;">
-            <span class="hint" style="margin:0;">Cadastrado em ${fmtDatePt(cont.criadoEm)}</span>
-            ${podeSubir ? `<button class="ghost-btn btnRemoverContainer" data-id="${cont.id}" style="color:var(--danger); border-color:var(--danger); padding:6px 10px; font-size:12px;">🗑️ Remover container</button>` : ''}
-          </div>
+        <div class="containerHeader" data-id="${cont.id}" style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;">
+          <h3 style="margin-bottom:0;">📦 ${cont.nome} <span class="hint" style="margin-left:8px;">▾ clique pra ver os itens</span></h3>
+          <span class="hint" style="margin:0;">Cadastrado em ${fmtDatePt(cont.criadoEm)}</span>
         </div>
-        <div style="margin-bottom:14px;">
+        <div style="margin:10px 0 4px;">
           <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px;">
             <span><b>${resumoCont.pct}% do container vendido</b></span>
             <span class="hint" style="margin:0;">${resumoCont.totalReservado} de ${resumoCont.totalChegando} un.</span>
           </div>
           <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${resumoCont.pct}%; background:${resumoCont.pct>=100?'var(--ok)':'var(--accent)'};"></div></div>
         </div>
-        <div class="client-list">
+        ${podeSubir ? `
+          <div class="form-row" style="margin-top:6px;">
+            <button class="primary-btn btnDarEntrada" data-id="${cont.id}">📥 Dar entrada (chegou no estoque)</button>
+            <button class="ghost-btn btnRemoverContainer" data-id="${cont.id}" style="color:var(--danger); border-color:var(--danger);">🗑️ Remover container</button>
+          </div>
+        ` : ''}
+        <div class="client-list containerItens" data-id="${cont.id}" style="display:none; margin-top:14px;">
           ${cont.itens.map(item => {
             const r = resumoItemPrevisao(item);
             return `
@@ -1225,18 +1297,41 @@ async function renderPrevisaoCompras(main){
     `;
     }).join('');
 
+    box.querySelectorAll('.containerHeader').forEach(h => {
+      h.onclick = () => {
+        const painel = box.querySelector(`.containerItens[data-id="${h.dataset.id}"]`);
+        painel.style.display = painel.style.display==='none' ? 'flex' : 'none';
+        painel.style.flexDirection = 'column';
+      };
+    });
     box.querySelectorAll('.btnNovaIntencao').forEach(btn => {
-      btn.onclick = () => abrirModalIntencao(btn.dataset.container, btn.dataset.item, main);
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        abrirModalIntencao(btn.dataset.container, btn.dataset.item, main);
+      };
     });
     box.querySelectorAll('.btnExcluirIntencao').forEach(btn => {
-      btn.onclick = async () => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
         if(!(await confirmarAcao('Excluir essa intenção de venda?'))) return;
         await excluirIntencaoVenda(btn.dataset.container, btn.dataset.item, btn.dataset.intencao);
         drawContainers();
       };
     });
+    box.querySelectorAll('.btnDarEntrada').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        const cont = STATE.previsoes.find(c=>c.id===btn.dataset.id);
+        if(!(await confirmarAcao(`Dar entrada no container ${cont.nome}? Ele sai da previsão e os itens dele passam a contar como "vendas do container" nos dashboards, a partir de agora.`))) return;
+        cont.status = 'chegou';
+        cont.chegouEm = todayStr();
+        await safeSet('crm:previsoes', STATE.previsoes);
+        drawContainers();
+      };
+    });
     box.querySelectorAll('.btnRemoverContainer').forEach(btn => {
-      btn.onclick = async () => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
         if(!(await confirmarAcao('Remover esse container inteiro da previsão de compras?'))) return;
         STATE.previsoes = STATE.previsoes.filter(c => c.id !== btn.dataset.id);
         await safeSet('crm:previsoes', STATE.previsoes);
@@ -3075,6 +3170,7 @@ function renderVendorDashboard(main){
         <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${s.pctMetaVendas}%; background:${s.pctMetaVendas>=100?'var(--ok)':'var(--accent)'}"></div></div>
       </div>
       ${promocaoCardHTML(STATE.session.codigo, s.mesChave)}
+      ${containersChegadosCardsHTML(s.mesChave, STATE.session.codigo)}
       ${s.mesEhAtual ? `
       <div class="stat-card accent">
         <div class="num display">${s.hojeFeitos}/${s.hojeTotal}</div>
@@ -4747,6 +4843,7 @@ function renderManagerOverview(main){
       <div class="stat-card"><div class="num display">${totalSkusVolume.totalSkus}</div><div class="label">SKUs diferentes vendidos (variedade, toda a equipe)</div></div>
       <div class="stat-card"><div class="num display">${totalSkusVolume.totalUnidades}</div><div class="label">Volume vendido (unidades, toda a equipe)</div></div>
       ${promocaoCardGeralHTML(STATE.mesSelecionado||currentMonthKey())}
+      ${containersChegadosCardsHTML(STATE.mesSelecionado||currentMonthKey())}
     </div>
 
     <div class="panel">

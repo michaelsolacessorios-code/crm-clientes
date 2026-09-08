@@ -1937,7 +1937,9 @@ function vendorMonthStats(vendedorCodigo, mesChave){
   agendamentos.sort((a,b) => a.data < b.data ? -1 : 1);
   const wd = mesEhAtual ? todayWeekday() : 0;
   const hojeList = wd ? clientes.filter(c=>c.diaSemana===wd && !isAgendadoFuturo(contatos, c.codigo)) : [];
-  const hojeFeitos = hojeList.filter(c => contatos[c.codigo]?.ultimoContato === todayStr()).length;
+  // Conta qualquer cliente contatado hoje, esteja ele na agenda de hoje ou tenha sido
+  // adiantado fora do dia programado — reflete o trabalho real feito, não só a agenda fechada.
+  const hojeFeitos = mesEhAtual ? clientes.filter(c => contatos[c.codigo]?.ultimoContato === todayStr()).length : 0;
   const vendor = STATE.vendors.find(v=>v.codigo===vendedorCodigo);
   const metaVendas = vendor ? (vendor.metaMes || 0) : 0;
   // clientes com limite de crédito disponível que ainda não compraram este mês (oportunidade de upsell)
@@ -4440,7 +4442,7 @@ function vendorStats(codigo){
   const atrasados = clientes.filter(c => statusFor(contatos[c.codigo]?.ultimoContato) === 'danger').length;
   const wd = todayWeekday();
   const hojeList = wd ? clientes.filter(c=>c.diaSemana===wd) : [];
-  const hojeFeitos = hojeList.filter(c => contatos[c.codigo]?.ultimoContato === todayStr()).length;
+  const hojeFeitos = clientes.filter(c => contatos[c.codigo]?.ultimoContato === todayStr()).length;
   return {total: clientes.length, emDia, atencao, atrasados, hojeTotal: hojeList.length, hojeFeitos};
 }
 

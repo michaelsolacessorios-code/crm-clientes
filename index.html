@@ -575,6 +575,14 @@ async function loadAll(){
     config.nomeFinanceiro = 'Financeiro';
     await safeSet('crm:config', config);
   }
+  // Migração única: cria as credenciais padrão do usuário de compras (Roberto) — só cuida
+  // da Previsão de Compras: sobe planilha, vê intenções e dá entrada nos containers.
+  if(!config.usuarioCompras){
+    config.usuarioCompras = 'roberto';
+    config.senhaCompras = 'compras123';
+    config.nomeCompras = 'Roberto';
+    await safeSet('crm:config', config);
+  }
   // Migração única: remove o placeholder "Vendedor 7" (sem uso, sem clientes) da base de vendedores.
   const vendedor7 = vendors.find(v => v.codigo === -1 && v.nome === 'Vendedor 7');
   if(vendedor7 && roster.filter(c=>c.vendedorCodigo===-1).length === 0){
@@ -1225,7 +1233,7 @@ async function excluirIntencaoVenda(containerId, itemId, intencaoId){
 // Tela de Previsão de Compras — reaproveitada tanto pelo gerente/diretor (que sobe a
 // planilha) quanto pelo vendedor (que só registra intenção de venda).
 async function renderPrevisaoCompras(main){
-  const podeSubir = STATE.session.tipo === 'gerente';
+  const podeSubir = STATE.session.tipo === 'gerente' || STATE.session.tipo === 'compras';
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Previsão de Compras</div><h2>Containers a caminho</h2></div>
     ${podeSubir ? `
@@ -1234,6 +1242,7 @@ async function renderPrevisaoCompras(main){
         <p class="hint">Planilha com 3 colunas, nessa ordem: <b>Código</b>, <b>Descrição</b>, <b>Quantidade</b> que vai chegar.</p>
         <div class="form-row">
           <input type="text" id="nomeContainer" placeholder="Ex: TF2605" style="max-width:160px;">
+          <input type="date" id="previsaoChegadaContainer" title="Previsão de chegada">
           <input type="file" id="f_previsao" accept=".xlsx,.xls">
           <button class="primary-btn" id="btnProcessarPrevisao">Adicionar container</button>
         </div>
@@ -1253,7 +1262,10 @@ async function renderPrevisaoCompras(main){
       <div class="panel">
         <div class="containerHeader" data-id="${cont.id}" style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;">
           <h3 style="margin-bottom:0;">📦 ${cont.nome} <span class="hint" style="margin-left:8px;">▾ clique pra ver os itens</span></h3>
-          <span class="hint" style="margin:0;">Cadastrado em ${fmtDatePt(cont.criadoEm)}</span>
+          <div style="text-align:right;">
+            ${cont.previsaoChegada ? `<div style="font-size:13px; font-weight:600; color:var(--accent);">Previsão de chegada: ${fmtDatePt(cont.previsaoChegada)}</div>` : ''}
+            <span class="hint" style="margin:0;">Cadastrado em ${fmtDatePt(cont.criadoEm)}</span>
+          </div>
         </div>
         <div style="margin:10px 0 4px;">
           <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px;">
@@ -1345,6 +1357,7 @@ async function renderPrevisaoCompras(main){
     document.getElementById('btnProcessarPrevisao').onclick = async () => {
       const msg = document.getElementById('msgPrevisao');
       const nome = document.getElementById('nomeContainer').value.trim();
+      const previsaoChegada = document.getElementById('previsaoChegadaContainer').value || null;
       const file = document.getElementById('f_previsao').files[0];
       if(!nome){ msg.innerHTML = `<div class="msg err">Dá um nome pro container (ex: TF2605).</div>`; return; }
       if(!file){ msg.innerHTML = `<div class="msg err">Escolha o arquivo.</div>`; return; }
@@ -1352,7 +1365,7 @@ async function renderPrevisaoCompras(main){
       try{
         const itens = await lerPlanilhaPrevisao(file);
         STATE.previsoes = STATE.previsoes || [];
-        STATE.previsoes.push({id: 'cont'+Date.now(), nome, criadoEm: todayStr(), itens});
+        STATE.previsoes.push({id: 'cont'+Date.now(), nome, criadoEm: todayStr(), previsaoChegada, itens});
         await safeSet('crm:previsoes', STATE.previsoes);
         msg.innerHTML = `<div class="msg ok">Container ${nome} adicionado com ${itens.length} item(ns).</div>`;
         document.getElementById('nomeContainer').value = '';
@@ -2366,6 +2379,7 @@ const app = document.getElementById('app');
 function render(){
   if(!STATE.session){ renderLogin(); return; }
   if(STATE.session.tipo === 'financeiro'){ renderFinanceiroShell(); return; }
+  if(STATE.session.tipo === 'compras'){ renderComprasShell(); return; }
   if(baseDesatualizadaBloqueando()){
     if(STATE.session.tipo === 'gerente'){ renderBloqueioBaseGerente(app); }
     else { renderBloqueioBaseVendedor(app); }
@@ -2472,6 +2486,9 @@ function renderLogin(){
       } else if(data.tipo === 'financeiro'){
         STATE.session = {tipo:'financeiro', nome: data.nome, foto: data.foto||null};
         STATE.route = {page:'financeira'};
+      } else if(data.tipo === 'compras'){
+        STATE.session = {tipo:'compras', nome: data.nome, foto: data.foto||null};
+        STATE.route = {page:'previsao'};
       } else {
         STATE.session = {tipo:'vendedor', codigo: data.codigo, nome: data.nome};
         STATE.route = {page:'dashboard'};
@@ -2496,6 +2513,7 @@ function sidebarHTML(items){
     : STATE.session.foto ? STATE.session.foto
     : STATE.session.tipo==='gerente' ? (STATE.config.fotoGerente || null)
     : STATE.session.tipo==='financeiro' ? (STATE.config.fotoFinanceiro || null)
+    : STATE.session.tipo==='compras' ? (STATE.config.fotoCompras || null)
     : null;
   return `
     <div class="sidebar">
@@ -2930,6 +2948,16 @@ async function renderFinanceiroShell(){
   bindSidebar(renderFinanceiroShell);
   const main = document.getElementById('main');
   await renderFinanceiroBody(main, renderFinanceiroShell);
+}
+
+// Tela do usuário de Compras (Roberto) — só cuida da Previsão de Compras: sobe planilha de
+// container, vê as intenções de venda registradas pelos vendedores, e dá entrada quando chega.
+async function renderComprasShell(){
+  const items = [{page:'previsao', label:'Previsão de Compras'}];
+  app.innerHTML = `<div class="shell">${sidebarHTML(items)}<div class="main" id="main"></div></div>`;
+  bindSidebar(renderComprasShell);
+  const main = document.getElementById('main');
+  await renderPrevisaoCompras(main);
 }
 
 // Corpo da tela financeira "geral" (todos os vendedores) — reaproveitado tanto pelo usuário
@@ -5073,7 +5101,53 @@ function renderManagerCredenciais(main){
       </div>
       <div id="msgFinanceiroConta"></div>
     </div>
+
+    <div class="panel">
+      <h3>Usuário de Compras (previsão)</h3>
+      <p class="hint">Esse usuário só tem acesso à Previsão de Compras — sobe a planilha do container, vê as intenções de venda registradas pelos vendedores e dá entrada quando chega. Nada mais do sistema fica visível pra ele.</p>
+      <div class="form-row" style="align-items:center;">
+        ${STATE.config.fotoCompras ? `<img src="${STATE.config.fotoCompras}" alt="${STATE.config.nomeCompras||'Compras'}" style="width:46px; height:46px; border-radius:50%; object-fit:cover; flex-shrink:0;">` : `<div class="whoami-avatar whoami-avatar-fallback" style="width:46px; height:46px; flex-shrink:0; background:var(--border); color:var(--ink-faint);">${(STATE.config.nomeCompras||'?')[0].toUpperCase()}</div>`}
+        <input type="file" id="f_foto_compras" accept="image/*" style="max-width:220px;">
+      </div>
+      <div class="form-row">
+        <input type="text" id="novoNomeCompras" placeholder="Nome" value="${STATE.config.nomeCompras || ''}">
+        <input type="text" id="novoUsuarioCompras" placeholder="Usuário" value="${STATE.config.usuarioCompras || 'roberto'}">
+        <input type="text" id="novaSenhaCompras" placeholder="Deixe em branco pra manter a atual">
+        <button class="primary-btn" id="btnSalvarCompras">Salvar</button>
+      </div>
+      <div id="msgComprasConta"></div>
+    </div>
   `;
+  document.getElementById('btnSalvarCompras').onclick = async () => {
+    const nome = document.getElementById('novoNomeCompras').value.trim();
+    const usuario = document.getElementById('novoUsuarioCompras').value.trim().toLowerCase();
+    const senha = document.getElementById('novaSenhaCompras').value.trim();
+    const msg = document.getElementById('msgComprasConta');
+    if(!usuario){ msg.innerHTML = `<div class="msg err">Preencha o usuário.</div>`; return; }
+    const emUsoPorOutro =
+      (STATE.config.usuarioGerente||GERENTE_USUARIO_PADRAO)===usuario ||
+      (STATE.config.usuarioFinanceiro||'financeiro')===usuario ||
+      (STATE.diretores||[]).some(d=>d.usuario===usuario) ||
+      STATE.vendors.some(v=>v.usuario===usuario);
+    if(emUsoPorOutro){ msg.innerHTML = `<div class="msg err">Esse nome de usuário já está em uso por outra conta.</div>`; return; }
+    STATE.config.nomeCompras = nome || 'Compras';
+    STATE.config.usuarioCompras = usuario;
+    if(senha) STATE.config.senhaCompras = await hashSenha(senha);
+    await safeSet('crm:config', STATE.config);
+    document.getElementById('novaSenhaCompras').value = '';
+    msg.innerHTML = `<div class="msg ok">Credenciais do usuário de compras atualizadas.</div>`;
+  };
+  document.getElementById('f_foto_compras').onchange = async () => {
+    const file = document.getElementById('f_foto_compras').files[0];
+    if(!file) return;
+    try{
+      STATE.config.fotoCompras = await resizeImagemParaBase64(file);
+      await safeSet('crm:config', STATE.config);
+      renderManagerAdmin(main);
+    }catch(err){
+      document.getElementById('msgComprasConta').innerHTML = `<div class="msg err">Não consegui processar essa imagem.</div>`;
+    }
+  };
   document.getElementById('btnSalvarFinanceiro').onclick = async () => {
     const nome = document.getElementById('novoNomeFinanceiro').value.trim();
     const usuario = document.getElementById('novoUsuarioFinanceiro').value.trim().toLowerCase();

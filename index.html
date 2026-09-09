@@ -2930,6 +2930,7 @@ function sidebarHTML(items){
     <div class="topbar-user">
       ${foto ? `<img class="whoami-avatar" src="${foto}" alt="${STATE.session.nome}">` : `<div class="whoami-avatar whoami-avatar-fallback">${(STATE.session.nome||'?')[0].toUpperCase()}</div>`}
       <div class="whoami">Conectado como<b>${STATE.session.nome}${vendorObj?' · Nº '+vendorNumero(vendorObj):''}</b></div>
+      <button class="logout-btn" id="btn-refresh" title="Buscar dados novos, sem precisar sair e entrar">🔄 Atualizar</button>
       <button class="logout-btn" id="btn-logout">Sair</button>
     </div>
   `;
@@ -2939,6 +2940,16 @@ function bindSidebar(onNav){
     el.onclick = () => { STATE.route = {page: el.dataset.page}; onNav(); };
   });
   document.getElementById('btn-logout').onclick = () => { STATE.session = null; render(); };
+  const btnRefresh = document.getElementById('btn-refresh');
+  if(btnRefresh){
+    btnRefresh.onclick = async () => {
+      const textoOriginal = btnRefresh.textContent;
+      btnRefresh.disabled = true; btnRefresh.textContent = 'Atualizando...';
+      STATE.contatosCache = {};
+      await loadAll();
+      render();
+    };
+  }
 }
 
 // ---------------- VENDOR VIEW ----------------

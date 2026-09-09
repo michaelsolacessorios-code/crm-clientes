@@ -636,6 +636,8 @@ async function loadAll(){
   STATE.previsoes = (await safeGet('crm:previsoes')) || [];
   STATE.correcoesVendedor = (await safeGet('crm:correcoes_vendedor')) || {};
   STATE.metasHistorico = (await safeGet('crm:metas_historico')) || {};
+  STATE.metasTopProdutos = (await safeGet('crm:metas_top_produtos')) || {};
+  STATE.metasTopClientes = (await safeGet('crm:metas_top_clientes')) || {};
   STATE.financeiro = (await safeGet('crm:financeiro')) || {};
 }
 
@@ -1247,6 +1249,7 @@ function nomeMesPt(mesChave){
 // novos pra ir alimentando esse histórico.
 async function renderElaboracaoMetas(main){
   const meses = Object.keys(STATE.metasHistorico||{}).sort();
+  const anos = Array.from(new Set(meses.map(m=>m.split('-')[0]))).sort();
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Metas</div><h2>Elaboração de Metas</h2></div>
 
@@ -1262,13 +1265,31 @@ async function renderElaboracaoMetas(main){
     </div>
 
     ${meses.length === 0 ? `<div class="empty-state">Nenhum mês registrado ainda.</div>` : `
+      <div id="sugestaoMetas"></div>
+
       <div class="panel">
-        <label class="field-label">Escolha o mês</label>
+        <label class="field-label">Escolha o mês (resultado fechado + meta retroativa)</label>
         <select id="seletorMesMetas" class="filter-select" style="max-width:260px;">
           ${meses.slice().reverse().map(m => `<option value="${m}">${nomeMesPt(m)}</option>`).join('')}
         </select>
       </div>
       <div id="tabelaMetas"></div>
+
+      <div class="admin-section-title">📊 Análise por vendedor</div>
+      <div class="panel">
+        <div class="form-row">
+          <div><label class="field-label">Ano</label>
+            <select id="filtroAnoAnalise" class="filter-select">${anos.map(a=>`<option value="${a}">${a}</option>`).join('')}</select>
+          </div>
+          <div><label class="field-label">Vendedor</label>
+            <select id="filtroVendedorAnalise" class="filter-select">${STATE.vendors.map(v=>`<option value="${v.codigo}">${v.nome}</option>`).join('')}</select>
+          </div>
+        </div>
+      </div>
+      <div id="analiseVendedor"></div>
+
+      <div class="admin-section-title">🎯 Meta do mês vigente (por vendedor)</div>
+      <div id="metasVendasEmbed"></div>
     `}
   `;
 
@@ -1303,6 +1324,45 @@ async function renderElaboracaoMetas(main){
 
   if(meses.length === 0) return;
 
+  // ---------- Sugestão de meta pro próximo mês ----------
+  function drawSugestao(){
+    const ultimosMeses = meses.slice(-3); // até os 3 últimos meses fechados
+    const box = document.getElementById('sugestaoMetas');
+    const linhas = STATE.vendors.map(v => {
+      const valores = ultimosMeses.map(m => (STATE.metasHistorico[m].vendedores[String(v.codigo)]||{valorVendido:0}).valorVendido).filter(x=>x>0);
+      const media = valores.length ? valores.reduce((a,b)=>a+b,0)/valores.length : 0;
+      const sugestao = Math.max(0, Math.round(media/100)*100);
+      return {v, sugestao};
+    });
+    box.innerHTML = `
+      <div class="panel" style="border-left-color:var(--ok);">
+        <h3>💡 Sugestão de meta pro próximo mês</h3>
+        <p class="hint">Calculada pela média do valor vendido nos últimos ${ultimosMeses.length} mês(es) fechado(s) (${ultimosMeses.map(nomeMesPt).join(', ')}). É só um ponto de partida — a decisão final é sempre sua.</p>
+        <table class="cred-table">
+          <thead><tr><th>Vendedor</th><th>Sugestão</th><th></th></tr></thead>
+          <tbody>
+            ${linhas.map(({v,sugestao}) => `
+              <tr><td>${v.nome}</td><td><b>${fmtMoney(sugestao)}</b></td>
+              <td><button class="ghost-btn btnAplicarSugestao" data-codigo="${v.codigo}" data-valor="${sugestao}">Aplicar como meta do vendedor</button></td></tr>
+            `).join('')}
+          </tbody>
+        </table>
+        <div id="msgSugestao"></div>
+      </div>
+    `;
+    box.querySelectorAll('.btnAplicarSugestao').forEach(btn => {
+      btn.onclick = async () => {
+        const v = STATE.vendors.find(v=>v.codigo===Number(btn.dataset.codigo));
+        v.metaMes = Number(btn.dataset.valor);
+        await safeSet('crm:vendors', STATE.vendors);
+        document.getElementById('msgSugestao').innerHTML = `<div class="msg ok">Meta de ${v.nome} atualizada para ${fmtMoney(v.metaMes)}.</div>`;
+        drawMetasVendas();
+      };
+    });
+  }
+  drawSugestao();
+
+  // ---------- Tabela do mês selecionado (resultado + meta retroativa) ----------
   function drawTabela(){
     const mes = document.getElementById('seletorMesMetas').value;
     const dadosMes = STATE.metasHistorico[mes] || {vendedores:{}, metaInformada:{}};
@@ -1334,10 +1394,22 @@ async function renderElaboracaoMetas(main){
         </table>
         <button class="primary-btn" id="btnSalvarMetasInformadas" style="margin-top:14px;">Salvar metas desse mês</button>
         <div id="msgMetasInformadas"></div>
-        ${outrosCodigos.length>0 ? `
-          <p class="hint" style="margin-top:18px;">Outros códigos que aparecem nos pedidos desse mês, sem vendedor cadastrado no CRM (contas de balcão/e-commerce/outros): ${outrosCodigos.join(', ')}.</p>
-        ` : ''}
       </div>
+      ${outrosCodigos.length>0 ? `
+        <div class="panel" style="opacity:0.85;">
+          <h3 style="font-size:15px;">Outros códigos (sem vendedor cadastrado no CRM)</h3>
+          <p class="hint">Contas de balcão, e-commerce ou outros funcionários que aparecem nos pedidos, fora da sua equipe.</p>
+          <table class="cred-table">
+            <thead><tr><th>Código</th><th>Valor vendido</th><th>Positivação</th><th>Volume</th><th>SKUs</th></tr></thead>
+            <tbody>
+              ${outrosCodigos.map(cod => {
+                const d = dadosMes.vendedores[cod];
+                return `<tr><td>${cod}</td><td>${fmtMoney(d.valorVendido)}</td><td>${d.positivacao}</td><td>${d.volume}</td><td>${d.qtdSkus}</td></tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      ` : ''}
     `;
     document.getElementById('btnSalvarMetasInformadas').onclick = async () => {
       box.querySelectorAll('.metaInformadaInput').forEach(inp => {
@@ -1353,6 +1425,60 @@ async function renderElaboracaoMetas(main){
   }
   document.getElementById('seletorMesMetas').onchange = drawTabela;
   drawTabela();
+
+  // ---------- Análise por vendedor (ano + vendedor) ----------
+  function drawAnalise(){
+    const ano = document.getElementById('filtroAnoAnalise').value;
+    const vendCod = document.getElementById('filtroVendedorAnalise').value;
+    const mesesDoAno = meses.filter(m => m.startsWith(ano+'-'));
+    const linhasMensais = mesesDoAno.map(m => {
+      const d = (STATE.metasHistorico[m].vendedores[vendCod]) || {valorVendido:0, qtdSkus:0, volume:0, positivacao:0};
+      return `<tr><td>${nomeMesPt(m)}</td><td>${fmtMoney(d.valorVendido)}</td><td>${d.qtdSkus}</td><td>${d.volume}</td><td>${d.positivacao}</td></tr>`;
+    }).join('');
+    const totalAno = mesesDoAno.reduce((s,m)=> s + ((STATE.metasHistorico[m].vendedores[vendCod]||{}).valorVendido||0), 0);
+    const topProdutos = (STATE.metasTopProdutos[ano]||{})[vendCod] || [];
+    const topClientes = (STATE.metasTopClientes[ano]||{})[vendCod] || [];
+    const box = document.getElementById('analiseVendedor');
+    box.innerHTML = `
+      <div class="panel">
+        <h3>Valor faturado e SKUs por mês — ${ano}</h3>
+        <table class="cred-table">
+          <thead><tr><th>Mês</th><th>Valor</th><th>SKUs</th><th>Volume</th><th>Positivação</th></tr></thead>
+          <tbody>${linhasMensais || '<tr><td colspan="5" class="hint">Sem dados nesse ano.</td></tr>'}</tbody>
+        </table>
+        <p style="margin-top:10px; font-size:14px;"><b>Total do ano: ${fmtMoney(totalAno)}</b></p>
+      </div>
+      <div class="progress-row">
+        <div class="panel" style="flex:1;">
+          <h3>Itens com maior valor agregado — ${ano}</h3>
+          ${topProdutos.length===0 ? `<p class="hint">Sem detalhe anual ainda pra esse vendedor (vai preenchendo conforme novos meses forem subidos).</p>` : `
+            <table class="cred-table">
+              <thead><tr><th>Código</th><th>Descrição</th><th>Valor</th><th>Qtd.</th></tr></thead>
+              <tbody>${topProdutos.map(p=>`<tr><td>${p.codigo}</td><td style="font-size:12px;">${p.descricao}</td><td>${fmtMoney(p.valor)}</td><td>${p.quantidade}</td></tr>`).join('')}</tbody>
+            </table>
+          `}
+        </div>
+        <div class="panel" style="flex:1;">
+          <h3>Maiores clientes — ${ano}</h3>
+          ${topClientes.length===0 ? `<p class="hint">Sem detalhe anual ainda pra esse vendedor.</p>` : `
+            <table class="cred-table">
+              <thead><tr><th>Cliente Nº</th><th>Valor</th><th>Pedidos</th></tr></thead>
+              <tbody>${topClientes.map(c=>`<tr><td>${c.codigo}</td><td>${fmtMoney(c.valor)}</td><td>${c.qtdPedidos}</td></tr>`).join('')}</tbody>
+            </table>
+          `}
+        </div>
+      </div>
+    `;
+  }
+  document.getElementById('filtroAnoAnalise').onchange = drawAnalise;
+  document.getElementById('filtroVendedorAnalise').onchange = drawAnalise;
+  drawAnalise();
+
+  // ---------- Meta do mês vigente (a antiga tela "Metas de vendas", movida pra cá) ----------
+  function drawMetasVendas(){
+    renderManagerMetas(document.getElementById('metasVendasEmbed'));
+  }
+  drawMetasVendas();
 }
 
 async function renderPrevisaoCompras(main){
@@ -1849,7 +1975,9 @@ function lerPlanilhaItensMetas(file){
         const itens = linhas.filter(r=>r[2]).map(r => ({
           numero: r[2],
           produto: r[4],
+          descricao: r[5],
           quantidade: Number(r[7]) || 0,
+          valor: Number(r[10]) || 0,
         }));
         resolve(itens);
       }catch(err){
@@ -1872,11 +2000,11 @@ function mesChaveDe(data){
 function processarImportacaoMetas(pedidosRaw, itensRaw){
   const pedidosFaturados = pedidosRaw.filter(p => p.situacao === 8 && p.ultimoFaturamento);
   const pedidosMap = new Map(); // numero -> {vendedor, cliente, mes, valor}
-  const porMesVendedor = new Map(); // "mes|vendedor" -> {valorVendido, clientes:Set, qtdPedidos, volume, skus:Set}
+  const porMesVendedor = new Map(); // "mes|vendedor" -> {valorVendido, clientes:Set, qtdPedidos, volume, skus:Set, produtos:Map, clientesMap:Map}
 
   function bucket(mes, vendedor){
     const chave = mes+'|'+vendedor;
-    if(!porMesVendedor.has(chave)) porMesVendedor.set(chave, {valorVendido:0, clientes:new Set(), qtdPedidos:0, volume:0, skus:new Set()});
+    if(!porMesVendedor.has(chave)) porMesVendedor.set(chave, {valorVendido:0, clientes:new Set(), qtdPedidos:0, volume:0, skus:new Set(), produtos:new Map(), clientesMap:new Map()});
     return porMesVendedor.get(chave);
   }
 
@@ -1887,6 +2015,11 @@ function processarImportacaoMetas(pedidosRaw, itensRaw){
     b.valorVendido += p.valor;
     b.clientes.add(p.cliente);
     b.qtdPedidos += 1;
+    const cli = String(p.cliente);
+    if(!b.clientesMap.has(cli)) b.clientesMap.set(cli, {valor:0, qtdPedidos:0});
+    const cReg = b.clientesMap.get(cli);
+    cReg.valor += p.valor;
+    cReg.qtdPedidos += 1;
   });
 
   let itensSemPedido = 0;
@@ -1895,7 +2028,14 @@ function processarImportacaoMetas(pedidosRaw, itensRaw){
     if(!ped){ itensSemPedido++; return; }
     const b = bucket(ped.mes, ped.vendedor);
     b.volume += i.quantidade;
-    if(i.produto) b.skus.add(String(i.produto).trim().toUpperCase());
+    if(i.produto){
+      const cod = String(i.produto).trim().toUpperCase();
+      b.skus.add(cod);
+      if(!b.produtos.has(cod)) b.produtos.set(cod, {descricao: (i.descricao||'').toString().slice(0,60), valor:0, quantidade:0});
+      const pReg = b.produtos.get(cod);
+      pReg.valor += i.valor;
+      pReg.quantidade += i.quantidade;
+    }
   });
 
   const mesesAfetados = new Set();
@@ -1904,8 +2044,12 @@ function processarImportacaoMetas(pedidosRaw, itensRaw){
   return {
     aplicar: async () => {
       STATE.metasHistorico = STATE.metasHistorico || {};
+      STATE.metasTopProdutos = STATE.metasTopProdutos || {};
+      STATE.metasTopClientes = STATE.metasTopClientes || {};
       mesesAfetados.forEach(mes => {
         if(!STATE.metasHistorico[mes]) STATE.metasHistorico[mes] = {vendedores:{}, metaInformada:{}};
+        if(!STATE.metasTopProdutos[mes]) STATE.metasTopProdutos[mes] = {};
+        if(!STATE.metasTopClientes[mes]) STATE.metasTopClientes[mes] = {};
       });
       porMesVendedor.forEach((v, chave) => {
         const [mes, vendedor] = chave.split('|');
@@ -1916,8 +2060,16 @@ function processarImportacaoMetas(pedidosRaw, itensRaw){
           volume: v.volume,
           qtdSkus: v.skus.size,
         };
+        STATE.metasTopProdutos[mes][vendedor] = Array.from(v.produtos.entries())
+          .map(([codigo, d]) => ({codigo, descricao:d.descricao, valor:Math.round(d.valor*100)/100, quantidade:d.quantidade}))
+          .sort((a,b) => b.valor - a.valor).slice(0, 15);
+        STATE.metasTopClientes[mes][vendedor] = Array.from(v.clientesMap.entries())
+          .map(([codigo, d]) => ({codigo, valor:Math.round(d.valor*100)/100, qtdPedidos:d.qtdPedidos}))
+          .sort((a,b) => b.valor - a.valor).slice(0, 15);
       });
       await safeSet('crm:metas_historico', STATE.metasHistorico);
+      await safeSet('crm:metas_top_produtos', STATE.metasTopProdutos);
+      await safeSet('crm:metas_top_clientes', STATE.metasTopClientes);
     },
     resumo: {
       mesesAfetados: Array.from(mesesAfetados).sort(),
@@ -4924,7 +5076,6 @@ async function renderManagerShell(){
     {page:'visao-geral', label:'Visão geral'},
     {page:'vendedores', label:'Vendedores'},
     {page:'inativos', label:'Clientes inativos'},
-    {page:'metas', label:'Metas de vendas'},
     {page:'elaboracao-metas', label:'Elaboração de Metas'},
     {page:'financeira', label:'Financeira'},
     {page:'previsao', label:'Previsão de Compras'},
@@ -4940,7 +5091,6 @@ async function renderManagerShell(){
   if(STATE.route.page==='visao-geral') renderManagerOverview(main);
   else if(STATE.route.page==='vendedores') renderManagerVendorDetail(main);
   else if(STATE.route.page==='inativos') await renderManagerInativos(main);
-  else if(STATE.route.page==='metas') renderManagerMetas(main);
   else if(STATE.route.page==='elaboracao-metas') await renderElaboracaoMetas(main);
   else if(STATE.route.page==='financeira') await renderFinanceiroBody(main, () => renderManagerShell());
   else if(STATE.route.page==='previsao') await renderPrevisaoCompras(main);

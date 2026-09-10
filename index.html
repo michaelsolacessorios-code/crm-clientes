@@ -3705,6 +3705,37 @@ function renderVendorDashboard(main){
       ${distribuicaoUfHTML([STATE.session.codigo], s.mesChave)}
     </div>
 
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(360px, 1fr)); gap:16px; align-items:start; margin-bottom:26px;">
+      <div class="panel">
+        <h3>🏆 Seus itens mais vendidos — ${anoSel}</h3>
+        ${(() => {
+          const top = (STATE.metasTopProdutos[String(anoSel)]||{})[String(STATE.session.codigo)] || [];
+          if(top.length===0) return `<p class="hint">Sem detalhe do ano ainda — vai preenchendo conforme os meses forem fechados.</p>`;
+          return `
+            <table class="cred-table" style="table-layout:fixed;">
+              <colgroup><col style="width:110px;"><col><col style="width:90px;"><col style="width:55px;"></colgroup>
+              <thead><tr><th>Código</th><th>Descrição</th><th>Valor</th><th>Qtd.</th></tr></thead>
+              <tbody>${top.map(p=>`<tr><td style="white-space:nowrap; font-size:12px;">${p.codigo}</td><td style="font-size:12px;">${p.descricao}</td><td style="white-space:nowrap;">${fmtMoney(p.valor)}</td><td>${p.quantidade}</td></tr>`).join('')}</tbody>
+            </table>
+          `;
+        })()}
+      </div>
+      <div class="panel">
+        <h3>🏆 Seus maiores clientes — ${anoSel}</h3>
+        ${(() => {
+          const top = (STATE.metasTopClientes[String(anoSel)]||{})[String(STATE.session.codigo)] || [];
+          if(top.length===0) return `<p class="hint">Sem detalhe do ano ainda — vai preenchendo conforme os meses forem fechados.</p>`;
+          return `
+            <table class="cred-table" style="table-layout:fixed;">
+              <colgroup><col style="width:90px;"><col><col style="width:80px;"></colgroup>
+              <thead><tr><th>Cliente Nº</th><th>Valor</th><th>Pedidos</th></tr></thead>
+              <tbody>${top.map(c=>`<tr><td>${c.codigo}</td><td style="white-space:nowrap;">${fmtMoney(c.valor)}</td><td>${c.qtdPedidos}</td></tr>`).join('')}</tbody>
+            </table>
+          `;
+        })()}
+      </div>
+    </div>
+
     ${s.mesEhAtual && s.agendamentosHoje.length>0 ? `
     <div class="panel" style="border-color:var(--accent);">
       <h3>Agendado para hoje</h3>

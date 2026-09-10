@@ -485,6 +485,83 @@ async function safeSet(key, value, shared=true){
 
 const META_PADRAO = 300000;
 
+// ---------------- CONEXÕES (presença + forçar atualização) ----------------
+// Cada aba aberta do CRM manda um "sinal de vida" a cada 30s pro banco (chave
+// crm:presenca), e nesse mesmo sinal confere se o gerente pediu pra ela recarregar.
+// Isso resolve o problema de sessão desatualizada sobrescrevendo correções: o gerente
+// pode "empurrar" qualquer um a recarregar a página na hora.
+const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
+let HEARTBEAT_TIMER = null;
+
+async function enviarHeartbeat(){
+  try{
+    const presenca = (await safeGet('crm:presenca')) || {};
+    const minha = presenca[SESSION_ID] || {};
+    if(minha.forcarAtualizacao){
+      location.reload();
+      return;
+    }
+    presenca[SESSION_ID] = {
+      tipo: STATE.session.tipo,
+      nome: STATE.session.nome,
+      codigo: STATE.session.codigo || null,
+      ultimoPing: Date.now(),
+      forcarAtualizacao: false,
+    };
+    await safeSet('crm:presenca', presenca);
+  }catch(e){ console.error('heartbeat', e); }
+}
+function iniciarPresenca(){
+  if(HEARTBEAT_TIMER) clearInterval(HEARTBEAT_TIMER);
+  enviarHeartbeat();
+  HEARTBEAT_TIMER = setInterval(enviarHeartbeat, 30000);
+}
+async function forcarAtualizacaoSessao(sessionId){
+  const presenca = (await safeGet('crm:presenca')) || {};
+  if(presenca[sessionId]){
+    presenca[sessionId].forcarAtualizacao = true;
+    await safeSet('crm:presenca', presenca);
+  }
+}
+
+async function renderConexoes(main){
+  main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
+  const presenca = (await safeGet('crm:presenca')) || {};
+  const agora = Date.now();
+  const sessoes = Object.entries(presenca)
+    .map(([id, s]) => ({id, ...s, online: (agora - s.ultimoPing) < 90000}))
+    .sort((a,b) => b.ultimoPing - a.ultimoPing);
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Conexões</div><h2>Quem está usando o CRM agora</h2></div>
+    <div class="panel">
+      <p class="hint">Atualiza sozinho a cada 30s. "Forçar atualização" recarrega a página da pessoa na hora, sem ela precisar fazer nada — útil depois de qualquer correção no banco.</p>
+      ${sessoes.length===0 ? `<div class="empty-state">Ninguém conectado no momento.</div>` : `
+        <table class="cred-table">
+          <thead><tr><th>Status</th><th>Nome</th><th>Tipo</th><th>Última atividade</th><th></th></tr></thead>
+          <tbody>
+            ${sessoes.map(s => `
+              <tr>
+                <td>${s.online ? '<span style="color:var(--ok);">● Online</span>' : '<span style="color:var(--ink-faint);">○ Offline</span>'}</td>
+                <td>${s.nome}${s.codigo?' (Nº '+s.codigo+')':''}</td>
+                <td style="text-transform:capitalize;">${s.tipo}</td>
+                <td>${Math.round((agora-s.ultimoPing)/1000)}s atrás</td>
+                <td>${s.online ? `<button class="ghost-btn btnForcarAtualizacao" data-id="${s.id}">🔄 Forçar atualização</button>` : ''}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `}
+    </div>
+  `;
+  main.querySelectorAll('.btnForcarAtualizacao').forEach(btn => {
+    btn.onclick = async () => {
+      btn.disabled = true; btn.textContent = 'Enviando...';
+      await forcarAtualizacaoSessao(btn.dataset.id);
+      btn.textContent = '✓ Enviado';
+    };
+  });
+}
+
 // Pede pro servidor criptografar uma senha nova antes de gravar — o navegador nunca faz
 // esse cálculo sozinho nem guarda a senha em texto puro.
 async function hashSenha(senha){
@@ -3150,6 +3227,7 @@ function renderLogin(){
         STATE.route = {page:'dashboard'};
       }
       STATE.mesSelecionado = currentMonthKey();
+      iniciarPresenca();
       render();
     }catch(err){
       errSlot.innerHTML = `<div class="login-error">Erro ao entrar: ${err.message}</div>`;
@@ -3190,7 +3268,7 @@ function bindSidebar(onNav){
   document.querySelectorAll('.nav-item').forEach(el=>{
     el.onclick = () => { STATE.route = {page: el.dataset.page}; onNav(); };
   });
-  document.getElementById('btn-logout').onclick = () => { STATE.session = null; render(); };
+  document.getElementById('btn-logout').onclick = () => { if(HEARTBEAT_TIMER) clearInterval(HEARTBEAT_TIMER); STATE.session = null; render(); };
   const btnRefresh = document.getElementById('btn-refresh');
   if(btnRefresh){
     btnRefresh.onclick = async () => {
@@ -5390,6 +5468,7 @@ async function renderManagerShell(){
     {page:'elaboracao-metas', label:'Elaboração de Metas'},
     {page:'financeira', label:'Financeira'},
     {page:'previsao', label:'Previsão de Compras'},
+    {page:'conexoes', label:'Conexões'},
     {page:'importacoes', label:'Importações'},
     {page:'credenciais', label:'Credenciais de acesso'},
     {page:'admin', label:'Administração'},
@@ -5405,6 +5484,7 @@ async function renderManagerShell(){
   else if(STATE.route.page==='elaboracao-metas') await renderElaboracaoMetas(main);
   else if(STATE.route.page==='financeira') await renderFinanceiroBody(main, () => renderManagerShell());
   else if(STATE.route.page==='previsao') await renderPrevisaoCompras(main);
+  else if(STATE.route.page==='conexoes') await renderConexoes(main);
   else if(STATE.route.page==='importacoes') renderManagerImportacoes(main);
   else if(STATE.route.page==='credenciais') renderManagerCredenciais(main);
   else await renderManagerAdmin(main);

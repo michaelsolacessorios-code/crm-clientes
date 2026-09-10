@@ -1448,22 +1448,24 @@ async function renderElaboracaoMetas(main){
         </table>
         <p style="margin-top:10px; font-size:14px;"><b>Total do ano: ${fmtMoney(totalAno)}</b></p>
       </div>
-      <div class="progress-row">
-        <div class="panel" style="flex:1;">
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(360px, 1fr)); gap:16px; align-items:start;">
+        <div class="panel">
           <h3>Itens com maior valor agregado — ${ano}</h3>
           ${topProdutos.length===0 ? `<p class="hint">Sem detalhe anual ainda pra esse vendedor (vai preenchendo conforme novos meses forem subidos).</p>` : `
-            <table class="cred-table">
+            <table class="cred-table" style="table-layout:fixed;">
+              <colgroup><col style="width:110px;"><col><col style="width:90px;"><col style="width:55px;"></colgroup>
               <thead><tr><th>Código</th><th>Descrição</th><th>Valor</th><th>Qtd.</th></tr></thead>
-              <tbody>${topProdutos.map(p=>`<tr><td>${p.codigo}</td><td style="font-size:12px;">${p.descricao}</td><td>${fmtMoney(p.valor)}</td><td>${p.quantidade}</td></tr>`).join('')}</tbody>
+              <tbody>${topProdutos.map(p=>`<tr><td style="white-space:nowrap; font-size:12px;">${p.codigo}</td><td style="font-size:12px;">${p.descricao}</td><td style="white-space:nowrap;">${fmtMoney(p.valor)}</td><td>${p.quantidade}</td></tr>`).join('')}</tbody>
             </table>
           `}
         </div>
-        <div class="panel" style="flex:1;">
+        <div class="panel">
           <h3>Maiores clientes — ${ano}</h3>
           ${topClientes.length===0 ? `<p class="hint">Sem detalhe anual ainda pra esse vendedor.</p>` : `
-            <table class="cred-table">
+            <table class="cred-table" style="table-layout:fixed;">
+              <colgroup><col style="width:90px;"><col><col style="width:80px;"></colgroup>
               <thead><tr><th>Cliente Nº</th><th>Valor</th><th>Pedidos</th></tr></thead>
-              <tbody>${topClientes.map(c=>`<tr><td>${c.codigo}</td><td>${fmtMoney(c.valor)}</td><td>${c.qtdPedidos}</td></tr>`).join('')}</tbody>
+              <tbody>${topClientes.map(c=>`<tr><td>${c.codigo}</td><td style="white-space:nowrap;">${fmtMoney(c.valor)}</td><td>${c.qtdPedidos}</td></tr>`).join('')}</tbody>
             </table>
           `}
         </div>
@@ -3495,6 +3497,9 @@ async function renderFinanceiroBody(main, rerender){
       const linhas = await lerPlanilhaDevedores(file);
       const resultado = await processarImportacaoFinanceiro(linhas);
       const r = resultado.resumo;
+      const inadimplentesAtuais = STATE.roster.filter(c=>c.inadimplente).length;
+      const limiteSeguroFin = Math.max(15, Math.round(inadimplentesAtuais * 0.3));
+      const riscoAltoFin = r.desmarcados > limiteSeguroFin;
       msg.innerHTML = `
         <div class="msg ok">
           Planilha lida: ${r.totalTitulos} título(s), agrupados em ${r.totalClientes} cliente(s).<br>
@@ -3502,8 +3507,21 @@ async function renderFinanceiroBody(main, rerender){
           ${r.desmarcados} cliente(s) voltam a "em dia" (não apareceram nessa lista).<br>
           ${r.semVendedorQtd} cliente(s) sem vendedor cadastrado — entram só no total (${fmtMoney(r.semVendedorTotal)}).
         </div>
-        <button class="primary-btn" id="btnConfirmarFinanceiro" style="margin-top:10px;">Confirmar e salvar</button>
+        ${riscoAltoFin ? `
+          <div class="msg err">
+            ⚠️ <b>Atenção: essa planilha vai "limpar" a inadimplência de ${r.desmarcados} clientes de uma vez</b> — bem mais que o normal (limite: ${limiteSeguroFin}). Pode ser sinal de planilha incompleta ou errada.
+            <label style="display:flex; align-items:center; gap:8px; margin-top:8px; cursor:pointer;">
+              <input type="checkbox" id="confirmaRiscoAltoFin2"> Conferi e tenho certeza que essa planilha está certa e completa.
+            </label>
+          </div>
+        ` : ''}
+        <button class="primary-btn" id="btnConfirmarFinanceiro" style="margin-top:10px;" ${riscoAltoFin ? 'disabled' : ''}>Confirmar e salvar</button>
       `;
+      if(riscoAltoFin){
+        document.getElementById('confirmaRiscoAltoFin2').onchange = (e) => {
+          document.getElementById('btnConfirmarFinanceiro').disabled = !e.target.checked;
+        };
+      }
       document.getElementById('btnConfirmarFinanceiro').onclick = async () => {
         document.getElementById('btnConfirmarFinanceiro').textContent = 'Salvando...';
         try{
@@ -6322,6 +6340,11 @@ function renderManagerImportacoes(main){
       const resultado = await processarImportacaoBase(linhas, modoSincronizacao);
       PENDING_IMPORT_LOCAL = resultado;
       const r = resultado.resumo;
+      // Trava de segurança: se a sincronização for tirar um número grande demais de clientes
+      // da carteira de uma vez (sinal de planilha errada, parcial ou desatualizada), exige uma
+      // confirmação extra em vez de deixar aplicar direto.
+      const limiteSeguro = Math.max(15, Math.round(STATE.roster.length * 0.05));
+      const riscoAlto = modoSincronizacao && r.removidosDaCarteira > limiteSeguro;
       msg.innerHTML = `
         <div class="msg ok">
           Planilha lida: ${r.total} linha(s). Modo: <b>${modoSincronizacao ? 'Sincronizar exatamente' : 'Só adicionar (seguro)'}</b><br>
@@ -6332,8 +6355,21 @@ function renderManagerImportacoes(main){
           ${modoSincronizacao ? `${r.reatribuidos} cliente(s) tiveram o <b>vendedor corrigido</b> (estava errado).<br>${r.reativadosDaFilaDeInativos} cliente(s) <b>voltaram da fila de inativos</b> pra carteira do vendedor indicado na planilha.<br>${r.removidosDaCarteira} cliente(s) <b>saem da carteira</b> (não apareceram mais na planilha pra esse vendedor) e voltam pra "Clientes inativos".<br>` : ''}
           ${r.ignorados} linha(s) ignorada(s) (sem CNPJ, sem compra, ou dado incompleto).
         </div>
-        <button class="primary-btn" id="btnConfirmarImportBase" style="margin-top:10px;">Confirmar e salvar</button>
+        ${riscoAlto ? `
+          <div class="msg err">
+            ⚠️ <b>Atenção: essa planilha vai tirar ${r.removidosDaCarteira} clientes da carteira de uma vez</b> — isso é bem mais do que o normal (limite de segurança: ${limiteSeguro}). Pode ser sinal de planilha errada, incompleta ou desatualizada.
+            <label style="display:flex; align-items:center; gap:8px; margin-top:8px; cursor:pointer;">
+              <input type="checkbox" id="confirmaRiscoAlto"> Conferi e tenho certeza que essa planilha está certa e completa.
+            </label>
+          </div>
+        ` : ''}
+        <button class="primary-btn" id="btnConfirmarImportBase" style="margin-top:10px;" ${riscoAlto ? 'disabled' : ''}>Confirmar e salvar</button>
       `;
+      if(riscoAlto){
+        document.getElementById('confirmaRiscoAlto').onchange = (e) => {
+          document.getElementById('btnConfirmarImportBase').disabled = !e.target.checked;
+        };
+      }
       document.getElementById('btnConfirmarImportBase').onclick = async () => {
         if(!PENDING_IMPORT_LOCAL) return;
         document.getElementById('btnConfirmarImportBase').textContent = 'Salvando...';
@@ -6394,6 +6430,9 @@ function renderManagerImportacoes(main){
       const resultado = await processarImportacaoFinanceiro(linhas);
       PENDING_FINANCEIRO_LOCAL = resultado;
       const r = resultado.resumo;
+      const inadimplentesAtuais = STATE.roster.filter(c=>c.inadimplente).length;
+      const limiteSeguroFin = Math.max(15, Math.round(inadimplentesAtuais * 0.3));
+      const riscoAltoFin = r.desmarcados > limiteSeguroFin;
       msg.innerHTML = `
         <div class="msg ok">
           Planilha lida: ${r.totalTitulos} título(s), agrupados em ${r.totalClientes} cliente(s).<br>
@@ -6402,8 +6441,21 @@ function renderManagerImportacoes(main){
           ${r.desmarcados} cliente(s) que estavam marcados vão voltar a "em dia" (não apareceram nessa lista).<br>
           ${r.semVendedorQtd} cliente(s) com vendedor não cadastrado no sistema — entram só no total geral (${fmtMoney(r.semVendedorTotal)}), sem carteira.
         </div>
-        <button class="primary-btn" id="btnConfirmarFinanceiro" style="margin-top:10px;">Confirmar e salvar</button>
+        ${riscoAltoFin ? `
+          <div class="msg err">
+            ⚠️ <b>Atenção: essa planilha vai "limpar" a inadimplência de ${r.desmarcados} clientes de uma vez</b> — bem mais que o normal (limite: ${limiteSeguroFin}). Pode ser sinal de planilha incompleta ou errada.
+            <label style="display:flex; align-items:center; gap:8px; margin-top:8px; cursor:pointer;">
+              <input type="checkbox" id="confirmaRiscoAltoFin"> Conferi e tenho certeza que essa planilha está certa e completa.
+            </label>
+          </div>
+        ` : ''}
+        <button class="primary-btn" id="btnConfirmarFinanceiro" style="margin-top:10px;" ${riscoAltoFin ? 'disabled' : ''}>Confirmar e salvar</button>
       `;
+      if(riscoAltoFin){
+        document.getElementById('confirmaRiscoAltoFin').onchange = (e) => {
+          document.getElementById('btnConfirmarFinanceiro').disabled = !e.target.checked;
+        };
+      }
       document.getElementById('btnConfirmarFinanceiro').onclick = async () => {
         if(!PENDING_FINANCEIRO_LOCAL) return;
         document.getElementById('btnConfirmarFinanceiro').textContent = 'Salvando...';

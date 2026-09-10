@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-10-01';
+const APP_VERSION = '2026-09-10-02';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -1669,25 +1669,60 @@ async function renderElaboracaoMetas(main){
   if(meses.length === 0) return;
 
   // ---------- Sugestão de meta pro próximo mês ----------
+  // Calcula a sugestão de meta de um vendedor considerando 3 fatores:
+  // 1) base histórica (média do valor vendido nos últimos meses fechados)
+  // 2) limite de crédito não utilizado da carteira (sobra de limite empurra a sugestão pra cima, até +20%)
+  // 3) cobertura de estoque dos produtos que ele mais vende (estoque baixo empurra pra baixo, até -50%)
+  function calcularSugestaoMeta(vendedorCodigo, ultimosMeses){
+    const valores = ultimosMeses.map(m => (STATE.metasHistorico[m].vendedores[String(vendedorCodigo)]||{valorVendido:0}).valorVendido).filter(x=>x>0);
+    const mediaBase = valores.length ? valores.reduce((a,b)=>a+b,0)/valores.length : 0;
+
+    const clientesVendedor = STATE.roster.filter(c=>c.vendedorCodigo===vendedorCodigo);
+    const limiteTotal = clientesVendedor.reduce((s,c)=>s+(c.limiteCredito||0),0);
+    const limiteNaoUtilizado = Math.max(0, limiteTotal - mediaBase);
+    const fatorLimite = limiteTotal>0 ? 1 + Math.min(0.20, (limiteNaoUtilizado/limiteTotal)*0.15) : 1;
+
+    const ano = String(new Date(STATE.mesSelecionado||currentMonthKey()).getFullYear());
+    const topProdutos = ((STATE.metasTopProdutos[ano]||{})[String(vendedorCodigo)]||[]).slice(0,10);
+    const medias = mediaMensalVendaPorSku();
+    const estoqueMap = new Map((STATE.estoque||[]).map(i=>[i.codigo, i]));
+    const mesesAlvoEstoque = 2;
+    const coberturas = [];
+    topProdutos.forEach(p => {
+      const item = estoqueMap.get(p.codigo);
+      const mediaItem = medias.get(p.codigo) || 0;
+      if(item && mediaItem>0) coberturas.push((item.disponivel+item.previsao)/mediaItem);
+    });
+    let fatorEstoque = 1, coberturaMedia = null;
+    if(coberturas.length>0){
+      coberturaMedia = coberturas.reduce((a,b)=>a+b,0)/coberturas.length;
+      fatorEstoque = Math.max(0.5, Math.min(1, coberturaMedia/mesesAlvoEstoque));
+    }
+
+    const sugestaoFinal = Math.max(0, Math.round((mediaBase * fatorLimite * fatorEstoque)/100)*100);
+    return {mediaBase, limiteTotal, fatorLimite, fatorEstoque, coberturaMedia, temDadosEstoque: coberturas.length>0, sugestaoFinal};
+  }
+
   function drawSugestao(){
     const ultimosMeses = meses.slice(-3); // até os 3 últimos meses fechados
     const box = document.getElementById('sugestaoMetas');
-    const linhas = STATE.vendors.map(v => {
-      const valores = ultimosMeses.map(m => (STATE.metasHistorico[m].vendedores[String(v.codigo)]||{valorVendido:0}).valorVendido).filter(x=>x>0);
-      const media = valores.length ? valores.reduce((a,b)=>a+b,0)/valores.length : 0;
-      const sugestao = Math.max(0, Math.round(media/100)*100);
-      return {v, sugestao};
-    });
+    const linhas = STATE.vendors.map(v => ({v, calc: calcularSugestaoMeta(v.codigo, ultimosMeses)}));
     box.innerHTML = `
       <div class="panel" style="border-left-color:var(--ok);">
         <h3>💡 Sugestão de meta pro próximo mês</h3>
-        <p class="hint">Calculada pela média do valor vendido nos últimos ${ultimosMeses.length} mês(es) fechado(s) (${ultimosMeses.map(nomeMesPt).join(', ')}). É só um ponto de partida — a decisão final é sempre sua.</p>
+        <p class="hint">Parte da média de venda dos últimos ${ultimosMeses.length} mês(es) fechado(s) (${ultimosMeses.map(nomeMesPt).join(', ')}), aumenta se sobrar limite de crédito não usado na carteira, e reduz se o estoque dos produtos mais vendidos estiver baixo. É só um ponto de partida — a decisão final é sempre sua.</p>
         <table class="cred-table">
-          <thead><tr><th>Vendedor</th><th>Sugestão</th><th></th></tr></thead>
+          <thead><tr><th>Vendedor</th><th>Média histórica</th><th>Limite não usado</th><th>Estoque dos + vendidos</th><th>Sugestão final</th><th></th></tr></thead>
           <tbody>
-            ${linhas.map(({v,sugestao}) => `
-              <tr><td>${v.nome}</td><td><b>${fmtMoney(sugestao)}</b></td>
-              <td><button class="ghost-btn btnAplicarSugestao" data-codigo="${v.codigo}" data-valor="${sugestao}">Aplicar como meta do vendedor</button></td></tr>
+            ${linhas.map(({v,calc}) => `
+              <tr>
+                <td>${v.nome}</td>
+                <td>${fmtMoney(calc.mediaBase)}</td>
+                <td>${calc.fatorLimite>1 ? `+${Math.round((calc.fatorLimite-1)*100)}%` : '—'}</td>
+                <td>${calc.temDadosEstoque ? (calc.fatorEstoque<1 ? `-${Math.round((1-calc.fatorEstoque)*100)}% (${calc.coberturaMedia.toFixed(1)}m cobertura)` : 'ok') : 'sem dado ainda'}</td>
+                <td><b>${fmtMoney(calc.sugestaoFinal)}</b></td>
+                <td><button class="ghost-btn btnAplicarSugestao" data-codigo="${v.codigo}" data-valor="${calc.sugestaoFinal}">Aplicar</button></td>
+              </tr>
             `).join('')}
           </tbody>
         </table>

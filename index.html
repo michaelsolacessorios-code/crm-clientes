@@ -635,6 +635,7 @@ async function loadAll(){
   STATE.promocao = (await safeGet('crm:promocao')) || [];
   STATE.previsoes = (await safeGet('crm:previsoes')) || [];
   STATE.correcoesVendedor = (await safeGet('crm:correcoes_vendedor')) || {};
+  STATE.estoque = (await safeGet('crm:estoque')) || [];
   STATE.metasHistorico = (await safeGet('crm:metas_historico')) || {};
   STATE.metasTopProdutos = (await safeGet('crm:metas_top_produtos')) || {};
   STATE.metasTopClientes = (await safeGet('crm:metas_top_clientes')) || {};
@@ -1237,6 +1238,254 @@ async function excluirIntencaoVenda(containerId, itemId, intencaoId){
 
 // Tela de Previsão de Compras — reaproveitada tanto pelo gerente/diretor (que sobe a
 // planilha) quanto pelo vendedor (que só registra intenção de venda).
+// ---------------- COMPRAS (giro de estoque + sugestão de compra) ----------------
+
+// Deduz a categoria do item a partir da descrição — pra não depender de nenhuma coluna
+// extra na planilha. Ordem importa: frases mais específicas primeiro.
+const REGRAS_CATEGORIA = [
+  [/TETO SOLAR/, 'Teto Solar'],
+  [/BARRAMENTO|BARRA.*LED/, 'Barramentos de LED'],
+  [/FITA.*LED|MANGUEIRA.*LED|MODULOS? DE LED|LUMINARIA|\bLED\b/, 'Iluminação LED'],
+  [/FILAMENTO/, 'Filamentos (Impressão 3D)'],
+  [/CAPACITOR/, 'Capacitores'],
+  [/COMPRESSOR/, 'Compressores (Suspensão a Ar)'],
+  [/VALVULA/, 'Válvulas (Suspensão a Ar)'],
+  [/MAGNETRON/, 'Magnetrons'],
+  [/MEMBRANA/, 'Membranas'],
+  [/CIRCUITO/, 'Placas e Circuitos'],
+  [/FUSIVEL/, 'Fusíveis'],
+  [/TRANSISTOR/, 'Transistores'],
+  [/DIODO/, 'Diodos'],
+  [/RESISTOR/, 'Resistores'],
+  [/CHAVE|SWITCH/, 'Chaves e Switches'],
+  [/CABO|CHICOTE/, 'Cabos e Chicotes'],
+  [/CONECTOR|PLUG/, 'Conectores'],
+  [/VOLANTE/, 'Volantes'],
+  [/\bFITA\b/, 'Fitas'],
+  [/FONTE/, 'Fontes'],
+  [/COFRE/, 'Cofres Eletrônicos'],
+  [/POTENCIOMETRO/, 'Potenciômetros'],
+  [/ESTATOR/, 'Estatores'],
+  [/PAINEL/, 'Painéis'],
+  [/PEDAL/, 'Pedais'],
+  [/MICROVENTILADOR|VENTILADOR/, 'Ventiladores'],
+  [/BOBINA/, 'Bobinas'],
+  [/DISPLAY/, 'Displays'],
+  [/\bRELE\b/, 'Relés'],
+  [/\bCDI\b/, 'CDI'],
+  [/\bBICO\b/, 'Bicos'],
+  [/AMORTECEDOR/, 'Amortecedores'],
+  [/SUPORTE/, 'Suportes'],
+  [/\bMOTOR\b/, 'Motores'],
+  [/TORNEIRA/, 'Torneiras'],
+  [/CARBURADOR/, 'Carburadores'],
+  [/REGULADOR/, 'Reguladores'],
+  [/L[ÂA]MPADA/, 'Lâmpadas'],
+  [/ALICATE|FERRAMENTA/, 'Ferramentas'],
+  [/REFIL/, 'Refis'],
+  [/\bDISCO\b/, 'Discos'],
+  [/MOSQUETAO/, 'Mosquetões'],
+  [/MULTIMETRO/, 'Multímetros'],
+  [/MANGUEIRA/, 'Mangueiras'],
+  [/CILINDRO/, 'Cilindros'],
+  [/TERMOSTATO/, 'Termostatos'],
+  [/PISCA/, 'Piscas'],
+  [/DISJUNTOR/, 'Disjuntores'],
+  [/\bBOMBA\b/, 'Bombas'],
+  [/M[ÓO]DULO/, 'Módulos'],
+  [/ROLAMENTO/, 'Rolamentos'],
+  [/CORREIA/, 'Correias'],
+  [/CORRENTE/, 'Correntes'],
+  [/EMBREAGEM/, 'Embreagens'],
+  [/PASTILHA/, 'Pastilhas Peltier'],
+  [/RODINHA/, 'Rodinhas'],
+];
+function categorizarItem(descricao){
+  const d = (descricao||'').toUpperCase();
+  for(const [regra, categoria] of REGRAS_CATEGORIA){
+    if(regra.test(d)) return categoria;
+  }
+  return 'Outros';
+}
+
+// Lê a planilha de saldo de estoque: Código, Descrição, Saldo, Reserva, Disponível, Previsão.
+function lerPlanilhaEstoque(file){
+  return new Promise((resolve, reject) => {
+    if(typeof XLSX === 'undefined'){ reject(new Error('Biblioteca de planilha não carregou. Tente recarregar a página.')); return; }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Falha ao ler o arquivo.'));
+    reader.onload = () => {
+      try{
+        const data = new Uint8Array(reader.result);
+        const wb = XLSX.read(data, {type:'array', cellDates:true});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const linhas = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
+        linhas.shift();
+        const itens = linhas.filter(r=>r[0]).map(r => ({
+          codigo: String(r[0]).trim().toUpperCase(),
+          descricao: r[1] || '',
+          saldo: Number(r[2]) || 0,
+          reserva: Number(r[3]) || 0,
+          disponivel: Number(r[4]) || 0,
+          previsao: Number(r[5]) || 0,
+        }));
+        resolve(itens);
+      }catch(err){
+        reject(new Error('Não consegui ler essa planilha. Confira as colunas: Código, Descrição, Saldo, Reserva, Disponível, Previsão.'));
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// Calcula, pra cada SKU, quanto foi vendido no total e em quantos meses diferentes teve venda,
+// varrendo o histórico real de TODOS os vendedores — não só o top 15 usado na Elaboração de Metas.
+function mediaMensalVendaPorSku(){
+  const totais = new Map(); // codigo -> {total, meses:Set}
+  STATE.vendors.forEach(v => {
+    const contatos = STATE.contatosCache[v.codigo] || {};
+    Object.values(contatos).forEach(reg => {
+      (reg.historico||[]).forEach(h => {
+        if(!h.vendeu || !h.data) return;
+        const mes = h.data.slice(0,7);
+        ((h.skus && h.skus.itens) || []).forEach(i => {
+          const cod = (i.codigo||'').trim().toUpperCase();
+          if(!cod) return;
+          if(!totais.has(cod)) totais.set(cod, {total:0, meses:new Set()});
+          const reg2 = totais.get(cod);
+          reg2.total += (i.quantidade||0);
+          reg2.meses.add(mes);
+        });
+      });
+    });
+  });
+  const medias = new Map();
+  totais.forEach((v, cod) => medias.set(cod, v.meses.size>0 ? v.total/v.meses.size : 0));
+  return medias;
+}
+
+async function renderComprasEstoque(main){
+  main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
+  await Promise.all(STATE.vendors.map(v => getContatos(v.codigo)));
+  const medias = mediaMensalVendaPorSku();
+  const categorias = Array.from(new Set(STATE.estoque.map(i => categorizarItem(i.descricao)))).sort();
+
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Compras</div><h2>Saldo de estoque e sugestão de compra</h2></div>
+
+    <div class="panel import-panel" style="border-left-color:var(--primary);">
+      <div class="import-panel-title"><span class="import-badge" style="background:var(--primary);">+</span><h3>Subir saldo de estoque</h3></div>
+      <p class="hint">Planilha com 6 colunas, nessa ordem: <b>Código</b>, <b>Descrição</b>, <b>Saldo</b>, <b>Reserva</b>, <b>Disponível</b>, <b>Previsão</b>. Substitui o estoque atual pelo dessa planilha.</p>
+      <div class="form-row">
+        <input type="file" id="f_estoque" accept=".xlsx,.xls">
+        <button class="primary-btn" id="btnProcessarEstoque">Processar</button>
+      </div>
+      <div id="msgEstoque"></div>
+    </div>
+
+    ${STATE.estoque.length === 0 ? `<div class="empty-state">Nenhum saldo de estoque carregado ainda.</div>` : `
+      <div class="panel">
+        <div class="form-row">
+          <div><label class="field-label">Cobertura desejada (meses)</label><input type="number" id="mesesCobertura" value="6" min="1" style="width:90px;"></div>
+          <div><label class="field-label">Categoria</label>
+            <select id="filtroCategoria" class="filter-select">
+              <option value="">Todas as categorias</option>
+              ${categorias.map(c=>`<option value="${c}">${c}</option>`).join('')}
+            </select>
+          </div>
+          <div><label class="field-label">Buscar</label><input type="text" id="buscaEstoque" placeholder="Código ou descrição"></div>
+          <div style="align-self:flex-end;"><button class="ghost-btn" id="btnExportarEstoque">⬇️ Exportar Excel</button></div>
+        </div>
+      </div>
+      <div id="tabelaEstoque"></div>
+    `}
+  `;
+
+  document.getElementById('btnProcessarEstoque').onclick = async () => {
+    const msg = document.getElementById('msgEstoque');
+    const file = document.getElementById('f_estoque').files[0];
+    if(!file){ msg.innerHTML = `<div class="msg err">Escolha o arquivo primeiro.</div>`; return; }
+    msg.innerHTML = `<div class="hint">Lendo planilha...</div>`;
+    try{
+      const itens = await lerPlanilhaEstoque(file);
+      STATE.estoque = itens;
+      await safeSet('crm:estoque', STATE.estoque);
+      msg.innerHTML = `<div class="msg ok">${itens.length} item(ns) carregado(s).</div>`;
+      await renderComprasEstoque(main);
+    }catch(err){
+      msg.innerHTML = `<div class="msg err">${err.message}</div>`;
+    }
+  };
+
+  if(STATE.estoque.length === 0) return;
+
+  function linhaCalculada(item, mesesCobertura){
+    const media = medias.get(item.codigo) || 0;
+    const totalGarantido = item.disponivel + item.previsao;
+    const coberturaMeses = media > 0 ? totalGarantido / media : null;
+    const necessario = media * mesesCobertura;
+    const sugestao = Math.max(0, Math.round(necessario - totalGarantido));
+    return {...item, categoria: categorizarItem(item.descricao), media, totalGarantido, coberturaMeses, sugestao};
+  }
+
+  function drawTabela(){
+    const mesesCobertura = Number(document.getElementById('mesesCobertura').value) || 6;
+    const categoriaFiltro = document.getElementById('filtroCategoria').value;
+    const busca = document.getElementById('buscaEstoque').value.trim().toUpperCase();
+    let linhas = STATE.estoque.map(item => linhaCalculada(item, mesesCobertura));
+    linhas = linhas.filter(l => l.saldo>0 || l.reserva>0 || l.disponivel>0 || l.previsao>0 || l.media>0);
+    if(categoriaFiltro) linhas = linhas.filter(l => l.categoria === categoriaFiltro);
+    if(busca) linhas = linhas.filter(l => l.codigo.includes(busca) || (l.descricao||'').toUpperCase().includes(busca));
+    linhas.sort((a,b) => b.sugestao - a.sugestao);
+    LINHAS_ESTOQUE_ATUAIS = linhas;
+
+    const box = document.getElementById('tabelaEstoque');
+    box.innerHTML = `
+      <div class="panel">
+        <p class="hint">${linhas.length} item(ns) com estoque ou movimento nos últimos 8 meses — ordenado por sugestão de compra (maior primeiro).</p>
+        <table class="cred-table" style="table-layout:fixed;">
+          <colgroup><col style="width:100px;"><col><col style="width:110px;"><col style="width:60px;"><col style="width:60px;"><col style="width:70px;"><col style="width:70px;"><col style="width:75px;"><col style="width:70px;"><col style="width:90px;"></colgroup>
+          <thead><tr><th>Código</th><th>Descrição</th><th>Categoria</th><th>Saldo</th><th>Reserva</th><th>Disp.</th><th>Previsto</th><th>Média/mês</th><th>Cobertura</th><th>Sugestão</th></tr></thead>
+          <tbody>
+            ${linhas.map(l => `
+              <tr>
+                <td style="font-size:12px; white-space:nowrap;">${l.codigo}</td>
+                <td style="font-size:12px;">${l.descricao}</td>
+                <td style="font-size:11.5px;">${l.categoria}</td>
+                <td>${l.saldo}</td>
+                <td>${l.reserva}</td>
+                <td>${l.disponivel}</td>
+                <td>${l.previsao}</td>
+                <td>${l.media.toFixed(1)}</td>
+                <td>${l.coberturaMeses===null ? '—' : l.coberturaMeses.toFixed(1)+'m'}</td>
+                <td><b style="color:${l.sugestao>0?'var(--danger)':'var(--ok)'};">${l.sugestao>0?l.sugestao:'—'}</b></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+  let LINHAS_ESTOQUE_ATUAIS = [];
+  document.getElementById('mesesCobertura').oninput = drawTabela;
+  document.getElementById('filtroCategoria').onchange = drawTabela;
+  document.getElementById('buscaEstoque').oninput = drawTabela;
+  document.getElementById('btnExportarEstoque').onclick = () => {
+    const linhas = LINHAS_ESTOQUE_ATUAIS.map(l => ({
+      'Código': l.codigo, 'Descrição': l.descricao, 'Categoria': l.categoria,
+      'Saldo': l.saldo, 'Reserva': l.reserva, 'Disponível': l.disponivel, 'Previsão': l.previsao,
+      'Média mensal vendida': Math.round(l.media*10)/10,
+      'Cobertura (meses)': l.coberturaMeses===null ? '' : Math.round(l.coberturaMeses*10)/10,
+      'Sugestão de compra': l.sugestao,
+    }));
+    const ws = XLSX.utils.json_to_sheet(linhas);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Compras');
+    XLSX.writeFile(wb, `sugestao_compras_${todayStr()}.xlsx`);
+  };
+  drawTabela();
+}
+
 function nomeMesPt(mesChave){
   const [ano, mes] = mesChave.split('-');
   const nomes = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
@@ -3374,6 +3623,7 @@ async function renderFinanceiroShell(){
 async function renderComprasShell(){
   const items = [
     {page:'previsao', label:'Previsão de Compras'},
+    {page:'compras-estoque', label:'Compras'},
     {page:'visao-geral', label:'Visão geral'},
     {page:'elaboracao-metas', label:'Elaboração de Metas'},
   ];
@@ -3384,6 +3634,7 @@ async function renderComprasShell(){
   await Promise.all(STATE.vendors.map(v => getContatos(v.codigo)));
   if(STATE.route.page==='visao-geral') renderManagerOverview(main);
   else if(STATE.route.page==='elaboracao-metas') await renderElaboracaoMetas(main);
+  else if(STATE.route.page==='compras-estoque') await renderComprasEstoque(main);
   else await renderPrevisaoCompras(main);
 }
 

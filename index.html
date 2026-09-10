@@ -5308,7 +5308,7 @@ function renderManagerOverview(main){
     const inad = vendorInadimplenciaStats(v.codigo);
     totalAtrasados += s.atrasados; totalHojeFeitos += s.hojeFeitos; totalHoje += s.hojeTotal;
     totalVendas += m.numVendas; totalValorVendas += m.valorVendas; totalPositivados += m.positivados;
-    totalContatadosMes += m.contatadosMes; totalMetaVendas += (v.metaMes||0); totalDevedores += m.devedores;
+    totalContatadosMes += m.contatadosMes; totalMetaVendas += (v.metaMes||0); totalDevedores += inad.qtd;
     totalValorDevido += inad.total;
   });
   const naoCadastrados = STATE.config.inadimplenciaNaoCadastrados || {qtd:0, total:0};

@@ -3341,6 +3341,135 @@ async function pedidosDoVendedor(vendedorCodigo){
   return pedidos;
 }
 
+// Junta os pedidos de TODOS os vendedores num só lugar, pro gerente ver/filtrar.
+async function pedidosDeTodosVendedores(){
+  const listas = await Promise.all(STATE.vendors.map(async v => {
+    const pedidos = await pedidosDoVendedor(v.codigo);
+    return pedidos.map(p => ({...p, vendedorCodigo: v.codigo, vendedorNome: v.nome}));
+  }));
+  return listas.flat();
+}
+
+// Lê uma planilha simples com uma coluna de números de pedido (aceita cabeçalho ou não).
+function lerPlanilhaNumerosPedido(file){
+  return new Promise((resolve, reject) => {
+    if(typeof XLSX === 'undefined'){ reject(new Error('Biblioteca de planilha não carregou. Tente recarregar a página.')); return; }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Falha ao ler o arquivo.'));
+    reader.onload = () => {
+      try{
+        const data = new Uint8Array(reader.result);
+        const wb = XLSX.read(data, {type:'array'});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const linhas = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
+        const numeros = linhas
+          .map(r => r[0])
+          .filter(v => v !== null && v !== '' && v !== undefined)
+          .map(v => String(v).trim())
+          .filter(v => v.toUpperCase() !== 'NUMERO' && v.toUpperCase() !== 'NÚMERO' && v.toUpperCase() !== 'PEDIDO');
+        resolve(Array.from(new Set(numeros)));
+      }catch(err){
+        reject(new Error('Não consegui ler essa planilha. Coloque um número de pedido por linha, numa única coluna.'));
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+async function renderManagerPedidos(main){
+  main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
+  const todosPedidos = await pedidosDeTodosVendedores();
+  const numerosNoCrm = new Set(todosPedidos.filter(p=>p.numeroPedido).map(p=>String(p.numeroPedido).trim()));
+
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Pedidos</div><h2>Todos os pedidos da equipe</h2></div>
+
+    <div class="panel import-panel" style="border-left-color:var(--primary);">
+      <div class="import-panel-title"><span class="import-badge" style="background:var(--primary);">🔍</span><h3>Conferir pedidos que não subiram</h3></div>
+      <p class="hint">Suba uma planilha com uma coluna só: os números dos pedidos que deveriam estar no sistema. Eu aponto quais deles não foram encontrados aqui.</p>
+      <div class="form-row">
+        <input type="file" id="f_conferir_pedidos" accept=".xlsx,.xls">
+        <button class="primary-btn" id="btnConferirPedidos">Conferir</button>
+      </div>
+      <div id="resultadoConferencia"></div>
+    </div>
+
+    <div class="toolbar">
+      <input type="text" class="search-input" id="buscaPedidoGerente" placeholder="Buscar por número do pedido ou cliente...">
+      <select class="filter-select" id="filtroVendedorPedidos">
+        <option value="">Todos os vendedores</option>
+        ${STATE.vendors.map(v=>`<option value="${v.codigo}">${v.nome}</option>`).join('')}
+      </select>
+      <select class="filter-select" id="ordenarPedidosGerente">
+        <option value="data_desc">Mais recentes primeiro</option>
+        <option value="data_asc">Mais antigos primeiro</option>
+        <option value="valor_desc">Maior valor primeiro</option>
+        <option value="valor_asc">Menor valor primeiro</option>
+      </select>
+      <button class="ghost-btn" id="btnExportarPedidosGerente">⬇️ Exportar Excel</button>
+    </div>
+    <div id="contagemPedidosGerente" style="font-size:12.5px; color:var(--ink-soft); margin-bottom:12px;"></div>
+    <div class="client-list" id="listaPedidosGerente"></div>
+  `;
+
+  document.getElementById('btnConferirPedidos').onclick = async () => {
+    const box = document.getElementById('resultadoConferencia');
+    const file = document.getElementById('f_conferir_pedidos').files[0];
+    if(!file){ box.innerHTML = `<div class="msg err">Escolha o arquivo primeiro.</div>`; return; }
+    box.innerHTML = `<div class="hint">Lendo planilha...</div>`;
+    try{
+      const numeros = await lerPlanilhaNumerosPedido(file);
+      const faltando = numeros.filter(n => !numerosNoCrm.has(n));
+      box.innerHTML = `
+        <div class="msg ${faltando.length>0?'err':'ok'}" style="margin-top:10px;">
+          ${numeros.length} número(s) conferido(s). ${faltando.length===0 ? 'Todos foram encontrados no sistema. ✅' : `<b>${faltando.length} não foram encontrados:</b>`}
+        </div>
+        ${faltando.length>0 ? `<div class="hint" style="margin-top:8px; word-break:break-all;">${faltando.join(', ')}</div>` : ''}
+      `;
+    }catch(err){
+      box.innerHTML = `<div class="msg err">${err.message}</div>`;
+    }
+  };
+
+  let PEDIDOS_ATUAIS = [];
+  function drawLista(){
+    const busca = document.getElementById('buscaPedidoGerente').value.trim().toLowerCase();
+    const vendedorFiltro = document.getElementById('filtroVendedorPedidos').value;
+    const ordenacao = document.getElementById('ordenarPedidosGerente').value;
+    let lista = todosPedidos.slice();
+    if(vendedorFiltro) lista = lista.filter(p => String(p.vendedorCodigo)===vendedorFiltro);
+    if(busca) lista = lista.filter(p => (p.numeroPedido||'').toLowerCase().includes(busca) || (p.clienteNome||'').toLowerCase().includes(busca));
+    if(ordenacao==='data_desc') lista.sort((a,b)=> b.data<a.data?-1:1);
+    else if(ordenacao==='data_asc') lista.sort((a,b)=> a.data<b.data?-1:1);
+    else if(ordenacao==='valor_desc') lista.sort((a,b)=> b.valor-a.valor);
+    else if(ordenacao==='valor_asc') lista.sort((a,b)=> a.valor-b.valor);
+    PEDIDOS_ATUAIS = lista;
+    document.getElementById('contagemPedidosGerente').textContent = `${lista.length} pedido(s)`;
+    document.getElementById('listaPedidosGerente').innerHTML = lista.map(p => `
+      <div class="client-row" style="padding:10px 14px;">
+        <div class="client-info">
+          <div class="client-name" style="font-size:13.5px;">Pedido ${p.numeroPedidoExibicao} — ${p.clienteNome}</div>
+          <div class="client-meta">${p.vendedorNome} · ${fmtDatePt(p.data)} · ${fmtMoney(p.valor)}${p.uf?' · '+p.uf:''}</div>
+        </div>
+      </div>
+    `).join('') || `<div class="empty-state">Nenhum pedido encontrado.</div>`;
+  }
+  document.getElementById('buscaPedidoGerente').oninput = drawLista;
+  document.getElementById('filtroVendedorPedidos').onchange = drawLista;
+  document.getElementById('ordenarPedidosGerente').onchange = drawLista;
+  document.getElementById('btnExportarPedidosGerente').onclick = () => {
+    const linhas = PEDIDOS_ATUAIS.map(p => ({
+      'Número do Pedido': p.numeroPedidoExibicao, 'Vendedor': p.vendedorNome, 'Cliente': p.clienteNome,
+      'Data': p.data, 'Valor': p.valor, 'UF': p.uf, 'Qtd SKUs': p.qtdSkus, 'Volume': p.qtdUnidades,
+    }));
+    const ws = XLSX.utils.json_to_sheet(linhas);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Pedidos');
+    XLSX.writeFile(wb, `pedidos_equipe_${todayStr()}.xlsx`);
+  };
+  drawLista();
+}
+
 // Move um pedido (já lançado) de um código de cliente pra outro — usado quando o vendedor
 // precisa corrigir a qual cliente um pedido realmente pertence, sem perder o valor/data/itens.
 async function moverPedidoParaCliente(vendedorCodigo, codigoAntigo, entryId, novoCodigo){
@@ -5465,6 +5594,7 @@ async function renderManagerShell(){
     {page:'visao-geral', label:'Visão geral'},
     {page:'vendedores', label:'Vendedores'},
     {page:'inativos', label:'Clientes inativos'},
+    {page:'pedidos-equipe', label:'Pedidos'},
     {page:'elaboracao-metas', label:'Elaboração de Metas'},
     {page:'financeira', label:'Financeira'},
     {page:'previsao', label:'Previsão de Compras'},
@@ -5481,6 +5611,7 @@ async function renderManagerShell(){
   if(STATE.route.page==='visao-geral') renderManagerOverview(main);
   else if(STATE.route.page==='vendedores') renderManagerVendorDetail(main);
   else if(STATE.route.page==='inativos') await renderManagerInativos(main);
+  else if(STATE.route.page==='pedidos-equipe') await renderManagerPedidos(main);
   else if(STATE.route.page==='elaboracao-metas') await renderElaboracaoMetas(main);
   else if(STATE.route.page==='financeira') await renderFinanceiroBody(main, () => renderManagerShell());
   else if(STATE.route.page==='previsao') await renderPrevisaoCompras(main);

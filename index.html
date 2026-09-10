@@ -713,6 +713,7 @@ async function loadAll(){
   STATE.previsoes = (await safeGet('crm:previsoes')) || [];
   STATE.correcoesVendedor = (await safeGet('crm:correcoes_vendedor')) || {};
   STATE.estoque = (await safeGet('crm:estoque')) || [];
+  STATE.vendasPorSku = (await safeGet('crm:vendas_por_sku')) || {};
   STATE.metasHistorico = (await safeGet('crm:metas_historico')) || {};
   STATE.metasTopProdutos = (await safeGet('crm:metas_top_produtos')) || {};
   STATE.metasTopClientes = (await safeGet('crm:metas_top_clientes')) || {};
@@ -1398,7 +1399,7 @@ function lerPlanilhaEstoque(file){
         const ws = wb.Sheets[wb.SheetNames[0]];
         const linhas = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
         linhas.shift();
-        const itens = linhas.filter(r=>r[0]).map(r => ({
+        const brutos = linhas.filter(r=>r[0]).map(r => ({
           codigo: String(r[0]).trim().toUpperCase(),
           descricao: r[1] || '',
           saldo: Number(r[2]) || 0,
@@ -1406,6 +1407,21 @@ function lerPlanilhaEstoque(file){
           disponivel: Number(r[4]) || 0,
           previsao: Number(r[5]) || 0,
         }));
+        // Unifica linhas do mesmo código (acontece quando o mesmo item aparece separado por
+        // "local" — nacional/importado — na planilha), somando os números de cada uma.
+        const porCodigo = new Map();
+        brutos.forEach(item => {
+          if(!porCodigo.has(item.codigo)) porCodigo.set(item.codigo, {...item});
+          else {
+            const acc = porCodigo.get(item.codigo);
+            acc.saldo += item.saldo;
+            acc.reserva += item.reserva;
+            acc.disponivel += item.disponivel;
+            acc.previsao += item.previsao;
+            if(!acc.descricao && item.descricao) acc.descricao = item.descricao;
+          }
+        });
+        const itens = Array.from(porCodigo.values());
         resolve(itens);
       }catch(err){
         reject(new Error('Não consegui ler essa planilha. Confira as colunas: Código, Descrição, Saldo, Reserva, Disponível, Previsão.'));
@@ -1417,27 +1433,17 @@ function lerPlanilhaEstoque(file){
 
 // Calcula, pra cada SKU, quanto foi vendido no total e em quantos meses diferentes teve venda,
 // varrendo o histórico real de TODOS os vendedores — não só o top 15 usado na Elaboração de Metas.
+// Calcula, pra cada SKU, a média mensal vendida — usando a base COMPLETA de vendas da
+// empresa (Elaboração de Metas: todos os pedidos faturados, todos os vendedores, item por
+// item), não só o que os vendedores marcaram manualmente na tela de Contatos.
 function mediaMensalVendaPorSku(){
-  const totais = new Map(); // codigo -> {total, meses:Set}
-  STATE.vendors.forEach(v => {
-    const contatos = STATE.contatosCache[v.codigo] || {};
-    Object.values(contatos).forEach(reg => {
-      (reg.historico||[]).forEach(h => {
-        if(!h.vendeu || !h.data) return;
-        const mes = h.data.slice(0,7);
-        ((h.skus && h.skus.itens) || []).forEach(i => {
-          const cod = (i.codigo||'').trim().toUpperCase();
-          if(!cod) return;
-          if(!totais.has(cod)) totais.set(cod, {total:0, meses:new Set()});
-          const reg2 = totais.get(cod);
-          reg2.total += (i.quantidade||0);
-          reg2.meses.add(mes);
-        });
-      });
-    });
-  });
   const medias = new Map();
-  totais.forEach((v, cod) => medias.set(cod, v.meses.size>0 ? v.total/v.meses.size : 0));
+  Object.entries(STATE.vendasPorSku||{}).forEach(([cod, porMes]) => {
+    // Só os últimos 6 meses que existem dado (mais recentes primeiro).
+    const ultimosMeses = Object.keys(porMes).sort().slice(-6);
+    const total = ultimosMeses.reduce((s,m) => s + (porMes[m]||0), 0);
+    medias.set(cod, ultimosMeses.length>0 ? total/ultimosMeses.length : 0);
+  });
   return medias;
 }
 
@@ -2329,6 +2335,7 @@ function processarImportacaoMetas(pedidosRaw, itensRaw){
   const pedidosFaturados = pedidosRaw.filter(p => p.situacao === 8 && p.ultimoFaturamento);
   const pedidosMap = new Map(); // numero -> {vendedor, cliente, mes, valor}
   const porMesVendedor = new Map(); // "mes|vendedor" -> {valorVendido, clientes:Set, qtdPedidos, volume, skus:Set, produtos:Map, clientesMap:Map}
+  const vendasPorSkuMes = new Map(); // mes -> Map(codigo -> quantidade), somando todos os vendedores
 
   function bucket(mes, vendedor){
     const chave = mes+'|'+vendedor;
@@ -2363,6 +2370,11 @@ function processarImportacaoMetas(pedidosRaw, itensRaw){
       const pReg = b.produtos.get(cod);
       pReg.valor += i.valor;
       pReg.quantidade += i.quantidade;
+      // Total vendido daquele SKU naquele mês, somando TODOS os vendedores — usado pra
+      // calcular a média mensal de venda de cada item na tela de Compras (estoque).
+      if(!vendasPorSkuMes.has(ped.mes)) vendasPorSkuMes.set(ped.mes, new Map());
+      const mesMap = vendasPorSkuMes.get(ped.mes);
+      mesMap.set(cod, (mesMap.get(cod)||0) + i.quantidade);
     }
   });
 
@@ -2398,6 +2410,16 @@ function processarImportacaoMetas(pedidosRaw, itensRaw){
       await safeSet('crm:metas_historico', STATE.metasHistorico);
       await safeSet('crm:metas_top_produtos', STATE.metasTopProdutos);
       await safeSet('crm:metas_top_clientes', STATE.metasTopClientes);
+
+      // Salva o total vendido por SKU/mês (todos os vendedores juntos) — base pra tela de Compras.
+      STATE.vendasPorSku = STATE.vendasPorSku || {};
+      vendasPorSkuMes.forEach((mapaSkus, mes) => {
+        mapaSkus.forEach((quantidade, cod) => {
+          if(!STATE.vendasPorSku[cod]) STATE.vendasPorSku[cod] = {};
+          STATE.vendasPorSku[cod][mes] = quantidade;
+        });
+      });
+      await safeSet('crm:vendas_por_sku', STATE.vendasPorSku);
     },
     resumo: {
       mesesAfetados: Array.from(mesesAfetados).sort(),
@@ -5598,6 +5620,7 @@ async function renderManagerShell(){
     {page:'elaboracao-metas', label:'Elaboração de Metas'},
     {page:'financeira', label:'Financeira'},
     {page:'previsao', label:'Previsão de Compras'},
+    {page:'compras-estoque', label:'Compras'},
     {page:'conexoes', label:'Conexões'},
     {page:'importacoes', label:'Importações'},
     {page:'credenciais', label:'Credenciais de acesso'},
@@ -5615,6 +5638,7 @@ async function renderManagerShell(){
   else if(STATE.route.page==='elaboracao-metas') await renderElaboracaoMetas(main);
   else if(STATE.route.page==='financeira') await renderFinanceiroBody(main, () => renderManagerShell());
   else if(STATE.route.page==='previsao') await renderPrevisaoCompras(main);
+  else if(STATE.route.page==='compras-estoque') await renderComprasEstoque(main);
   else if(STATE.route.page==='conexoes') await renderConexoes(main);
   else if(STATE.route.page==='importacoes') renderManagerImportacoes(main);
   else if(STATE.route.page==='credenciais') renderManagerCredenciais(main);

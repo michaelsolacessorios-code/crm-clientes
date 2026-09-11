@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-10-03';
+const APP_VERSION = '2026-09-10-04';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -988,6 +988,87 @@ function lerPlanilhaClientes(file){
     reader.readAsArrayBuffer(file);
   });
 }
+
+// Sincroniza a carteira de UM vendedor específico com uma planilha completa (mesmo formato
+// de sempre — Código, Nome, CNPJ etc). Só mexe nesse vendedor: quem já está com ele e
+// continua na planilha é atualizado (nunca perde inadimplência/observações); quem está com
+// ele mas sumiu da planilha vai pra "Clientes inativos"; quem está na planilha mas em outro
+// lugar (outro vendedor, inativos, ou nem existia) é trazido pra carteira dele, preservando
+// qualquer dado que já existisse (inadimplência, etc). Nunca mexe em outro vendedor.
+async function processarSincronizacaoVendedorUnico(linhas, vendedorAlvoCodigo){
+  const inativosPool = await getInativos();
+  const rosterByCodigo = new Map(STATE.roster.map(c=>[c.codigo, c]));
+  const inativosByCodigo = new Map(inativosPool.map(c=>[c.codigo, c]));
+
+  const codigosNaPlanilha = new Set();
+  let atualizados = 0, trazidosDeOutroLugar = 0, novos = 0, ignorados = 0;
+
+  linhas.forEach(row => {
+    const [status, codigo, dataCad, nome, ultimaCompraRaw, municipio, uf, cnpj, ie, vendedor, ddd, telefone, contato, limite, saldoDevedor, saldoCredito, primeiraCompra, cpf, maiorCompra] = row;
+    if(!codigo || !nome){ ignorados++; return; }
+    codigosNaPlanilha.add(codigo);
+    const telefoneFmt = (ddd && telefone) ? `(${ddd}) ${telefone}` : (telefone ? String(telefone) : '');
+    const ultimaCompra = formatarDataExcel(ultimaCompraRaw);
+    const limiteNum = (limite !== null && limite !== undefined && limite !== '') ? Number(limite) : null;
+    const saldoNum = (saldoDevedor !== null && saldoDevedor !== undefined && saldoDevedor !== '') ? Number(saldoDevedor) : null;
+
+    function aplicarCampos(c){
+      if(nome) c.nome = nome;
+      if(municipio) c.municipio = municipio;
+      if(uf) c.uf = uf;
+      if(telefoneFmt) c.telefone = telefoneFmt;
+      if(contato) c.contato = contato;
+      if(cnpj) c.cnpj = String(cnpj);
+      if(ultimaCompra) c.ultimaCompra = ultimaCompra;
+      if(limiteNum !== null) c.limiteCredito = limiteNum;
+      if(saldoNum !== null) c.saldoDevedor = saldoNum;
+      c.vendedorCodigo = vendedorAlvoCodigo;
+    }
+
+    if(rosterByCodigo.has(codigo)){
+      const c = rosterByCodigo.get(codigo);
+      const jaEraDele = c.vendedorCodigo === vendedorAlvoCodigo;
+      aplicarCampos(c);
+      if(jaEraDele) atualizados++; else trazidosDeOutroLugar++;
+    } else if(inativosByCodigo.has(codigo)){
+      const c = inativosByCodigo.get(codigo);
+      aplicarCampos(c);
+      c.diaSemana = (clientsForVendor(vendedorAlvoCodigo).length % 5) + 1;
+      inativosByCodigo.delete(codigo);
+      STATE.roster.push(c);
+      trazidosDeOutroLugar++;
+    } else {
+      const novoCliente = {
+        codigo, nome, municipio: municipio||'', uf: uf||'', cnpj: cnpj?String(cnpj):'',
+        telefone: telefoneFmt, contato: contato||'', ultimaCompra,
+        limiteCredito: limiteNum, saldoDevedor: saldoNum||0,
+        vendedorCodigo: vendedorAlvoCodigo, diaSemana: (clientsForVendor(vendedorAlvoCodigo).length % 5) + 1,
+      };
+      STATE.roster.push(novoCliente);
+      novos++;
+    }
+  });
+
+  // Quem estava com esse vendedor mas sumiu da planilha nova vai pra inativos (nunca apagado).
+  const paraRemover = STATE.roster.filter(c => c.vendedorCodigo === vendedorAlvoCodigo && !codigosNaPlanilha.has(c.codigo));
+  const removidosQtd = paraRemover.length;
+
+  return {
+    aplicar: async () => {
+      STATE.roster = STATE.roster.filter(c => !(c.vendedorCodigo === vendedorAlvoCodigo && !codigosNaPlanilha.has(c.codigo)));
+      const novoPoolInativos = [...Array.from(inativosByCodigo.values()), ...paraRemover];
+      await safeSet('crm:roster', STATE.roster);
+      await safeSet('crm:inativos', novoPoolInativos);
+      await aplicarCorrecoesVendedor();
+    },
+    resumo: {
+      atualizados, trazidosDeOutroLugar, novos, removidosQtd, ignorados,
+      total: linhas.length,
+      carteiraAtualQtd: clientsForVendor(vendedorAlvoCodigo).length,
+    },
+  };
+}
+
 
 // Processa as linhas: só ATUALIZA campos de quem já existe (nunca mexe em histórico/observações)
 // e só ADICIONA gente nova na fila de inativos. Nada é apagado.
@@ -6846,15 +6927,14 @@ function renderManagerImportacoes(main){
     </div>
 
     <div class="panel import-panel" style="border-left-color:var(--ok);">
-      <div class="import-panel-title"><span class="import-badge" style="background:var(--ok);">2</span><h3>Base por vendedor</h3></div>
-      <p class="hint">Cole linhas copiadas do Excel, uma por cliente, nesta ordem separada por TAB: <b>Nome — Telefone — Contato — Município — UF</b>. Escolha o vendedor abaixo — os dias da semana são distribuídos automaticamente entre os clientes dele.</p>
+      <div class="import-panel-title"><span class="import-badge" style="background:var(--ok);">2</span><h3>Sincronizar carteira de um vendedor</h3></div>
+      <p class="hint">Suba a exportação completa (mesmas colunas de sempre: Código, Nome, CNPJ, etc) filtrada por UM vendedor só. O sistema atualiza quem já é dele, traz quem está em outro lugar preservando inadimplência e histórico, e move pra "Clientes inativos" quem sumiu da lista — <b>ninguém é apagado, nada duplica, e nenhum outro vendedor é afetado.</b></p>
       <div class="form-row">
-        <select id="f_vendedor_import">${STATE.vendors.map(v=>`<option value="${v.codigo}">${v.nome} (Nº ${vendorNumero(v)})</option>`).join('')}</select>
-        <button type="button" class="ghost-btn" id="btnEsvaziarAntesImport" style="color:var(--warn); border-color:var(--warn);">🗑️ Esvaziar carteira desse vendedor antes</button>
+        <select id="f_vendedor_sync">${STATE.vendors.map(v=>`<option value="${v.codigo}">${v.nome} (Nº ${vendorNumero(v)})</option>`).join('')}</select>
+        <input type="file" id="f_sync_vendedor" accept=".xlsx,.xls">
+        <button class="ghost-btn" id="btnProcessarSyncVendedor">Processar</button>
       </div>
-      <textarea class="import-area" id="importArea" placeholder="Cole aqui as linhas coladas do Excel..."></textarea>
-      <button class="primary-btn" id="btnImport">Importar clientes</button>
-      <div id="msgImport"></div>
+      <div id="msgSyncVendedor"></div>
     </div>
 
     <div class="panel import-panel" style="border-left-color:var(--accent);">
@@ -6901,56 +6981,54 @@ function renderManagerImportacoes(main){
     </div>
   `;
 
-  document.getElementById('btnEsvaziarAntesImport').onclick = async () => {
-    const msg = document.getElementById('msgImport');
-    const vendedorCodigo = Number(document.getElementById('f_vendedor_import').value);
-    const v = STATE.vendors.find(v=>v.codigo===vendedorCodigo);
-    const numClientes = clientsForVendor(vendedorCodigo).length;
-    if(numClientes === 0){
-      msg.innerHTML = `<div class="msg ok">${v.nome} já está sem clientes na carteira.</div>`;
-      return;
+  let PENDING_SYNC_VENDEDOR = null;
+  document.getElementById('btnProcessarSyncVendedor').onclick = async () => {
+    const msg = document.getElementById('msgSyncVendedor');
+    const file = document.getElementById('f_sync_vendedor').files[0];
+    const vendedorAlvoCodigo = Number(document.getElementById('f_vendedor_sync').value);
+    const vendedorAlvo = STATE.vendors.find(v=>v.codigo===vendedorAlvoCodigo);
+    if(!file){ msg.innerHTML = `<div class="msg err">Escolha o arquivo primeiro.</div>`; return; }
+    msg.innerHTML = `<div class="hint">Lendo planilha...</div>`;
+    try{
+      const linhas = await lerPlanilhaClientes(file);
+      const resultado = await processarSincronizacaoVendedorUnico(linhas, vendedorAlvoCodigo);
+      PENDING_SYNC_VENDEDOR = resultado;
+      const r = resultado.resumo;
+      const limiteSeguro = Math.max(10, Math.round(r.carteiraAtualQtd * 0.3));
+      const riscoAlto = r.removidosQtd > limiteSeguro;
+      msg.innerHTML = `
+        <div class="msg ok">
+          Planilha lida: ${r.total} linha(s) pra ${vendedorAlvo.nome}.<br>
+          ${r.atualizados} cliente(s) já dele(a) foram atualizados.<br>
+          ${r.trazidosDeOutroLugar} cliente(s) foram trazidos de outro lugar (outro vendedor ou inativos), preservando inadimplência/histórico.<br>
+          ${r.novos} cliente(s) novo(s) cadastrados.<br>
+          ${r.removidosQtd} cliente(s) que sumiram dessa lista vão pra "Clientes inativos".<br>
+          ${r.ignorados} linha(s) ignorada(s) (sem código ou nome).
+        </div>
+        ${riscoAlto ? `
+          <div class="msg err">
+            ⚠️ <b>Atenção: isso vai tirar ${r.removidosQtd} clientes da carteira de ${vendedorAlvo.nome} de uma vez</b> — bem mais que o normal (limite: ${limiteSeguro}). Confira se é mesmo a planilha certa e completa.
+            <label style="display:flex; align-items:center; gap:8px; margin-top:8px; cursor:pointer;">
+              <input type="checkbox" id="confirmaRiscoSync"> Conferi e tenho certeza que essa planilha está certa e completa.
+            </label>
+          </div>
+        ` : ''}
+        <button class="primary-btn" id="btnConfirmarSyncVendedor" style="margin-top:10px;" ${riscoAlto ? 'disabled' : ''}>Confirmar e salvar</button>
+      `;
+      if(riscoAlto){
+        document.getElementById('confirmaRiscoSync').onchange = (e) => {
+          document.getElementById('btnConfirmarSyncVendedor').disabled = !e.target.checked;
+        };
+      }
+      document.getElementById('btnConfirmarSyncVendedor').onclick = async () => {
+        document.getElementById('btnConfirmarSyncVendedor').textContent = 'Salvando...';
+        await PENDING_SYNC_VENDEDOR.aplicar();
+        msg.innerHTML = `<div class="msg ok">Carteira de ${vendedorAlvo.nome} sincronizada com sucesso.</div>`;
+        document.getElementById('f_sync_vendedor').value = '';
+      };
+    }catch(err){
+      msg.innerHTML = `<div class="msg err">${err.message}</div>`;
     }
-    const confirmou = await confirmarAcao(`Isso vai mover TODOS os ${numClientes} cliente(s) de ${v.nome} pra fila de "Clientes inativos" antes de importar a lista nova. Ninguém é apagado — só desvinculado. Continuar?`);
-    if(!confirmou) return;
-    const resultado = await esvaziarCarteiraDoVendedor(vendedorCodigo);
-    msg.innerHTML = `<div class="msg ok">${resultado.movidos} cliente(s) de ${v.nome} foram movidos pra "Clientes inativos". Agora é só colar a lista nova abaixo e importar.</div>`;
-  };
-
-  document.getElementById('btnImport').onclick = async () => {
-    const raw = document.getElementById('importArea').value;
-    const msg = document.getElementById('msgImport');
-    const vendedorCodigo = Number(document.getElementById('f_vendedor_import').value);
-    const lines = raw.split('\n').map(l=>l.trim()).filter(Boolean);
-    if(lines.length===0){ msg.innerHTML = `<div class="msg err">Cole ao menos uma linha.</div>`; return; }
-    // Trava de segurança: recusa linha cujo "nome" seja só número (ex: "0", "1", "2" — a coluna
-    // Status colada no lugar errado) ou um cabeçalho de planilha colado por engano.
-    const nomesInvalidos = new Set(['status','codigo','código','nome','datacadastro','data cadastro','vendedor','municipio','município','uf','telefone','contato','cnpj','','—','-']);
-    let existentes = clientsForVendor(vendedorCodigo).length;
-    let count = 0, recusados = 0;
-    lines.forEach((line, idx) => {
-      const parts = line.split('\t').map(p=>p.trim());
-      const nome = parts[0] || '';
-      const nomeNormalizado = nome.toLowerCase();
-      const ehSoNumero = /^\d+([.,]\d+)?$/.test(nome);
-      if(!nome || ehSoNumero || nomesInvalidos.has(nomeNormalizado)){ recusados++; return; }
-      STATE.roster.push({
-        id: 'c'+Date.now()+idx,
-        codigo: Date.now()+idx,
-        nome,
-        telefone: parts[1] || '',
-        contato: parts[2] || '',
-        municipio: parts[3] || '',
-        uf: parts[4] || '',
-        vendedorCodigo,
-        diaSemana: ((existentes+count) % 5) + 1,
-      });
-      count++;
-    });
-    await safeSet('crm:roster', STATE.roster);
-    msg.innerHTML = recusados > 0
-      ? `<div class="msg err">${count} cliente(s) importado(s). ⚠️ ${recusados} linha(s) foram recusadas por parecerem cabeçalho ou número solto (ex: "0", "Status") em vez de nome de cliente — confira se colou as colunas certas (Nome — Telefone — Contato — Município — UF).</div>`
-      : `<div class="msg ok">${count} cliente(s) importado(s).</div>`;
-    document.getElementById('importArea').value = '';
   };
 
   let PENDING_IMPORT_LOCAL = null;

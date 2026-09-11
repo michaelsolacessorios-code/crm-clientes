@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-10-02';
+const APP_VERSION = '2026-09-10-03';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -6093,20 +6093,40 @@ function renderManagerCredenciais(main){
       <h3>Usuário e senha de cada vendedor</h3>
       <p class="hint">Compartilhe individualmente com cada vendedor. Você pode alterar a senha de qualquer um a qualquer momento.</p>
       <table class="cred-table">
-        <thead><tr><th>Nº</th><th>Vendedor</th><th>Usuário</th><th>Senha</th><th></th></tr></thead>
+        <thead><tr><th>Nº</th><th>Vendedor</th><th>Usuário</th><th>Senha</th><th>Status</th><th></th></tr></thead>
         <tbody id="credBody">
           ${STATE.vendors.map(v => `
             <tr data-codigo="${v.codigo}">
               <td>${vendorNumero(v)}</td>
-              <td>${v.nome}</td>
+              <td>${v.nome}${v.bloqueado ? ' <span class="status-badge status-danger" style="font-size:10.5px;">BLOQUEADO</span>' : ''}</td>
               <td>${v.usuario}</td>
               <td><input type="text" class="senhaInput" placeholder="Deixe em branco pra manter a atual" data-codigo="${v.codigo}"></td>
-              <td><button class="ghost-btn salvarSenhaBtn" data-codigo="${v.codigo}">Salvar</button></td>
+              <td>${v.bloqueado ? '🔒 Bloqueado' : '✅ Ativo'}</td>
+              <td>
+                <button class="ghost-btn salvarSenhaBtn" data-codigo="${v.codigo}">Salvar</button>
+                <button class="ghost-btn btnToggleBloqueio" data-codigo="${v.codigo}">${v.bloqueado ? 'Desbloquear' : 'Bloquear acesso'}</button>
+              </td>
             </tr>
           `).join('')}
         </tbody>
       </table>
       <div id="msgCred"></div>
+    </div>
+    <div class="panel" style="border-left:4px solid var(--accent);">
+      <h3>🔁 Transferir carteira e indicadores</h3>
+      <p class="hint">Move TODOS os clientes de um vendedor pro outro, junto com o histórico de contatos/vendas desse mês (o novo vendedor herda os indicadores). Útil ao desligar alguém.</p>
+      <div class="form-row">
+        <div>
+          <label class="field-label">De (sai)</label>
+          <select id="transferirDe">${STATE.vendors.map(v=>`<option value="${v.codigo}">${v.nome}</option>`).join('')}</select>
+        </div>
+        <div>
+          <label class="field-label">Para (recebe)</label>
+          <select id="transferirPara">${STATE.vendors.map(v=>`<option value="${v.codigo}">${v.nome}</option>`).join('')}</select>
+        </div>
+        <button class="primary-btn" id="btnTransferirVendedor">Transferir tudo</button>
+      </div>
+      <div id="msgTransferir"></div>
     </div>
     <div class="panel">
       <h3>Diretores (mesmo acesso do gerente)</h3>
@@ -6275,6 +6295,47 @@ function renderManagerCredenciais(main){
       msg.innerHTML = `<div class="msg ok">Senha de ${v.nome} atualizada.</div>`;
     };
   });
+  document.querySelectorAll('.btnToggleBloqueio').forEach(btn => {
+    btn.onclick = async () => {
+      const v = STATE.vendors.find(x=>x.codigo===Number(btn.dataset.codigo));
+      const acao = v.bloqueado ? 'desbloquear o acesso' : 'BLOQUEAR o acesso';
+      if(!(await confirmarAcao(`Tem certeza que quer ${acao} de ${v.nome}?`))) return;
+      v.bloqueado = !v.bloqueado;
+      await safeSet('crm:vendors', STATE.vendors);
+      renderManagerCredenciais(main);
+    };
+  });
+  document.getElementById('btnTransferirVendedor').onclick = async () => {
+    const msg = document.getElementById('msgTransferir');
+    const de = Number(document.getElementById('transferirDe').value);
+    const para = Number(document.getElementById('transferirPara').value);
+    if(de === para){ msg.innerHTML = `<div class="msg err">Escolha vendedores diferentes.</div>`; return; }
+    const vDe = STATE.vendors.find(v=>v.codigo===de);
+    const vPara = STATE.vendors.find(v=>v.codigo===para);
+    const qtdClientes = STATE.roster.filter(c=>c.vendedorCodigo===de).length;
+    if(!(await confirmarAcao(`Isso vai mover TODOS os ${qtdClientes} cliente(s) de ${vDe.nome} pra ${vPara.nome}, junto com o histórico de contatos/vendas dele. Não pode ser desfeito automaticamente. Confirma?`))) return;
+    msg.innerHTML = `<div class="hint">Transferindo...</div>`;
+    // 1) Move a carteira inteira
+    let contador = 0;
+    STATE.roster.forEach(c => {
+      if(c.vendedorCodigo === de){ c.vendedorCodigo = para; contador++; }
+    });
+    await safeSet('crm:roster', STATE.roster);
+    // 2) Junta o histórico de contatos/vendas (indicadores) no vendedor de destino
+    const contatosDe = await getContatos(de);
+    const contatosPara = await getContatos(para);
+    Object.entries(contatosDe).forEach(([codigoCliente, reg]) => {
+      if(!contatosPara[codigoCliente]){
+        contatosPara[codigoCliente] = reg;
+      } else {
+        contatosPara[codigoCliente].historico = [...(contatosPara[codigoCliente].historico||[]), ...(reg.historico||[])];
+      }
+    });
+    await safeSet('crm:contatos:'+para, contatosPara);
+    STATE.contatosCache[para] = contatosPara;
+    delete STATE.contatosCache[de];
+    msg.innerHTML = `<div class="msg ok">${contador} cliente(s) e todo o histórico de ${vDe.nome} foram transferidos pra ${vPara.nome}.</div>`;
+  };
   document.querySelectorAll('.salvarDiretorBtn').forEach(btn => {
     btn.onclick = async () => {
       const id = btn.dataset.id;

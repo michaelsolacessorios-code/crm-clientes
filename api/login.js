@@ -114,6 +114,9 @@ export default async function handler(req, res) {
     // Vendedor
     const vendedor = vendors.find(v => v.usuario === usuario);
     if (vendedor) {
+      if (vendedor.bloqueado) {
+        return res.status(200).json({ ok: false, message: 'Seu acesso foi bloqueado. Fale com o gerente.' });
+      }
       if (senhaConfere(senha, vendedor.senha)) {
         if (precisaMigrar(vendedor.senha)) {
           vendedor.senha = novoHash(senha);

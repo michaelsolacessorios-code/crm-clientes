@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-10-04';
+const APP_VERSION = '2026-09-14-03';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -690,14 +690,6 @@ async function loadAll(){
       }));
     await safeSet('crm:inativos', pool);
     await safeSet('crm:inativos_seeded', true);
-  }
-  // Migração única: aplica as senhas reais definidas pelo gerente para cada vendedor.
-  let senhasAplicadas = await safeGet('crm:senhas_v2_aplicadas');
-  if(!senhasAplicadas){
-    const novasSenhas = {24:'976542341', 89:'978097584', 15:'976535703', 27:'978406578', 85:'924858102', 92:'990084091'};
-    vendors.forEach(v => { if(novasSenhas[v.codigo]) v.senha = novasSenhas[v.codigo]; });
-    await safeSet('crm:vendors', vendors);
-    await safeSet('crm:senhas_v2_aplicadas', true);
   }
   STATE.vendors = vendors;
   STATE.roster = roster;
@@ -1195,6 +1187,7 @@ async function processarImportacaoBase(linhas, modoSincronizacao){
             codigo: c.codigo, nome: c.nome, municipio: c.municipio||'', uf: c.uf||'',
             cnpj: c.cnpj||'', telefone: c.telefone||'', contato: c.contato||'',
             ultimaCompra: null, limiteCredito: c.limiteCredito, saldoDevedor: c.saldoDevedor,
+            inadimplente: c.inadimplente||false, valorDevido: c.valorDevido||0,
           });
         });
         STATE.roster = STATE.roster.filter(c => !codigosRemover.has(c.codigo));
@@ -3378,6 +3371,7 @@ function renderLogin(){
       }
       STATE.mesSelecionado = currentMonthKey();
       iniciarPresenca();
+      verificarBackupDiarioAutomatico(); // roda em segundo plano, não trava a tela
       render();
     }catch(err){
       errSlot.innerHTML = `<div class="login-error">Erro ao entrar: ${err.message}</div>`;
@@ -6523,12 +6517,7 @@ async function baixarBackupCompleto(botao){
   const textoOriginal = botao.textContent;
   botao.disabled = true; botao.textContent = 'Preparando backup...';
   try{
-    const chaves = ['crm:vendors','crm:roster','crm:inativos','crm:leads','crm:config','crm:diretores','crm:catalogo_skus','crm:promocao','crm:financeiro','crm:lixeira'];
-    STATE.vendors.forEach(v => chaves.push('crm:contatos:'+v.codigo));
-    const backup = {geradoEm: new Date().toISOString(), dados: {}};
-    for(const chave of chaves){
-      backup.dados[chave] = await safeGet(chave);
-    }
+    const backup = await montarSnapshotCompleto();
     const blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -6544,6 +6533,43 @@ async function baixarBackupCompleto(botao){
   botao.disabled = false; botao.textContent = textoOriginal;
 }
 
+// Junta tudo que existe de importante no sistema num objeto só (usado tanto pro backup manual
+// quanto pro automático).
+async function montarSnapshotCompleto(){
+  const chaves = ['crm:vendors','crm:roster','crm:inativos','crm:leads','crm:config','crm:diretores','crm:catalogo_skus','crm:promocao','crm:financeiro','crm:lixeira','crm:correcoes_vendedor','crm:categorias'];
+  STATE.vendors.forEach(v => chaves.push('crm:contatos:'+v.codigo));
+  const backup = {geradoEm: new Date().toISOString(), dados: {}};
+  for(const chave of chaves){
+    backup.dados[chave] = await safeGet(chave);
+  }
+  return backup;
+}
+
+// Backup automático diário — roda sozinho, sem ninguém precisar clicar em nada. Guarda os
+// últimos 14 dias como um "seguro" contra qualquer perda de dados. Só faz o trabalho pesado
+// uma vez por dia (a primeira pessoa a abrir o sistema naquele dia aciona, o resto do dia não
+// faz nada).
+async function verificarBackupDiarioAutomatico(){
+  try{
+    const hoje = todayStr();
+    const ultimoBackup = await safeGet('crm:ultimo_backup_automatico');
+    if(ultimoBackup === hoje) return; // já fez hoje, não repete
+    const snapshot = await montarSnapshotCompleto();
+    await safeSet('crm:backup_diario:'+hoje, snapshot);
+    let indice = (await safeGet('crm:backups_indice')) || [];
+    if(!indice.includes(hoje)) indice.push(hoje);
+    indice.sort();
+    // Mantém só os últimos 7 dias — os mais antigos que isso são esvaziados (economiza espaço).
+    while(indice.length > 7){
+      const diaAntigo = indice.shift();
+      await safeSet('crm:backup_diario:'+diaAntigo, null);
+    }
+    await safeSet('crm:backups_indice', indice);
+    await safeSet('crm:ultimo_backup_automatico', hoje);
+  }catch(e){ console.error('backup automático falhou', e); }
+}
+
+
 async function renderManagerAdmin(main){
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
   const poolInativos = await getInativos();
@@ -6556,6 +6582,12 @@ async function renderManagerAdmin(main){
       <h3>Baixar backup completo</h3>
       <p class="hint">Baixa um arquivo com tudo que está no sistema hoje — clientes, carteiras, vendas, pedidos, financeiro, tudo — pra guardar onde quiser. Recomendado fazer isso todo fim de dia.</p>
       <button class="primary-btn" id="btnBaixarBackup">⬇️ Baixar backup completo</button>
+    </div>
+
+    <div class="panel">
+      <h3>🗓️ Backups automáticos diários</h3>
+      <p class="hint">O sistema salva uma cópia de tudo sozinho, uma vez por dia (na primeira vez que alguém entra). Guarda os últimos 7 dias — se algum dado sumir ou for alterado por engano, dá pra baixar o backup de um dia anterior e comparar.</p>
+      <div id="listaBackupsAutomaticos"><div class="hint">Carregando...</div></div>
     </div>
 
     <div class="admin-section-title">👥 Vendedores</div>
@@ -6638,6 +6670,31 @@ async function renderManagerAdmin(main){
   `;
 
   document.getElementById('btnBaixarBackup').onclick = (e) => baixarBackupCompleto(e.target);
+  (async () => {
+    const indice = ((await safeGet('crm:backups_indice')) || []).slice().sort().reverse();
+    const box = document.getElementById('listaBackupsAutomaticos');
+    if(indice.length === 0){ box.innerHTML = `<p class="hint" style="margin:0;">Ainda não tem nenhum backup automático salvo — o primeiro roda no próximo login de alguém.</p>`; return; }
+    box.innerHTML = indice.map(dia => `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border);">
+        <span>${fmtDatePt(dia)}</span>
+        <button class="ghost-btn btnBaixarBackupDia" data-dia="${dia}">⬇️ Baixar esse dia</button>
+      </div>
+    `).join('');
+    box.querySelectorAll('.btnBaixarBackupDia').forEach(btn => {
+      btn.onclick = async () => {
+        btn.disabled = true; btn.textContent = 'Preparando...';
+        const snapshot = await safeGet('crm:backup_diario:'+btn.dataset.dia);
+        if(!snapshot){ alert('Esse backup não existe mais.'); btn.disabled=false; return; }
+        const blob = new Blob([JSON.stringify(snapshot, null, 2)], {type:'application/json'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `backup_crm_tfimports_${btn.dataset.dia}.json`;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+        btn.disabled = false; btn.textContent = '⬇️ Baixar esse dia';
+      };
+    });
+  })();
   const renameList = document.getElementById('renameList');
   renameList.innerHTML = STATE.vendors.map(v => {
     const numClientes = clientsForVendor(v.codigo).length;

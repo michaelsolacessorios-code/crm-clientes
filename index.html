@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-14-03';
+const APP_VERSION = '2026-09-14-04';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -3506,14 +3506,16 @@ function lerPlanilhaNumerosPedido(file){
         const wb = XLSX.read(data, {type:'array'});
         const ws = wb.Sheets[wb.SheetNames[0]];
         const linhas = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
-        const numeros = linhas
-          .map(r => r[0])
-          .filter(v => v !== null && v !== '' && v !== undefined)
-          .map(v => String(v).trim())
-          .filter(v => v.toUpperCase() !== 'NUMERO' && v.toUpperCase() !== 'NÚMERO' && v.toUpperCase() !== 'PEDIDO');
-        resolve(Array.from(new Set(numeros)));
+        const registros = linhas
+          .filter(r => r[0] !== null && r[0] !== '' && r[0] !== undefined)
+          .map(r => ({ numero: String(r[0]).trim(), vendedor: (r[1]!==null && r[1]!==undefined) ? String(r[1]).trim() : '' }))
+          .filter(r => r.numero.toUpperCase() !== 'NUMERO' && r.numero.toUpperCase() !== 'NÚMERO' && r.numero.toUpperCase() !== 'PEDIDO');
+        // Remove duplicados pelo número do pedido, mantendo a primeira ocorrência.
+        const vistos = new Set();
+        const unicos = registros.filter(r => vistos.has(r.numero) ? false : (vistos.add(r.numero), true));
+        resolve(unicos);
       }catch(err){
-        reject(new Error('Não consegui ler essa planilha. Coloque um número de pedido por linha, numa única coluna.'));
+        reject(new Error('Não consegui ler essa planilha. Coloque, por linha: número do pedido na primeira coluna e nome do vendedor na segunda.'));
       }
     };
     reader.readAsArrayBuffer(file);
@@ -3530,7 +3532,7 @@ async function renderManagerPedidos(main){
 
     <div class="panel import-panel" style="border-left-color:var(--primary);">
       <div class="import-panel-title"><span class="import-badge" style="background:var(--primary);">🔍</span><h3>Conferir pedidos que não subiram</h3></div>
-      <p class="hint">Suba uma planilha com uma coluna só: os números dos pedidos que deveriam estar no sistema. Eu aponto quais deles não foram encontrados aqui.</p>
+      <p class="hint">Suba uma planilha com duas colunas: o número do pedido e o nome do vendedor. Eu aponto quais pedidos não foram encontrados aqui.</p>
       <div class="form-row">
         <input type="file" id="f_conferir_pedidos" accept=".xlsx,.xls">
         <button class="primary-btn" id="btnConferirPedidos">Conferir</button>
@@ -3562,13 +3564,13 @@ async function renderManagerPedidos(main){
     if(!file){ box.innerHTML = `<div class="msg err">Escolha o arquivo primeiro.</div>`; return; }
     box.innerHTML = `<div class="hint">Lendo planilha...</div>`;
     try{
-      const numeros = await lerPlanilhaNumerosPedido(file);
-      const faltando = numeros.filter(n => !numerosNoCrm.has(n));
+      const registros = await lerPlanilhaNumerosPedido(file);
+      const faltando = registros.filter(r => !numerosNoCrm.has(r.numero));
       box.innerHTML = `
         <div class="msg ${faltando.length>0?'err':'ok'}" style="margin-top:10px;">
-          ${numeros.length} número(s) conferido(s). ${faltando.length===0 ? 'Todos foram encontrados no sistema. ✅' : `<b>${faltando.length} não foram encontrados:</b>`}
+          ${registros.length} pedido(s) conferido(s). ${faltando.length===0 ? 'Todos foram encontrados no sistema. ✅' : `<b>${faltando.length} não foram encontrados:</b>`}
         </div>
-        ${faltando.length>0 ? `<div class="hint" style="margin-top:8px; word-break:break-all;">${faltando.join(', ')}</div>` : ''}
+        ${faltando.length>0 ? `<div class="hint" style="margin-top:8px; word-break:break-all;">${faltando.map(r => r.vendedor ? `${r.numero}-${r.vendedor}` : r.numero).join(', ')}</div>` : ''}
       `;
     }catch(err){
       box.innerHTML = `<div class="msg err">${err.message}</div>`;

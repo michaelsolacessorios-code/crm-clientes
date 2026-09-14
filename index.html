@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-14-11';
+const APP_VERSION = '2026-09-14-12';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -2469,7 +2469,7 @@ function mesChaveDe(data){
 // valor vendido, positivação (clientes distintos), volume (unidades) e SKUs diferentes.
 // Pode gerar números pra mais de um mês de calendário, se pedidos passarem a virada.
 function processarImportacaoMetas(pedidosRaw, itensRaw){
-  const pedidosFaturados = pedidosRaw.filter(p => p.situacao === 8 && p.ultimoFaturamento);
+  const pedidosFaturados = pedidosRaw.filter(p => Number(p.situacao) === 8 && p.ultimoFaturamento);
   const pedidosMap = new Map(); // numero -> {vendedor, cliente, mes, valor}
   const porMesVendedor = new Map(); // "mes|vendedor" -> {valorVendido, clientes:Set, qtdPedidos, volume, skus:Set, produtos:Map, clientesMap:Map}
   const vendasPorSkuMes = new Map(); // mes -> Map(codigo -> quantidade), somando todos os vendedores

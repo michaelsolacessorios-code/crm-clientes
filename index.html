@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-14-04';
+const APP_VERSION = '2026-09-14-05';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -588,9 +588,21 @@ async function hashSenha(senha){
 }
 
 
+// Igual ao safeGet, mas pra dados CRÍTICOS onde eu preciso ter certeza absoluta da diferença
+// entre "esse dado realmente não existe ainda" e "a internet falhou nessa hora". Se a busca
+// falhar de verdade, ela trava com um erro em vez de fingir que está tudo vazio — isso evita
+// que uma falha de rede passageira seja confundida com "sistema novo" e apague vendedores,
+// carteiras etc. que na real já existiam.
+async function safeGetCritico(key){
+  const res = await fetch(`/api/kv?key=${encodeURIComponent(key)}`);
+  if(!res.ok) throw new Error(`Não consegui confirmar se "${key}" existe no banco (a internet pode ter falhado nessa hora). Recarregue a página antes de continuar — por segurança, o sistema não vai criar dados novos sem ter certeza.`);
+  const data = await res.json();
+  return data.value;
+}
+
 async function loadAll(){
-  let vendors = await safeGet('crm:vendors');
-  let roster = await safeGet('crm:roster');
+  let vendors = await safeGetCritico('crm:vendors');
+  let roster = await safeGetCritico('crm:roster');
   let config = await safeGet('crm:config');
   if(!vendors || !roster){
     vendors = SEED_VENDORS.map(v => ({codigo:v[0], nome:v[1], usuario:v[2], senha:v[3], metaMes: META_PADRAO}));
@@ -3418,9 +3430,14 @@ function bindSidebar(onNav){
     btnRefresh.onclick = async () => {
       const textoOriginal = btnRefresh.textContent;
       btnRefresh.disabled = true; btnRefresh.textContent = 'Atualizando...';
-      STATE.contatosCache = {};
-      await loadAll();
-      render();
+      try{
+        STATE.contatosCache = {};
+        await loadAll();
+        render();
+      }catch(err){
+        alert(err.message);
+        btnRefresh.disabled = false; btnRefresh.textContent = textoOriginal;
+      }
     };
   }
 }
@@ -6166,6 +6183,19 @@ function renderManagerVendorDetail(main){
 function renderManagerCredenciais(main){
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Acesso</div><h2>Credenciais de acesso</h2></div>
+
+    <div class="panel" style="border-left:4px solid var(--ok);">
+      <h3>➕ Criar novo vendedor</h3>
+      <p class="hint">Cadastra um vendedor novo direto por aqui, sem precisar de mim.</p>
+      <div class="form-row">
+        <div><label class="field-label">Número do vendedor</label><input type="number" id="novoVendedorCodigo" placeholder="Ex: 99"></div>
+        <div><label class="field-label">Nome</label><input type="text" id="novoVendedorNome" placeholder="Nome completo"></div>
+        <div><label class="field-label">Usuário</label><input type="text" id="novoVendedorUsuario" placeholder="usuario"></div>
+        <div><label class="field-label">Senha</label><input type="text" id="novoVendedorSenha" placeholder="senha"></div>
+        <button class="primary-btn" id="btnCriarVendedor">Criar vendedor</button>
+      </div>
+      <div id="msgNovoVendedor"></div>
+    </div>
     <div class="panel">
       <h3>Usuário e senha de cada vendedor</h3>
       <p class="hint">Compartilhe individualmente com cada vendedor. Você pode alterar a senha de qualquer um a qualquer momento.</p>
@@ -6357,6 +6387,30 @@ function renderManagerCredenciais(main){
     }catch(err){
       document.getElementById('msgGerente').innerHTML = `<div class="msg err">Não consegui processar essa imagem.</div>`;
     }
+  };
+  document.getElementById('btnCriarVendedor').onclick = async () => {
+    const msg = document.getElementById('msgNovoVendedor');
+    const codigo = Number(document.getElementById('novoVendedorCodigo').value);
+    const nome = document.getElementById('novoVendedorNome').value.trim();
+    const usuario = document.getElementById('novoVendedorUsuario').value.trim().toLowerCase();
+    const senha = document.getElementById('novoVendedorSenha').value.trim();
+    if(!codigo || !nome || !usuario || !senha){
+      msg.innerHTML = `<div class="msg err">Preencha o número do vendedor, nome, usuário e senha.</div>`;
+      return;
+    }
+    if(STATE.vendors.some(v=>v.codigo===codigo)){
+      msg.innerHTML = `<div class="msg err">Já existe um vendedor com o número ${codigo}. Escolha outro.</div>`;
+      return;
+    }
+    if(STATE.vendors.some(v=>v.usuario===usuario)){
+      msg.innerHTML = `<div class="msg err">Esse usuário já existe. Escolha outro.</div>`;
+      return;
+    }
+    const senhaHash = await hashSenha(senha);
+    STATE.vendors.push({codigo, nome, usuario, senha: senhaHash, metaMes: META_PADRAO});
+    await safeSet('crm:vendors', STATE.vendors);
+    msg.innerHTML = `<div class="msg ok">${nome} (Nº ${codigo}) criado(a) com sucesso!</div>`;
+    renderManagerCredenciais(main);
   };
   document.querySelectorAll('.salvarSenhaBtn').forEach(btn => {
     btn.onclick = async () => {
@@ -7274,8 +7328,20 @@ function renderManagerImportacoes(main){
 
 // ---------------- INIT ----------------
 (async function init(){
-  await loadAll();
-  render();
+  try{
+    await loadAll();
+    render();
+  }catch(err){
+    document.getElementById('app').innerHTML = `
+      <div class="login-wrap">
+        <div class="login-card">
+          <h1>⚠️ Não consegui abrir o sistema</h1>
+          <p>${err.message}</p>
+          <button class="primary-btn" style="width:100%;" onclick="location.reload()">Tentar de novo</button>
+        </div>
+      </div>
+    `;
+  }
 })();
 </script>
 </body>

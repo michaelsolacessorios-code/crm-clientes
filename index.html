@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-14-09';
+const APP_VERSION = '2026-09-14-10';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -3578,10 +3578,26 @@ async function montarContextoAssistenteIA(vendedorCodigo, pergunta){
     }
   });
 
-  return { carteiraDoVendedor: carteira, itensMaisVendidosPorEle: topProdutos, estoqueAtual: estoque, historicoDeComprasDosClientesCitadosNaPergunta: historicosClientesCitados };
-}
+  // Pedidos/vendas que ele mesmo já registrou no CRM (aba "Pedidos" dele) — inclui o mês atual.
+  const todosPedidosDele = await pedidosDoVendedor(vendedorCodigo);
+  const mesAtual = currentMonthKey();
+  const pedidosDoMes = todosPedidosDele.filter(p => (p.data||'').slice(0,7) === mesAtual);
+  const resumoPedidos = {
+    mesAtual,
+    quantidadePedidosEsteMes: pedidosDoMes.length,
+    valorTotalVendidoEsteMes: pedidosDoMes.reduce((s,p)=>s+(p.valor||0),0),
+    quantidadePedidosTotalRegistrados: todosPedidosDele.length,
+    ultimosPedidos: todosPedidosDele.slice(0,10).map(p=>({numero:p.numeroPedidoExibicao, cliente:p.clienteNome, data:p.data, valor:p.valor})),
+  };
+  const vendedorAtual = STATE.vendors.find(v=>v.codigo===vendedorCodigo);
 
-// prontinho pra listar/buscar/ordenar — usado na aba "Pedidos".
+  return {
+    carteiraDoVendedor: carteira, itensMaisVendidosPorEle: topProdutos, estoqueAtual: estoque,
+    historicoDeComprasDosClientesCitadosNaPergunta: historicosClientesCitados,
+    pedidosEVendasRegistradosPorEleNoSistema: resumoPedidos,
+    metaDoMesDele: vendedorAtual ? vendedorAtual.metaMes : null,
+  };
+}// prontinho pra listar/buscar/ordenar — usado na aba "Pedidos".
 async function pedidosDoVendedor(vendedorCodigo){
   const contatos = await getContatos(vendedorCodigo);
   const todosClientes = [...STATE.roster, ...(await getInativos())];

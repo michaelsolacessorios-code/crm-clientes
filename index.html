@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-14-06';
+const APP_VERSION = '2026-09-14-07';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -6192,6 +6192,7 @@ function renderManagerCredenciais(main){
         <div><label class="field-label">Nome</label><input type="text" id="novoVendedorNome" placeholder="Nome completo"></div>
         <div><label class="field-label">Usuário</label><input type="text" id="novoVendedorUsuario" placeholder="usuario"></div>
         <div><label class="field-label">Senha</label><input type="text" id="novoVendedorSenha" placeholder="senha"></div>
+        <div><label class="field-label">Foto (opcional)</label><input type="file" id="novoVendedorFoto" accept="image/*"></div>
         <button class="primary-btn" id="btnCriarVendedor">Criar vendedor</button>
       </div>
       <div id="msgNovoVendedor"></div>
@@ -6407,7 +6408,13 @@ function renderManagerCredenciais(main){
       return;
     }
     const senhaHash = await hashSenha(senha);
-    STATE.vendors.push({codigo, nome, usuario, senha: senhaHash, metaMes: META_PADRAO});
+    const novoVendedor = {codigo, nome, usuario, senha: senhaHash, metaMes: META_PADRAO};
+    const fotoFile = document.getElementById('novoVendedorFoto').files[0];
+    if(fotoFile){
+      try{ novoVendedor.foto = await resizeImagemParaBase64(fotoFile); }
+      catch(err){ msg.innerHTML = `<div class="msg err">Não consegui processar a foto, mas vou criar o vendedor sem ela — pode adicionar depois em Administração.</div>`; }
+    }
+    STATE.vendors.push(novoVendedor);
     await safeSet('crm:vendors', STATE.vendors);
     msg.innerHTML = `<div class="msg ok">${nome} (Nº ${codigo}) criado(a) com sucesso!</div>`;
     renderManagerCredenciais(main);

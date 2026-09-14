@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-14-07';
+const APP_VERSION = '2026-09-14-08';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -2469,6 +2469,7 @@ function processarImportacaoMetas(pedidosRaw, itensRaw){
   const pedidosMap = new Map(); // numero -> {vendedor, cliente, mes, valor}
   const porMesVendedor = new Map(); // "mes|vendedor" -> {valorVendido, clientes:Set, qtdPedidos, volume, skus:Set, produtos:Map, clientesMap:Map}
   const vendasPorSkuMes = new Map(); // mes -> Map(codigo -> quantidade), somando todos os vendedores
+  const vendasPorCliente = new Map(); // clienteCodigo -> Map(produtoCodigo -> {quantidade, valor}) — histórico de compras item a item, usado pelo Assistente IA
 
   function bucket(mes, vendedor){
     const chave = mes+'|'+vendedor;
@@ -2508,6 +2509,14 @@ function processarImportacaoMetas(pedidosRaw, itensRaw){
       if(!vendasPorSkuMes.has(ped.mes)) vendasPorSkuMes.set(ped.mes, new Map());
       const mesMap = vendasPorSkuMes.get(ped.mes);
       mesMap.set(cod, (mesMap.get(cod)||0) + i.quantidade);
+      // Guarda também por cliente — pra base do Assistente IA saber o que cada cliente comprou.
+      const clienteChave = String(ped.cliente);
+      if(!vendasPorCliente.has(clienteChave)) vendasPorCliente.set(clienteChave, new Map());
+      const prodMap = vendasPorCliente.get(clienteChave);
+      if(!prodMap.has(cod)) prodMap.set(cod, {quantidade:0, valor:0, descricao:(i.descricao||'').toString().slice(0,60)});
+      const prodReg = prodMap.get(cod);
+      prodReg.quantidade += i.quantidade;
+      prodReg.valor += i.valor;
     }
   });
 
@@ -3454,6 +3463,7 @@ async function renderVendorShell(){
     {page:'leads', label:'Leads'},
     {page:'inativos', label:'Clientes inativos'},
     {page:'historico', label:'Histórico'},
+    {page:'assistente', label:'🤖 Assistente IA'},
   ];
   app.innerHTML = `<div class="shell">${sidebarHTML(items)}<div class="main" id="main"></div></div>`;
   bindSidebar(renderVendorShell);
@@ -3468,10 +3478,65 @@ async function renderVendorShell(){
   else if(STATE.route.page==='previsao') await renderPrevisaoCompras(main);
   else if(STATE.route.page==='leads') renderVendorLeads(main);
   else if(STATE.route.page==='inativos') await renderVendorInativos(main);
+  else if(STATE.route.page==='assistente') renderVendorAssistenteIA(main);
   else renderVendorHistorico(main);
 }
 
-// Junta todos os pedidos (contatos com venda) já registrados por um vendedor, num formato
+// ---------------- ASSISTENTE IA (vendedor) ----------------
+async function renderVendorAssistenteIA(main){
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Assistente</div><h2>🤖 Pergunte pra IA sobre sua carteira</h2></div>
+    <div class="panel">
+      <p class="hint">Pergunte coisas como: "o que eu ofereço pro cliente Renato Arruda?", "quais clientes meus têm mais crédito livre?", "quais itens mais vendo que estão com bom estoque?". A IA usa sua carteira, o estoque atual e suas vendas dos últimos meses pra responder.</p>
+      <div class="form-row">
+        <input type="text" id="perguntaIA" placeholder="Digite sua pergunta..." style="flex:1;">
+        <button class="primary-btn" id="btnPerguntarIA">Perguntar</button>
+      </div>
+      <div id="respostaIA" style="margin-top:14px;"></div>
+    </div>
+  `;
+  const input = document.getElementById('perguntaIA');
+  const box = document.getElementById('respostaIA');
+  const perguntar = async () => {
+    const pergunta = input.value.trim();
+    if(!pergunta) return;
+    box.innerHTML = `<div class="hint">Pensando...</div>`;
+    try{
+      const contexto = await montarContextoAssistenteIA(STATE.session.codigo);
+      const res = await fetch('/api/chat-vendedor', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({pergunta, contexto}),
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Falha ao consultar a IA.');
+      box.innerHTML = `<div class="panel" style="background:#FAFAF8; white-space:pre-wrap; line-height:1.6;">${data.resposta}</div>`;
+    }catch(err){
+      box.innerHTML = `<div class="msg err">${err.message}</div>`;
+    }
+  };
+  document.getElementById('btnPerguntarIA').onclick = perguntar;
+  input.onkeydown = (e) => { if(e.key==='Enter') perguntar(); };
+}
+
+// Monta um resumo compacto (carteira, estoque, vendas) pra IA usar como contexto.
+async function montarContextoAssistenteIA(vendedorCodigo){
+  const carteira = STATE.roster
+    .filter(c => c.vendedorCodigo === vendedorCodigo)
+    .map(c => ({
+      codigo: c.codigo, nome: c.nome, limiteCredito: c.limiteCredito||0,
+      saldoDevedor: c.saldoDevedor||0, creditoLivre: (c.limiteCredito||0)-(c.saldoDevedor||0),
+      inadimplente: !!c.inadimplente, ultimaCompra: c.ultimaCompra||null,
+    }));
+  const ano = String(new Date().getFullYear());
+  const topProdutos = ((STATE.metasTopProdutos[ano]||{})[String(vendedorCodigo)]||[]).slice(0,15);
+  const codigosRelevantes = new Set(topProdutos.map(p=>p.codigo));
+  const estoque = (STATE.estoque||[])
+    .filter(e => codigosRelevantes.has(e.codigo) || (e.disponivel||0) > 100)
+    .slice(0, 80)
+    .map(e => ({codigo:e.codigo, descricao:e.descricao, disponivel:e.disponivel||0, previsao:e.previsao||0}));
+  return { carteiraDoVendedor: carteira, itensMaisVendidosPorEle: topProdutos, estoqueAtual: estoque };
+}
+
 // prontinho pra listar/buscar/ordenar — usado na aba "Pedidos".
 async function pedidosDoVendedor(vendedorCodigo){
   const contatos = await getContatos(vendedorCodigo);

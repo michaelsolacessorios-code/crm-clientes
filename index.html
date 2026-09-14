@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-14-08';
+const APP_VERSION = '2026-09-14-09';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -730,6 +730,10 @@ async function loadAll(){
   STATE.correcoesVendedor = (await safeGet('crm:correcoes_vendedor')) || {};
   STATE.estoque = (await safeGet('crm:estoque')) || [];
   STATE.vendasPorSku = (await safeGet('crm:vendas_por_sku')) || {};
+  STATE.vendasPorClienteChunks = {};
+  for(let i=0;i<8;i++){
+    STATE.vendasPorClienteChunks[i] = (await safeGet('crm:vendas_por_cliente_'+i)) || {};
+  }
   STATE.metasHistorico = (await safeGet('crm:metas_historico')) || {};
   STATE.metasTopProdutos = (await safeGet('crm:metas_top_produtos')) || {};
   STATE.metasTopClientes = (await safeGet('crm:metas_top_clientes')) || {};
@@ -2562,6 +2566,25 @@ function processarImportacaoMetas(pedidosRaw, itensRaw){
         });
       });
       await safeSet('crm:vendas_por_sku', STATE.vendasPorSku);
+
+      // Salva o histórico de compras por cliente (item a item) — base pro Assistente IA.
+      // Divide em 8 partes (pelo resto da divisão do código do cliente) pra cada gravação
+      // ficar num tamanho razoável, já que a base toda tem milhares de clientes.
+      const NUM_PARTES = 8;
+      const partes = {};
+      for(let i=0;i<NUM_PARTES;i++) partes[i] = (STATE.vendasPorClienteChunks && STATE.vendasPorClienteChunks[i]) || {};
+      vendasPorCliente.forEach((prodMap, clienteChave) => {
+        const parte = Number(clienteChave) % NUM_PARTES;
+        const destino = partes[parte];
+        if(!destino[clienteChave]) destino[clienteChave] = {};
+        prodMap.forEach((reg, cod) => {
+          destino[clienteChave][cod] = {quantidade: reg.quantidade, valor: Math.round(reg.valor*100)/100, descricao: reg.descricao};
+        });
+      });
+      for(let i=0;i<NUM_PARTES;i++){
+        await safeSet('crm:vendas_por_cliente_'+i, partes[i]);
+      }
+      STATE.vendasPorClienteChunks = partes;
     },
     resumo: {
       mesesAfetados: Array.from(mesesAfetados).sort(),
@@ -3502,7 +3525,7 @@ async function renderVendorAssistenteIA(main){
     if(!pergunta) return;
     box.innerHTML = `<div class="hint">Pensando...</div>`;
     try{
-      const contexto = await montarContextoAssistenteIA(STATE.session.codigo);
+      const contexto = await montarContextoAssistenteIA(STATE.session.codigo, pergunta);
       const res = await fetch('/api/chat-vendedor', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({pergunta, contexto}),
@@ -3518,8 +3541,16 @@ async function renderVendorAssistenteIA(main){
   input.onkeydown = (e) => { if(e.key==='Enter') perguntar(); };
 }
 
+// Busca o histórico de compras (item a item, últimos 8 meses já processados) de UM cliente específico.
+function historicoDeCompraDoCliente(codigoCliente){
+  const chave = String(codigoCliente);
+  const parte = Number(codigoCliente) % 8;
+  const bucket = (STATE.vendasPorClienteChunks && STATE.vendasPorClienteChunks[parte]) || {};
+  return bucket[chave] || null;
+}
+
 // Monta um resumo compacto (carteira, estoque, vendas) pra IA usar como contexto.
-async function montarContextoAssistenteIA(vendedorCodigo){
+async function montarContextoAssistenteIA(vendedorCodigo, pergunta){
   const carteira = STATE.roster
     .filter(c => c.vendedorCodigo === vendedorCodigo)
     .map(c => ({
@@ -3534,7 +3565,20 @@ async function montarContextoAssistenteIA(vendedorCodigo){
     .filter(e => codigosRelevantes.has(e.codigo) || (e.disponivel||0) > 100)
     .slice(0, 80)
     .map(e => ({codigo:e.codigo, descricao:e.descricao, disponivel:e.disponivel||0, previsao:e.previsao||0}));
-  return { carteiraDoVendedor: carteira, itensMaisVendidosPorEle: topProdutos, estoqueAtual: estoque };
+
+  // Se a pergunta mencionar o nome de algum cliente da carteira dele, traz o histórico de
+  // compras item a item desse cliente específico (últimos 8 meses).
+  const perguntaMinuscula = (pergunta||'').toLowerCase();
+  const historicosClientesCitados = [];
+  carteira.forEach(c => {
+    const primeiroNome = c.nome.toLowerCase().split(' ')[0];
+    if(primeiroNome.length > 2 && perguntaMinuscula.includes(primeiroNome)){
+      const hist = historicoDeCompraDoCliente(c.codigo);
+      if(hist) historicosClientesCitados.push({cliente: c.nome, codigo: c.codigo, itensComprados: hist});
+    }
+  });
+
+  return { carteiraDoVendedor: carteira, itensMaisVendidosPorEle: topProdutos, estoqueAtual: estoque, historicoDeComprasDosClientesCitadosNaPergunta: historicosClientesCitados };
 }
 
 // prontinho pra listar/buscar/ordenar — usado na aba "Pedidos".

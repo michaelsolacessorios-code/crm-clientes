@@ -20,32 +20,46 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'PDF ou instrução ausente na requisição.' });
   }
 
-  try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { inline_data: { mime_type: 'application/pdf', data: base64 } },
-              { text: prompt },
-            ],
-          },
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`;
+  const corpo = JSON.stringify({
+    contents: [
+      {
+        parts: [
+          { inline_data: { mime_type: 'application/pdf', data: base64 } },
+          { text: prompt },
         ],
-      }),
-    });
+      },
+    ],
+  });
 
-    const data = await response.json();
-    if (!response.ok) {
-      return res.status(response.status).json({ error: data?.error?.message || 'Erro ao consultar o Gemini.' });
+  // O Google às vezes fica momentaneamente sobrecarregado ("high demand") — antes de desistir
+  // e mandar a pessoa preencher na mão, tenta mais 2 vezes com uma pausa curta entre elas.
+  const MAX_TENTATIVAS = 3;
+  let ultimoErro = null;
+  for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
+    try {
+      const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: corpo });
+      const data = await response.json();
+      if (!response.ok) {
+        const mensagem = data?.error?.message || 'Erro ao consultar o Gemini.';
+        const sobrecarregado = response.status === 503 || response.status === 429 || /overloaded|high demand|quota/i.test(mensagem);
+        if (sobrecarregado && tentativa < MAX_TENTATIVAS) {
+          ultimoErro = mensagem;
+          await new Promise(r => setTimeout(r, 1500 * tentativa)); // espera um pouco mais a cada tentativa
+          continue;
+        }
+        return res.status(response.status).json({ error: mensagem });
+      }
+      const texto = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      return res.status(200).json({ content: [{ type: 'text', text: texto }] });
+    } catch (err) {
+      ultimoErro = err.message;
+      if (tentativa < MAX_TENTATIVAS) {
+        await new Promise(r => setTimeout(r, 1500 * tentativa));
+        continue;
+      }
+      return res.status(500).json({ error: 'Falha ao processar o pedido: ' + ultimoErro });
     }
-    // Repacota no mesmo formato {content:[{type:'text', text:...}]} que o front-end já sabe ler,
-    // pra não precisar mexer em mais nada do lado do CRM.
-    const texto = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    return res.status(200).json({ content: [{ type: 'text', text: texto }] });
-  } catch (err) {
-    return res.status(500).json({ error: 'Falha ao processar o pedido: ' + err.message });
   }
+  return res.status(500).json({ error: 'Falha ao processar o pedido: ' + ultimoErro });
 }

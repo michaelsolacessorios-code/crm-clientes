@@ -742,6 +742,17 @@ async function loadAll(){
 
 // A lista de inativos é compartilhada e pode mudar por qualquer vendedor a qualquer momento,
 // então sempre buscamos fresca em vez de usar cache.
+// Muda a correção fixa de UM cliente sem arriscar sobrescrever mudanças feitas por outra
+// pessoa/aba nesse meio tempo — sempre busca a versão mais atual do servidor antes de salvar,
+// em vez de confiar na cópia que já estava na memória do navegador (que pode estar velha).
+async function atualizarCorrecaoVendedor(codigo, novoValorOuNull){
+  const atual = (await safeGet('crm:correcoes_vendedor')) || {};
+  if(novoValorOuNull === null) delete atual[codigo];
+  else atual[codigo] = novoValorOuNull;
+  await safeSet('crm:correcoes_vendedor', atual);
+  STATE.correcoesVendedor = atual;
+}
+
 async function getInativos(){
   return (await safeGet('crm:inativos')) || [];
 }
@@ -5541,10 +5552,7 @@ function abrirTrocarVendedorModal(codigo){
         ultimaCompra: c.ultimaCompra||null, limiteCredito: c.limiteCredito, saldoDevedor: c.saldoDevedor,
       });
       await safeSet('crm:inativos', inativos);
-      if(STATE.correcoesVendedor[codigo] !== undefined){
-        delete STATE.correcoesVendedor[codigo];
-        await safeSet('crm:correcoes_vendedor', STATE.correcoesVendedor);
-      }
+      await atualizarCorrecaoVendedor(codigo, null);
       backdrop.remove();
       await avisar(`${c.nome} foi movido para a fila de "Clientes inativos".`);
       if(STATE.session.tipo==='vendedor') renderVendorShell(); else renderManagerShell();
@@ -5559,13 +5567,7 @@ function abrirTrocarVendedorModal(codigo){
       c.diaSemana = (existentesDoVendedor % 5) + 1;
       await safeSet('crm:roster', STATE.roster);
     }
-    if(fixar){
-      STATE.correcoesVendedor[codigo] = novoCodigo;
-      await safeSet('crm:correcoes_vendedor', STATE.correcoesVendedor);
-    } else if(STATE.correcoesVendedor[codigo] !== undefined){
-      delete STATE.correcoesVendedor[codigo];
-      await safeSet('crm:correcoes_vendedor', STATE.correcoesVendedor);
-    }
+    await atualizarCorrecaoVendedor(codigo, fixar ? novoCodigo : null);
     backdrop.remove();
     await avisar(`Cliente movido para a carteira de ${novoVendedor.nome}.${fixar ? ' Fixado — sempre vai voltar pra ele nas próximas importações.' : ''}`);
     if(STATE.session.tipo==='vendedor') renderVendorShell(); else renderManagerShell();

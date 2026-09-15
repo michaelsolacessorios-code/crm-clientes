@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-14-14';
+const APP_VERSION = '2026-09-14-17';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -2449,6 +2449,7 @@ function lerPlanilhaItensMetas(file){
           descricao: r[5],
           quantidade: Number(r[7]) || 0,
           valor: Number(r[10]) || 0,
+          precoListaTotal: Number(r[24]) || 0, // Preço Lista total (coluna Y) — o valor REAL do produto, sem imposto. Dividido pela quantidade dá o preço unitário real (diferente do "Unitário" que sai na NF pra fins fiscais).
         }));
         resolve(itens);
       }catch(err){
@@ -2518,13 +2519,15 @@ function processarImportacaoMetas(pedidosRaw, itensRaw){
       const clienteChave = String(ped.cliente);
       if(!vendasPorCliente.has(clienteChave)) vendasPorCliente.set(clienteChave, new Map());
       const prodMap = vendasPorCliente.get(clienteChave);
-      if(!prodMap.has(cod)) prodMap.set(cod, {quantidade:0, valor:0, descricao:(i.descricao||'').toString().slice(0,60), meses:{}});
+      if(!prodMap.has(cod)) prodMap.set(cod, {quantidade:0, valor:0, precoListaTotal:0, descricao:(i.descricao||'').toString().slice(0,60), meses:{}});
       const prodReg = prodMap.get(cod);
       prodReg.quantidade += i.quantidade;
       prodReg.valor += i.valor;
-      if(!prodReg.meses[ped.mes]) prodReg.meses[ped.mes] = {quantidade:0, valor:0};
+      prodReg.precoListaTotal += (i.precoListaTotal||0);
+      if(!prodReg.meses[ped.mes]) prodReg.meses[ped.mes] = {quantidade:0, valor:0, precoListaTotal:0};
       prodReg.meses[ped.mes].quantidade += i.quantidade;
       prodReg.meses[ped.mes].valor += i.valor;
+      prodReg.meses[ped.mes].precoListaTotal += (i.precoListaTotal||0);
     }
   });
 
@@ -2586,7 +2589,13 @@ function processarImportacaoMetas(pedidosRaw, itensRaw){
           const mesesFinal = existente ? {...existente.meses, ...reg.meses} : reg.meses;
           const qtdFinal = Object.values(mesesFinal).reduce((s,m)=>s+m.quantidade,0);
           const valorFinal = Object.values(mesesFinal).reduce((s,m)=>s+m.valor,0);
-          destino[clienteChave][cod] = {quantidade: qtdFinal, valor: Math.round(valorFinal*100)/100, descricao: reg.descricao, meses: mesesFinal};
+          const precoListaTotalFinal = Object.values(mesesFinal).reduce((s,m)=>s+(m.precoListaTotal||0),0);
+          destino[clienteChave][cod] = {
+            quantidade: qtdFinal, valor: Math.round(valorFinal*100)/100,
+            precoListaTotal: Math.round(precoListaTotalFinal*100)/100,
+            precoUnitarioMedio: qtdFinal>0 ? Math.round((precoListaTotalFinal/qtdFinal)*100)/100 : null,
+            descricao: reg.descricao, meses: mesesFinal,
+          };
         });
       });
       for(let i=0;i<NUM_PARTES;i++){

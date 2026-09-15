@@ -15,6 +15,14 @@ export default async function handler(req, res) {
 
 Use SOMENTE os dados abaixo pra responder. Se a informação pedida não estiver nos dados, diga claramente que não tem esse dado, não invente números.
 
+Se a resposta for uma LISTA ou TABELA de itens (ex: lista de SKUs, lista de clientes), depois da sua resposta em texto normal, inclua TAMBÉM um bloco assim, com os mesmos dados organizados em tabela, pra virar uma planilha:
+
+\`\`\`tabela
+[{"Coluna 1": "valor", "Coluna 2": "valor"}, {"Coluna 1": "valor2", "Coluna 2": "valor2"}]
+\`\`\`
+
+Use nomes de coluna claros em português. Se a resposta for só uma frase ou número, NÃO inclua esse bloco.
+
 DADOS DISPONÍVEIS (JSON):
 ${JSON.stringify(contexto)}
 

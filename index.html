@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-14-21';
+const APP_VERSION = '2026-09-14-22';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -3666,6 +3666,9 @@ async function montarContextoAssistenteIA(vendedorCodigo, pergunta, ultimoClient
   // histórico de compras item a item desse cliente específico (últimos 8 meses).
   const perguntaMinuscula = (pergunta||'').toLowerCase();
   const numerosNaPergunta = new Set((pergunta||'').match(/\d+/g) || []);
+  const perguntaQuerListaCompleta = /todos?\s+os?\s+item|relaç[ãa]o\s+complet|lista\s+complet|todo\s+o\s+hist[óo]rico/i.test(pergunta||'');
+  const limiteItensPorCliente = perguntaQuerListaCompleta ? 400 : 40;
+
   const historicosClientesCitados = [];
   let clienteEncontradoNestaPergunta = null;
   carteira.forEach(c => {
@@ -3676,11 +3679,12 @@ async function montarContextoAssistenteIA(vendedorCodigo, pergunta, ultimoClient
       clienteEncontradoNestaPergunta = c.codigo;
       const hist = historicoDeCompraDoCliente(c.codigo);
       if(hist){
-        // Limita aos 40 itens de maior valor, pra não deixar a pergunta pesada/lenta à toa.
+        // Limita aos itens de maior valor (a não ser que a pergunta peça a lista completa),
+        // pra não deixar a pergunta pesada/lenta à toa.
         const itensOrdenados = Object.entries(hist)
           .sort((a,b) => (b[1].valor||0) - (a[1].valor||0))
-          .slice(0, 40);
-        historicosClientesCitados.push({cliente: c.nome, codigo: c.codigo, itensComprados: Object.fromEntries(itensOrdenados)});
+          .slice(0, limiteItensPorCliente);
+        historicosClientesCitados.push({cliente: c.nome, codigo: c.codigo, totalDeItensDistintosComprados: Object.keys(hist).length, itensComprados: Object.fromEntries(itensOrdenados)});
       }
     }
   });
@@ -3691,7 +3695,7 @@ async function montarContextoAssistenteIA(vendedorCodigo, pergunta, ultimoClient
     if(cAnterior){
       const hist = historicoDeCompraDoCliente(cAnterior.codigo);
       if(hist && historicosClientesCitados.length===0){
-        const itensOrdenados = Object.entries(hist).sort((a,b) => (b[1].valor||0) - (a[1].valor||0)).slice(0, 40);
+        const itensOrdenados = Object.entries(hist).sort((a,b) => (b[1].valor||0) - (a[1].valor||0)).slice(0, limiteItensPorCliente);
         historicosClientesCitados.push({cliente: cAnterior.nome, codigo: cAnterior.codigo, itensComprados: Object.fromEntries(itensOrdenados)});
       }
     }

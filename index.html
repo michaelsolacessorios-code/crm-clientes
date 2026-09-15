@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-14-18';
+const APP_VERSION = '2026-09-14-19';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -3643,7 +3643,13 @@ async function montarContextoAssistenteIA(vendedorCodigo, pergunta){
     const citadoPeloCodigo = numerosNaPergunta.has(String(c.codigo));
     if(citadoPeloNome || citadoPeloCodigo){
       const hist = historicoDeCompraDoCliente(c.codigo);
-      if(hist) historicosClientesCitados.push({cliente: c.nome, codigo: c.codigo, itensComprados: hist});
+      if(hist){
+        // Limita aos 40 itens de maior valor, pra não deixar a pergunta pesada/lenta à toa.
+        const itensOrdenados = Object.entries(hist)
+          .sort((a,b) => (b[1].valor||0) - (a[1].valor||0))
+          .slice(0, 40);
+        historicosClientesCitados.push({cliente: c.nome, codigo: c.codigo, itensComprados: Object.fromEntries(itensOrdenados)});
+      }
     }
   });
 

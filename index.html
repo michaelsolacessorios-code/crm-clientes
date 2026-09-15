@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-14-17';
+const APP_VERSION = '2026-09-14-18';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -3574,7 +3574,10 @@ async function renderVendorAssistenteIA(main){
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({pergunta, contexto}),
       });
-      const data = await res.json();
+      const textoResposta = await res.text();
+      let data;
+      try{ data = JSON.parse(textoResposta); }
+      catch(e){ throw new Error('O servidor demorou demais ou travou nessa pergunta (pode ser sobrecarga passageira do Google). Tenta de novo, ou reformula a pergunta de um jeito mais simples.'); }
       if(!res.ok) throw new Error(data.error || 'Falha ao consultar a IA.');
       document.getElementById('bolhaCarregando').remove();
       const {texto, tabela} = processarResposta(data.resposta);
@@ -3657,12 +3660,17 @@ async function montarContextoAssistenteIA(vendedorCodigo, pergunta){
   };
   const vendedorAtual = STATE.vendors.find(v=>v.codigo===vendedorCodigo);
 
+  // Só manda o catálogo completo (pesado, ~3.300 itens) quando a pergunta parece pedir
+  // "o que ele não comprou" — pra não deixar toda pergunta lenta/pesada à toa.
+  const perguntaSugereNaoComprou = /não\s+compr|nunca\s+compr|n[ãa]o\s+levou|ainda\s+n[ãa]o/i.test(pergunta||'');
+  const catalogoCompleto = perguntaSugereNaoComprou ? (STATE.catalogoSkus||[]).map(s => ({codigo:s.codigo, descricao:s.descricao})) : null;
+
   return {
     carteiraDoVendedor: carteira, itensMaisVendidosPorEle: topProdutos, estoqueAtual: estoque,
     historicoDeComprasDosClientesCitadosNaPergunta: historicosClientesCitados,
     pedidosEVendasRegistradosPorEleNoSistema: resumoPedidos,
     metaDoMesDele: vendedorAtual ? vendedorAtual.metaMes : null,
-    catalogoCompletoDeProdutos: (STATE.catalogoSkus||[]).map(s => ({codigo:s.codigo, descricao:s.descricao})),
+    ...(catalogoCompleto ? {catalogoCompletoDeProdutos: catalogoCompleto} : {}),
   };
 }// prontinho pra listar/buscar/ordenar — usado na aba "Pedidos".
 async function pedidosDoVendedor(vendedorCodigo){

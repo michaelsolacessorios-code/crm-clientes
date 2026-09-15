@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-14-13';
+const APP_VERSION = '2026-09-14-14';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -3517,21 +3517,48 @@ async function renderVendorShell(){
 async function renderVendorAssistenteIA(main){
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Assistente</div><h2>🤖 Pergunte pra IA sobre sua carteira</h2></div>
-    <div class="panel">
-      <p class="hint">Pergunte coisas como: "o que eu ofereço pro cliente Renato Arruda?", "quais clientes meus têm mais crédito livre?", "quais itens mais vendo que estão com bom estoque?". A IA usa sua carteira, o estoque atual e suas vendas dos últimos meses pra responder.</p>
-      <div class="form-row">
+    <div class="panel" style="max-width:760px;">
+      <p class="hint">Pergunte coisas como: "o que eu ofereço pro cliente Renato Arruda?", "quais SKUs o cliente 80 nunca comprou?", "quais clientes meus têm mais crédito livre?". A IA usa sua carteira, o catálogo completo, o estoque atual e o histórico de compras pra responder.</p>
+      <div id="chatIA" style="display:flex; flex-direction:column; gap:12px; margin-bottom:14px;"></div>
+      <div class="form-row" style="margin-bottom:0;">
         <input type="text" id="perguntaIA" placeholder="Digite sua pergunta..." style="flex:1;">
         <button class="primary-btn" id="btnPerguntarIA">Perguntar</button>
       </div>
-      <div id="respostaIA" style="margin-top:14px;"></div>
     </div>
   `;
   const input = document.getElementById('perguntaIA');
-  const box = document.getElementById('respostaIA');
+  const chat = document.getElementById('chatIA');
+
+  function bolhaPergunta(texto){
+    return `<div style="align-self:flex-end; max-width:80%; background:var(--primary); color:#fff; padding:10px 14px; border-radius:14px 14px 2px 14px; font-size:14px;">${texto}</div>`;
+  }
+  function bolhaResposta(html){
+    return `<div style="align-self:flex-start; max-width:90%; background:#F3F1EA; color:var(--ink); padding:12px 16px; border-radius:14px 14px 14px 2px; font-size:14px; line-height:1.6; white-space:pre-wrap;">${html}</div>`;
+  }
+  function bolhaCarregando(){
+    return `<div id="bolhaCarregando" style="align-self:flex-start; color:var(--ink-faint); font-size:13px; padding:4px 4px;">Pensando...</div>`;
+  }
+
+  // Separa o texto normal do bloco de tabela (se a IA mandou) pra oferecer download em Excel.
+  function processarResposta(textoCompleto){
+    const match = textoCompleto.match(/```tabela\s*([\s\S]*?)```/);
+    if(!match) return {texto: textoCompleto.trim(), tabela: null};
+    const texto = textoCompleto.replace(match[0], '').trim();
+    try{
+      const tabela = JSON.parse(match[1].trim());
+      return {texto, tabela: Array.isArray(tabela) && tabela.length ? tabela : null};
+    }catch(e){
+      return {texto, tabela: null};
+    }
+  }
+
   const perguntar = async () => {
     const pergunta = input.value.trim();
     if(!pergunta) return;
-    box.innerHTML = `<div class="hint">Pensando...</div>`;
+    chat.insertAdjacentHTML('beforeend', bolhaPergunta(pergunta));
+    chat.insertAdjacentHTML('beforeend', bolhaCarregando());
+    input.value = '';
+    input.disabled = true;
     try{
       const contexto = await montarContextoAssistenteIA(STATE.session.codigo, pergunta);
       const res = await fetch('/api/chat-vendedor', {
@@ -3540,13 +3567,32 @@ async function renderVendorAssistenteIA(main){
       });
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || 'Falha ao consultar a IA.');
-      box.innerHTML = `<div class="panel" style="background:#FAFAF8; white-space:pre-wrap; line-height:1.6;">${data.resposta}</div>`;
+      document.getElementById('bolhaCarregando').remove();
+      const {texto, tabela} = processarResposta(data.resposta);
+      const idBotao = 'btnBaixarTabela'+Date.now();
+      chat.insertAdjacentHTML('beforeend', bolhaResposta(
+        texto + (tabela ? `<div style="margin-top:10px;"><button class="ghost-btn" id="${idBotao}">⬇️ Baixar essa lista em Excel</button></div>` : '')
+      ));
+      if(tabela){
+        document.getElementById(idBotao).onclick = () => {
+          const ws = XLSX.utils.json_to_sheet(tabela);
+          const wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, 'Resposta');
+          XLSX.writeFile(wb, `assistente_ia_${todayStr()}.xlsx`);
+        };
+      }
     }catch(err){
-      box.innerHTML = `<div class="msg err">${err.message}</div>`;
+      document.getElementById('bolhaCarregando').remove();
+      chat.insertAdjacentHTML('beforeend', bolhaResposta(`<span style="color:var(--danger);">${err.message}</span>`));
+    }finally{
+      input.disabled = false;
+      input.focus();
+      chat.scrollTop = chat.scrollHeight;
     }
   };
   document.getElementById('btnPerguntarIA').onclick = perguntar;
   input.onkeydown = (e) => { if(e.key==='Enter') perguntar(); };
+  input.focus();
 }
 
 // Busca o histórico de compras (item a item, últimos 8 meses já processados) de UM cliente específico.
@@ -3607,6 +3653,7 @@ async function montarContextoAssistenteIA(vendedorCodigo, pergunta){
     historicoDeComprasDosClientesCitadosNaPergunta: historicosClientesCitados,
     pedidosEVendasRegistradosPorEleNoSistema: resumoPedidos,
     metaDoMesDele: vendedorAtual ? vendedorAtual.metaMes : null,
+    catalogoCompletoDeProdutos: (STATE.catalogoSkus||[]).map(s => ({codigo:s.codigo, descricao:s.descricao})),
   };
 }// prontinho pra listar/buscar/ordenar — usado na aba "Pedidos".
 async function pedidosDoVendedor(vendedorCodigo){

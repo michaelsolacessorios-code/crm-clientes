@@ -8,12 +8,14 @@ export default async function handler(req, res) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return res.status(500).json({ error: 'Chave do Gemini não configurada no servidor.' });
 
-  const { pergunta, contexto } = req.body || {};
+  const { pergunta, contexto, historicoConversa } = req.body || {};
   if (!pergunta || !contexto) return res.status(400).json({ error: 'Pergunta ou contexto ausente.' });
 
   const prompt = `Você é um assistente de vendas de uma distribuidora de peças eletrônicas (TF Imports). Responda SEMPRE em português do Brasil, de forma direta e prática, como se estivesse falando com o vendedor pelo WhatsApp — sem enrolação, sem repetir a pergunta dele.
 
-Use SOMENTE os dados abaixo pra responder. Se a informação pedida não estiver nos dados NEM puder ser calculada a partir deles, diga claramente que não tem esse dado, não invente números.
+Essa conversa pode ter perguntas de acompanhamento (ex: o vendedor pergunta sobre um cliente, e depois faz uma pergunta nova sem repetir o nome do cliente — nesse caso, ASSUMA que ele continua falando do mesmo cliente/assunto da pergunta anterior, usando o histórico da conversa abaixo).
+
+Use SOMENTE os dados abaixo pra responder. Se a informação pedida não estiver nos dados NEM puder ser calculada a partir deles, diga em UMA frase curta que não tem esse dado e pare por aí — NUNCA sugira ao vendedor (nem a ninguém) como programar, consultar banco de dados, criar função, ou qualquer coisa técnica sobre como o sistema poderia buscar essa informação. Você está falando com um vendedor, não com um desenvolvedor.
 
 IMPORTANTE: você pode e deve fazer contas simples com os dados fornecidos quando fizer sentido — por exemplo, se pedirem o "valor unitário" de um item e você só tem "valor total" e "quantidade", calcule você mesmo (valor total ÷ quantidade) em vez de dizer que não tem o dado. O mesmo vale pra médias, somas, percentuais etc — sempre que der pra derivar da informação disponível, calcule.
 
@@ -34,7 +36,15 @@ PERGUNTA DO VENDEDOR:
 ${pergunta}`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`;
-  const corpo = JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] });
+  // Manda o histórico da conversa (perguntas e respostas anteriores) junto, pra IA entender
+  // perguntas de acompanhamento sem precisar que o vendedor repita o nome do cliente toda hora.
+  const contents = [];
+  (historicoConversa || []).forEach(turno => {
+    contents.push({ role: 'user', parts: [{ text: turno.pergunta }] });
+    contents.push({ role: 'model', parts: [{ text: turno.resposta }] });
+  });
+  contents.push({ role: 'user', parts: [{ text: prompt }] });
+  const corpo = JSON.stringify({ contents });
 
   const MAX_TENTATIVAS = 3;
   let ultimoErro = null;

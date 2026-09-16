@@ -1126,7 +1126,7 @@ async function processarImportacaoBase(linhas, modoSincronizacao){
       if(contato) c.contato = contato;
       if(limiteNum !== null) c.limiteCredito = limiteNum;
       if(saldoNum !== null) c.saldoDevedor = saldoNum;
-      if(modoSincronizacao && vendedorCrm && c.vendedorCodigo !== vendedorCrm.codigo){
+      if(vendedorCrm && c.vendedorCodigo !== vendedorCrm.codigo){
         c.vendedorCodigo = vendedorCrm.codigo;
         reatribuidos++;
       }

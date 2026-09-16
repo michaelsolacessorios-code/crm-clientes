@@ -1147,7 +1147,7 @@ async function processarImportacaoBase(linhas, modoSincronizacao){
       // No modo sincronização, se a planilha diz que esse cliente é de um vendedor cadastrado,
       // ele volta direto pra carteira dele (em vez de ficar esquecido na fila de inativos —
       // isso é o que devolve um cliente pra carteira depois de um "Limpar minha carteira", por exemplo).
-      if(modoSincronizacao && vendedorCrm){
+      if(vendedorCrm)
         inativosPool.splice(inativosPool.indexOf(c), 1);
         inativosByCodigo.delete(codigo);
         c.vendedorCodigo = vendedorCrm.codigo;

@@ -2809,7 +2809,7 @@ async function getContatos(vendedorCodigo){
 }
 // Registra uma única entrada de contato para um cliente específico (função interna, sem lógica de grupo).
 // skusInfo (opcional): {itens:[{codigo,descricao,quantidade}], qtdSkus, qtdUnidades} — vem de um pedido em PDF.
-async function registrarEntradaContato(vendedorCodigo, clientCodigo, obs, vendeu, valor, agendarPara, skusInfo){
+async function registrarEntradaContato(vendedorCodigo, clientCodigo, obs, vendeu, valor, agendarPara, skusInfo, extra){
   const data = await getContatos(vendedorCodigo);
   const hist = data[clientCodigo]?.historico || [];
   hist.unshift({
@@ -2820,6 +2820,7 @@ async function registrarEntradaContato(vendedorCodigo, clientCodigo, obs, vendeu
     valor: vendeu ? (Number(valor)||0) : 0,
     agendou: agendarPara || null,
     skus: (vendeu && skusInfo) ? skusInfo : null,
+    ...(extra || {}),
   });
   data[clientCodigo] = {ultimoContato: todayStr(), historico: hist.slice(0,30), agendadoPara: agendarPara || null};
   STATE.contatosCache[vendedorCodigo] = data;
@@ -2958,11 +2959,84 @@ async function marcarContato(vendedorCodigo, clientCodigo, obs, vendeu, valor, a
       if(!membro) continue; // esse CNPJ do grupo ainda não está em nenhuma carteira — não dá pra registrar
       const ehOMesmo = membroCodigo === clientCodigo;
       const obsFinal = ehOMesmo ? obs : `Venda rateada automaticamente (CNPJ vinculado a ${nomeOrigem})${obs ? ' — '+obs : ''}`;
-      await registrarEntradaContato(membro.vendedorCodigo, membroCodigo, obsFinal, true, valorRateado, ehOMesmo ? agendarPara : null, ehOMesmo ? skusInfo : null);
+      await registrarEntradaContato(membro.vendedorCodigo, membroCodigo, obsFinal, true, valorRateado, ehOMesmo ? agendarPara : null, ehOMesmo ? skusInfo : null, {rateioGrupo:true, valorOriginal:(Number(valor)||0)});
     }
     return;
   }
   await registrarEntradaContato(vendedorCodigo, clientCodigo, obs, vendeu, valor, agendarPara, skusInfo);
+}
+
+// Ao CRIAR um vínculo, aplica retroativamente o rateio nos pedidos JÁ lançados no mês atual
+// pelos clientes que ainda não pertenciam a nenhum grupo: divide o valor igualmente entre todos
+// os membros e marca todos como contatados. Aditivo e sem perda: guarda o valor original em
+// `valorOriginal`, marca a entrada com `rateioGrupo` (nunca ratear duas vezes) e não apaga nada.
+// Retorna quantos pedidos foram rateados.
+async function ratearPedidosDoMesNoVinculo(membrosGrupo, jaAgrupadosAntes){
+  const mk = currentMonthKey();
+  const novos = membrosGrupo.filter(m => !jaAgrupadosAntes.has(m));
+  if(novos.length === 0 || membrosGrupo.length < 2) return 0;
+  const nomeDe = (cod) => (STATE.roster.find(c=>c.codigo===cod)||{}).nome || ('Cliente Nº '+cod);
+
+  // Lê sempre fresco do banco (evita sobrescrever com cópia velha) e acumula por vendedor.
+  const dadosPorVendedor = new Map();
+  async function dadosDoVendedor(vc){
+    if(!dadosPorVendedor.has(vc)) dadosPorVendedor.set(vc, (await safeGet('crm:contatos:'+vc)) || {});
+    return dadosPorVendedor.get(vc);
+  }
+
+  // 1) Foto dos pedidos a ratear (antes de mexer em qualquer coisa).
+  const alvos = [];
+  for(const cod of novos){
+    const cli = STATE.roster.find(c=>c.codigo===cod);
+    if(!cli || !cli.vendedorCodigo) continue;
+    const dados = await dadosDoVendedor(cli.vendedorCodigo);
+    const hist = (dados[cod] && dados[cod].historico) || [];
+    hist.forEach(h => {
+      if(h.vendeu && (h.valor||0) > 0 && h.data && h.data.slice(0,7)===mk && !h.rateioGrupo){
+        alvos.push({origem:cod, vendedor:cli.vendedorCodigo, entrada:h});
+      }
+    });
+  }
+  if(alvos.length === 0) return 0;
+
+  // 2) Aplica: reduz o pedido de origem e cria a parte de cada outro membro.
+  let feitos = 0;
+  for(const a of alvos){
+    const parte = Math.round(((a.entrada.valor||0) / membrosGrupo.length) * 100) / 100;
+    a.entrada.valorOriginal = a.entrada.valor;
+    a.entrada.valor = parte;
+    a.entrada.rateioGrupo = true;
+    for(const outro of membrosGrupo){
+      if(outro === a.origem) continue;
+      const cliOutro = STATE.roster.find(c=>c.codigo===outro);
+      if(!cliOutro || !cliOutro.vendedorCodigo) continue; // ainda não está em nenhuma carteira
+      const dadosOutro = await dadosDoVendedor(cliOutro.vendedorCodigo);
+      const regOutro = dadosOutro[outro] || {};
+      const histOutro = regOutro.historico || [];
+      histOutro.push({
+        id: 'h'+Date.now().toString(36)+Math.random().toString(36).slice(2,7),
+        data: a.entrada.data,
+        obs: `Venda rateada automaticamente (CNPJ vinculado a ${nomeDe(a.origem)})`,
+        vendeu: true,
+        valor: parte,
+        agendou: null,
+        skus: null,
+        rateioGrupo: true,
+        valorOriginal: a.entrada.valorOriginal,
+      });
+      histOutro.sort((x,y) => String(y.data||'').localeCompare(String(x.data||'')));
+      const ultimo = [regOutro.ultimoContato, a.entrada.data].filter(Boolean).sort().pop();
+      dadosOutro[outro] = {...regOutro, ultimoContato: ultimo, historico: histOutro.slice(0,30), agendadoPara: regOutro.agendadoPara || null};
+    }
+    feitos++;
+  }
+
+  // 3) Salva cada vendedor uma vez e atualiza o cache.
+  for(const [vc, dados] of dadosPorVendedor){
+    STATE.contatosCache[vc] = dados;
+    await safeSet('crm:contatos:'+vc, dados);
+  }
+  return feitos;
 }
 
 async function editarContato(vendedorCodigo, clientCodigo, entryId, obs, vendeu, valor){
@@ -5836,7 +5910,7 @@ async function abrirModalVincularCNPJ(){
   backdrop.innerHTML = `
     <div class="modal" style="max-width:480px; max-height:82vh; overflow-y:auto;">
       <h3>Vincular clientes do mesmo grupo</h3>
-      <p style="font-size:12.5px; color:var(--ink-soft); margin-bottom:14px; line-height:1.5;">Se dois ou mais CNPJs são na prática o mesmo cliente, vincule eles aqui. A partir daí, toda venda registrada pra qualquer um divide o valor entre todos e marca todos como contatados no dia — mesmo que sejam de vendedores diferentes.</p>
+      <p style="font-size:12.5px; color:var(--ink-soft); margin-bottom:14px; line-height:1.5;">Se dois ou mais CNPJs são na prática o mesmo cliente, vincule eles aqui. Os pedidos do mês já lançados também são divididos na hora entre todos, e daí em diante toda venda registrada pra qualquer um divide o valor e marca todos como contatados — mesmo que sejam de vendedores diferentes.</p>
       <input type="text" class="search-input" id="buscaVinculoModal" placeholder="Buscar por nome, CNPJ ou nº..." style="margin-bottom:10px;">
       <div id="resultadoBuscaVinculoModal" style="display:flex; flex-direction:column; gap:6px; margin-bottom:10px;"></div>
       <button class="primary-btn" id="btnCriarVinculoModal" style="display:none;">Vincular selecionados</button>
@@ -5848,8 +5922,10 @@ async function abrirModalVincularCNPJ(){
     </div>
   `;
   document.body.appendChild(backdrop);
-  backdrop.onclick = (e) => { if(e.target===backdrop) backdrop.remove(); };
-  backdrop.querySelector('#fecharVinculoModal').onclick = () => backdrop.remove();
+  let recarregarAoFecharVinculo = false; // se o vínculo rateou pedidos, recarrega a carteira ao fechar
+  const fecharModalVinculo = () => { backdrop.remove(); if(recarregarAoFecharVinculo) location.reload(); };
+  backdrop.onclick = (e) => { if(e.target===backdrop) fecharModalVinculo(); };
+  backdrop.querySelector('#fecharVinculoModal').onclick = fecharModalVinculo;
 
   const selecionados = new Set();
   const buscaInput = backdrop.querySelector('#buscaVinculoModal');
@@ -5907,6 +5983,7 @@ async function abrirModalVincularCNPJ(){
     const membros = Array.from(selecionados);
     if(membros.length < 2){ msg.innerHTML = `<div class="msg err">Selecione ao menos 2 clientes.</div>`; return; }
     let membrosFinais = new Set(membros);
+    const jaAgrupadosAntes = new Set((STATE.grupos||[]).flatMap(g => g.membros));
     STATE.grupos = (STATE.grupos||[]).filter(g => {
       const temIntersecao = g.membros.some(m => membrosFinais.has(m));
       if(temIntersecao){ g.membros.forEach(m => membrosFinais.add(m)); return false; }
@@ -5914,7 +5991,9 @@ async function abrirModalVincularCNPJ(){
     });
     STATE.grupos.push({id:'g'+Date.now(), membros: Array.from(membrosFinais)});
     await safeSet('crm:grupos', STATE.grupos);
-    msg.innerHTML = `<div class="msg ok">Vínculo criado entre ${membrosFinais.size} clientes.</div>`;
+    const pedidosRateados = await ratearPedidosDoMesNoVinculo(Array.from(membrosFinais), jaAgrupadosAntes);
+    if(pedidosRateados > 0) recarregarAoFecharVinculo = true;
+    msg.innerHTML = `<div class="msg ok">Vínculo criado entre ${membrosFinais.size} clientes.${pedidosRateados>0 ? ` ${pedidosRateados} pedido(s) do mês foram rateados e os clientes marcados como contatados.` : ''}</div>`;
     selecionados.clear();
     buscaInput.value = '';
     resultadoDiv.innerHTML = '';
@@ -7247,6 +7326,7 @@ async function renderManagerAdmin(main){
     if(membros.length < 2){ msg.innerHTML = `<div class="msg err">Selecione ao menos 2 clientes.</div>`; return; }
     // Se algum dos selecionados já está em outro grupo, funde os grupos.
     let membrosFinais = new Set(membros);
+    const jaAgrupadosAntes = new Set((STATE.grupos||[]).flatMap(g => g.membros));
     STATE.grupos = (STATE.grupos||[]).filter(g => {
       const temIntersecao = g.membros.some(m => membrosFinais.has(m));
       if(temIntersecao){ g.membros.forEach(m => membrosFinais.add(m)); return false; }
@@ -7254,7 +7334,8 @@ async function renderManagerAdmin(main){
     });
     STATE.grupos.push({id:'g'+Date.now(), membros: Array.from(membrosFinais)});
     await safeSet('crm:grupos', STATE.grupos);
-    msg.innerHTML = `<div class="msg ok">Vínculo criado entre ${membrosFinais.size} clientes.</div>`;
+    const pedidosRateados = await ratearPedidosDoMesNoVinculo(Array.from(membrosFinais), jaAgrupadosAntes);
+    msg.innerHTML = `<div class="msg ok">Vínculo criado entre ${membrosFinais.size} clientes.${pedidosRateados>0 ? ` ${pedidosRateados} pedido(s) do mês foram rateados e os clientes marcados como contatados.` : ''}</div>`;
     selecionadosVinculo.clear();
     buscaVinculoInput.value = '';
     renderManagerAdmin(main);

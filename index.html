@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-24-01';
+const APP_VERSION = '2026-09-24-03';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -3547,7 +3547,7 @@ function sidebarHTML(items){
     : STATE.session.tipo==='gerente' ? (STATE.config.fotoGerente || null)
     : STATE.session.tipo==='financeiro' ? (STATE.config.fotoFinanceiro || null)
     : STATE.session.tipo==='compras' ? (STATE.config.fotoCompras || null)
-    : STATE.session.tipo==='garantia' ? ((STATE.contaGarantia||{}).foto || null)
+    : STATE.session.tipo==='garantia' ? (STATE.session.foto || null)
     : null;
   return `
     <div class="sidebar">
@@ -6537,72 +6537,115 @@ function renderManagerVendorDetail(main){
   draw();
 }
 
-// Credenciais do usuário Garantia ficam numa chave própria (crm:garantia_conta), separada da
-// crm:config — assim nenhuma tela antiga aberta que salve a config consegue apagar esse acesso.
+// Usuários de Garantia ficam numa chave própria (crm:garantia_contas — uma lista, pode ter
+// várias pessoas), separada da crm:config — assim nenhuma tela antiga aberta que salve a config
+// consegue apagar esses acessos. Não existe usuário nem senha padrão.
 async function desenharPainelContaGarantia(main){
   const painel = document.getElementById('painelContaGarantia');
   if(!painel) return;
-  let conta;
-  try{ conta = (await safeGetCritico('crm:garantia_conta')) || {}; }
-  catch(err){ painel.innerHTML = `<h3>Usuário de Garantia (conferência)</h3><div class="msg err">${err.message}</div>`; return; }
-  STATE.contaGarantia = conta;
+  let contas;
+  try{ contas = (await safeGetCritico('crm:garantia_contas')) || []; }
+  catch(err){ painel.innerHTML = `<h3>Usuários de Garantia (conferência)</h3><div class="msg err">${err.message}</div>`; return; }
+  STATE.contasGarantia = contas;
+  const avatar = (c) => c.foto
+    ? `<img src="${c.foto}" alt="${gEsc(c.nome)}" style="width:38px; height:38px; border-radius:50%; object-fit:cover;">`
+    : `<div class="whoami-avatar whoami-avatar-fallback" style="width:38px; height:38px; background:var(--border); color:var(--ink-faint); font-size:14px;">${gEsc((c.nome||'?')[0].toUpperCase())}</div>`;
   painel.innerHTML = `
-    <h3>Usuário de Garantia (conferência)</h3>
-    <p class="hint">Esse usuário só tem acesso à aba Garantia — vê as garantias já autorizadas em que o cliente envia a mercadoria de volta, confere item a item (veio / não veio, estoque ou descarte) e marca quando lançou no sistema. Não tem senha padrão: só consegue entrar depois que você definir a senha aqui.</p>
-    <div class="form-row" style="align-items:center;">
-      ${conta.foto ? `<img src="${conta.foto}" alt="${gEsc(conta.nome||'Garantia')}" style="width:46px; height:46px; border-radius:50%; object-fit:cover; flex-shrink:0;">` : `<div class="whoami-avatar whoami-avatar-fallback" style="width:46px; height:46px; flex-shrink:0; background:var(--border); color:var(--ink-faint);">${gEsc((conta.nome||'?')[0].toUpperCase())}</div>`}
-      <input type="file" id="f_foto_garantia" accept="image/*" style="max-width:220px;">
-    </div>
+    <h3>Usuários de Garantia (conferência)</h3>
+    <p class="hint">Cada pessoa tem o próprio acesso (o histórico da garantia mostra quem conferiu). Eles só veem a aba Garantia: garantias autorizadas em que o cliente envia a mercadoria, conferência item a item e a marcação de "lançada no sistema". Não existe senha padrão.</p>
+    ${contas.length ? `
+      <table class="cred-table" style="margin-bottom:16px;">
+        <thead><tr><th>Foto</th><th>Nome</th><th>Usuário</th><th>Nova senha</th><th></th></tr></thead>
+        <tbody>
+          ${contas.map(c => `
+            <tr style="${c.bloqueado ? 'opacity:.55;' : ''}">
+              <td style="white-space:nowrap;">${avatar(c)}<br><label style="font-size:11px; color:var(--primary); cursor:pointer;">trocar<input type="file" accept="image/*" data-foto="${c.id}" style="display:none;"></label></td>
+              <td><input data-campo="nome" data-id="${c.id}" value="${gEsc(c.nome||'')}"></td>
+              <td><input data-campo="usuario" data-id="${c.id}" value="${gEsc(c.usuario||'')}"></td>
+              <td><input data-campo="senha" data-id="${c.id}" placeholder="em branco = mantém"></td>
+              <td style="white-space:nowrap;">
+                <button class="primary-btn" data-salvar="${c.id}" style="padding:7px 12px; font-size:13px;">Salvar</button>
+                <button class="ghost-btn" data-bloquear="${c.id}" style="padding:7px 10px; font-size:12.5px;">${c.bloqueado ? 'Desbloquear' : 'Bloquear'}</button>
+                ${c.bloqueado ? '<div style="font-size:11px; color:var(--danger);">bloqueado</div>' : ''}
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>` : `<div class="empty-state" style="padding:20px; margin-bottom:14px;">Nenhum usuário de garantia ainda.</div>`}
+    <div style="font-size:13px; font-weight:600; color:var(--ink-soft); margin-bottom:8px;">+ Cadastrar novo usuário de garantia</div>
     <div class="form-row">
-      <input type="text" id="novoNomeGarantia" placeholder="Nome" value="${gEsc(conta.nome || '')}">
-      <input type="text" id="novoUsuarioGarantia" placeholder="Usuário" value="${gEsc(conta.usuario || '')}">
-      <input type="text" id="novaSenhaGarantia" placeholder="${conta.senha ? 'Deixe em branco pra manter a atual' : 'Senha (obrigatória no 1º cadastro)'}">
-      <button class="primary-btn" id="btnSalvarGarantia">Salvar</button>
+      <input type="text" id="novoNomeGarantia" placeholder="Nome">
+      <input type="text" id="novoUsuarioGarantia" placeholder="Usuário">
+      <input type="text" id="novaSenhaGarantia" placeholder="Senha">
+      <button class="primary-btn" id="btnCriarGarantia">Cadastrar</button>
     </div>
     <div id="msgGarantiaConta"></div>
   `;
-  async function salvarConta(campos){
-    const atual = (await safeGetCritico('crm:garantia_conta')) || {};
-    Object.assign(atual, campos);
-    if(!(await safeSet('crm:garantia_conta', atual))) throw new Error('Não consegui salvar. Tente de novo.');
-    STATE.contaGarantia = atual;
-  }
-  document.getElementById('btnSalvarGarantia').onclick = async () => {
-    const nome = document.getElementById('novoNomeGarantia').value.trim();
-    const usuario = document.getElementById('novoUsuarioGarantia').value.trim().toLowerCase();
-    const senha = document.getElementById('novaSenhaGarantia').value.trim();
-    const msg = document.getElementById('msgGarantiaConta');
-    if(!usuario){ msg.innerHTML = `<div class="msg err">Preencha o usuário.</div>`; return; }
-    if(!senha && !conta.senha){ msg.innerHTML = `<div class="msg err">Defina uma senha para o primeiro acesso.</div>`; return; }
-    const emUsoPorOutro =
-      (STATE.config.usuarioGerente||GERENTE_USUARIO_PADRAO)===usuario ||
+  const msg = () => document.getElementById('msgGarantiaConta');
+  function usuarioEmUso(usuario, ignorarId){
+    return (STATE.config.usuarioGerente||GERENTE_USUARIO_PADRAO)===usuario ||
       (STATE.config.usuarioFinanceiro||'financeiro')===usuario ||
       (STATE.config.usuarioCompras||'roberto')===usuario ||
       (STATE.diretores||[]).some(d=>d.usuario===usuario) ||
-      STATE.vendors.some(v=>v.usuario===usuario);
-    if(emUsoPorOutro){ msg.innerHTML = `<div class="msg err">Esse nome de usuário já está em uso por outra conta.</div>`; return; }
+      STATE.vendors.some(v=>v.usuario===usuario) ||
+      contas.some(c => c.usuario===usuario && c.id!==ignorarId);
+  }
+  // Sempre lê a lista fresca do banco antes de gravar e mexe só no usuário em questão.
+  async function alterarConta(id, mutar){
+    const atual = (await safeGetCritico('crm:garantia_contas')) || [];
+    mutar(atual);
+    if(!(await safeSet('crm:garantia_contas', atual))) throw new Error('Não consegui salvar. Tente de novo.');
+    STATE.contasGarantia = atual;
+  }
+  async function redesenharComMsg(texto, erro){
+    await desenharPainelContaGarantia(main);
+    const m = msg(); if(m) m.innerHTML = `<div class="msg ${erro?'err':'ok'}">${texto}</div>`;
+  }
+  document.getElementById('btnCriarGarantia').onclick = async () => {
+    const nome = document.getElementById('novoNomeGarantia').value.trim();
+    const usuario = document.getElementById('novoUsuarioGarantia').value.trim().toLowerCase();
+    const senha = document.getElementById('novaSenhaGarantia').value.trim();
+    if(!nome || !usuario || !senha){ msg().innerHTML = `<div class="msg err">Preencha nome, usuário e senha.</div>`; return; }
+    if(usuarioEmUso(usuario, null)){ msg().innerHTML = `<div class="msg err">Esse nome de usuário já está em uso por outra conta.</div>`; return; }
     try{
-      const campos = {nome: nome || 'Garantia', usuario};
-      if(senha) campos.senha = await hashSenha(senha);
-      await salvarConta(campos);
-      desenharPainelContaGarantia(main).then(() => {
-        const m = document.getElementById('msgGarantiaConta');
-        if(m) m.innerHTML = `<div class="msg ok">Credenciais do usuário de garantia salvas.</div>`;
-      });
-    }catch(err){
-      msg.innerHTML = `<div class="msg err">${err.message}</div>`;
-    }
+      const hash = await hashSenha(senha);
+      await alterarConta(null, lista => { lista.push({id: 'gar'+genId(), nome, usuario, senha: hash, foto: null, bloqueado: false, criadoEm: new Date().toISOString()}); });
+      redesenharComMsg(`Usuário <b>${gEsc(usuario)}</b> cadastrado.`);
+    }catch(err){ msg().innerHTML = `<div class="msg err">${err.message}</div>`; }
   };
-  document.getElementById('f_foto_garantia').onchange = async () => {
-    const file = document.getElementById('f_foto_garantia').files[0];
-    if(!file) return;
-    try{
-      await salvarConta({foto: await resizeImagemParaBase64(file)});
-      desenharPainelContaGarantia(main);
-    }catch(err){
-      document.getElementById('msgGarantiaConta').innerHTML = `<div class="msg err">Não consegui processar essa imagem.</div>`;
-    }
-  };
+  painel.querySelectorAll('[data-salvar]').forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.salvar;
+      const val = (campo) => painel.querySelector(`input[data-campo="${campo}"][data-id="${id}"]`).value.trim();
+      const nome = val('nome'), usuario = val('usuario').toLowerCase(), senha = val('senha');
+      if(!nome || !usuario){ msg().innerHTML = `<div class="msg err">Nome e usuário não podem ficar vazios.</div>`; return; }
+      if(usuarioEmUso(usuario, id)){ msg().innerHTML = `<div class="msg err">Esse nome de usuário já está em uso por outra conta.</div>`; return; }
+      try{
+        const hash = senha ? await hashSenha(senha) : null;
+        await alterarConta(id, lista => { const c = lista.find(x => x.id === id); if(c){ c.nome = nome; c.usuario = usuario; if(hash) c.senha = hash; } });
+        redesenharComMsg(`Usuário <b>${gEsc(usuario)}</b> atualizado.`);
+      }catch(err){ msg().innerHTML = `<div class="msg err">${err.message}</div>`; }
+    };
+  });
+  painel.querySelectorAll('[data-bloquear]').forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.bloquear;
+      try{
+        let novo = false;
+        await alterarConta(id, lista => { const c = lista.find(x => x.id === id); if(c){ c.bloqueado = !c.bloqueado; novo = c.bloqueado; } });
+        redesenharComMsg(novo ? 'Acesso bloqueado (o cadastro fica guardado; dá pra desbloquear depois).' : 'Acesso desbloqueado.');
+      }catch(err){ msg().innerHTML = `<div class="msg err">${err.message}</div>`; }
+    };
+  });
+  painel.querySelectorAll('[data-foto]').forEach(inp => {
+    inp.onchange = async () => {
+      const file = inp.files[0]; if(!file) return;
+      try{
+        const foto = await resizeImagemParaBase64(file);
+        await alterarConta(inp.dataset.foto, lista => { const c = lista.find(x => x.id === inp.dataset.foto); if(c) c.foto = foto; });
+        redesenharComMsg('Foto atualizada.');
+      }catch(err){ msg().innerHTML = `<div class="msg err">Não consegui processar essa imagem.</div>`; }
+    };
+  });
 }
 
 function renderManagerCredenciais(main){
@@ -6745,7 +6788,7 @@ function renderManagerCredenciais(main){
     </div>
 
     <div class="panel" id="painelContaGarantia">
-      <h3>Usuário de Garantia (conferência)</h3>
+      <h3>Usuários de Garantia (conferência)</h3>
       <p class="hint">Carregando…</p>
     </div>
   `;
@@ -7030,7 +7073,7 @@ async function baixarBackupCompleto(botao){
 // Junta tudo que existe de importante no sistema num objeto só (usado tanto pro backup manual
 // quanto pro automático).
 async function montarSnapshotCompleto(){
-  const chaves = ['crm:vendors','crm:roster','crm:inativos','crm:leads','crm:config','crm:diretores','crm:catalogo_skus','crm:promocao','crm:financeiro','crm:lixeira','crm:correcoes_vendedor','crm:categorias','crm:garantia_conta'];
+  const chaves = ['crm:vendors','crm:roster','crm:inativos','crm:leads','crm:config','crm:diretores','crm:catalogo_skus','crm:promocao','crm:financeiro','crm:lixeira','crm:correcoes_vendedor','crm:categorias','crm:garantia_contas'];
   STATE.vendors.forEach(v => chaves.push('crm:contatos:'+v.codigo));
   const backup = {geradoEm: new Date().toISOString(), dados: {}};
   for(const chave of chaves){
@@ -7949,7 +7992,128 @@ function detalheCalculoHTML(g, calc){
 }
 
 // ---------- Leitura do PDF ----------
+// 1º tenta ler o texto do próprio PDF, direto no navegador (rápido, sem IA, não depende do
+// Google estar disponível). Só se não conseguir (PDF escaneado / layout diferente) usa a IA.
+let PDFJS_PROMISE = null;
+function carregarPdfJs(){
+  if(window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if(PDFJS_PROMISE) return PDFJS_PROMISE;
+  PDFJS_PROMISE = new Promise((resolve, reject) => {
+    const sc = document.createElement('script');
+    sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    sc.onload = () => {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      resolve(window.pdfjsLib);
+    };
+    sc.onerror = () => { PDFJS_PROMISE = null; reject(new Error('Não consegui carregar o leitor de PDF.')); };
+    document.head.appendChild(sc);
+  });
+  return PDFJS_PROMISE;
+}
+async function lerTextoDoPdf(file){
+  const pdfjs = await carregarPdfJs();
+  const doc = await pdfjs.getDocument({data: new Uint8Array(await file.arrayBuffer())}).promise;
+  const paginas = [];
+  for(let n = 1; n <= doc.numPages; n++){
+    const tc = await (await doc.getPage(n)).getTextContent();
+    paginas.push({itens: tc.items.map(i => ({s: i.str, x: i.transform[4], y: i.transform[5]}))});
+  }
+  return paginas;
+}
+// Leitura direta do texto do PDF do orçamento (sem IA). Recebe as páginas no formato
+// [{itens:[{s, x, y}]}] (y cresce para cima, como no PDF).
+function interpretarOrcamentoGarantia(paginas){
+  const moneyRe = /R\$\s*([\d.]+,\d{2})/;
+  const brNum = (t) => { const n = Number(String(t).replace(/\./g,'').replace(',','.')); return isFinite(n) ? n : 0; };
+  const todos = [];
+  paginas.forEach((p, pi) => p.itens.forEach(i => { if(i.s && i.s.trim()) todos.push({s:i.s.trim(), x:i.x, y:i.y, p:pi}); }));
+  const pag1 = todos.filter(i => i.p === 0);
+  const acharTexto = (re, lista=todos) => { for(const i of lista){ const m = i.s.match(re); if(m) return m; } return null; };
+
+  function valorDoRotulo(rotuloRe, lista=pag1){
+    const it = lista.find(i => rotuloRe.test(i.s));
+    if(!it) return null;
+    const resto = it.s.replace(rotuloRe, '');
+    let m = resto.match(moneyRe);
+    if(m) return brNum(m[1]);
+    // mesmo "linha" à direita
+    const direita = lista.filter(o => o !== it && Math.abs(o.y - it.y) <= 2.5 && o.x > it.x && moneyRe.test(o.s)).sort((a,b) => a.x - b.x)[0];
+    if(direita) return brNum(direita.s.match(moneyRe)[1]);
+    // logo abaixo, mesma coluna
+    const abaixo = lista.filter(o => o !== it && o.y < it.y && it.y - o.y <= 20 && Math.abs(o.x - it.x) <= 30 && moneyRe.test(o.s)).sort((a,b) => b.y - a.y)[0];
+    if(abaixo) return brNum(abaixo.s.match(moneyRe)[1]);
+    return null;
+  }
+
+  const r = {numeroOrcamento:'', clienteCodigo:'', clienteNome:'', cnpj:'', municipio:'', uf:'', consultor:'', valorTotal:0, valorIpi:0, valorSt:0, itens:[]};
+  let m;
+  if((m = acharTexto(/Cliente:\s*(\d+)\s*-\s*(.+)$/i, pag1))){ r.clienteCodigo = m[1]; r.clienteNome = m[2].trim(); }
+  if((m = acharTexto(/Or[çc]amento:\s*(\d+)/i, pag1))) r.numeroOrcamento = m[1];
+  if((m = acharTexto(/CNPJ\s*\/\s*CPF:\s*([\d./-]+)/i, pag1))) r.cnpj = m[1];
+  // O primeiro "UF:" / "Município:" (de cima pra baixo) é o do cliente; o de baixo é do endereço de entrega.
+  const deCimaPraBaixo = [...pag1].sort((a,b) => b.y - a.y);
+  if((m = acharTexto(/^UF:\s*([A-Z]{2})\b/i, deCimaPraBaixo))) r.uf = m[1].toUpperCase();
+  if((m = acharTexto(/^Munic[íi]pio:\s*(.+)$/i, deCimaPraBaixo))) r.municipio = m[1].trim();
+  const cons = pag1.find(i => /^Consultor:?$/i.test(i.s));
+  if(cons){
+    const abaixo = pag1.filter(o => o.y < cons.y && cons.y - o.y <= 15 && Math.abs(o.x - cons.x) <= 10).sort((a,b) => b.y - a.y)[0];
+    if(abaixo) r.consultor = abaixo.s;
+  } else if((m = acharTexto(/Consultor:\s*(.+)$/i, pag1))) r.consultor = m[1].trim();
+  r.valorTotal = valorDoRotulo(/^Total:?/i) || 0;
+  r.valorIpi = valorDoRotulo(/^Valor IPI:?/i) || 0;
+  r.valorSt = valorDoRotulo(/^Valor ICMS ST:?/i) || 0;
+
+  // Itens: em cada página, acha o cabeçalho da tabela e usa as posições das colunas.
+  paginas.forEach((p, pi) => {
+    const itens = todos.filter(i => i.p === pi);
+    const hProd = itens.find(i => /^Produto$/i.test(i.s));
+    if(!hProd) return;
+    const naLinha = (re) => itens.find(i => re.test(i.s) && Math.abs(i.y - hProd.y) <= 3);
+    const hItem = naLinha(/^Item$/i), hDesc = naLinha(/^Descri[çc][ãa]o$/i), hQtd = naLinha(/^Quantidade$/i), hUnit = naLinha(/^Unit[áa]rio$/i), hTot = naLinha(/^Total$/i);
+    if(!hDesc || !hQtd || !hUnit || !hTot) return;
+    const cols = [
+      {k:'item', x: hItem ? hItem.x : 0},
+      {k:'descricao', x: hDesc.x},
+      {k:'codigo', x: hProd.x},
+      {k:'quantidade', x: hQtd.x},
+      {k:'unitario', x: hUnit.x},
+      {k:'total', x: hTot.x},
+    ].sort((a,b) => a.x - b.x);
+    const limites = cols.map((c, idx) => ({k:c.k, ini: idx === 0 ? -Infinity : c.x - 20, fim: idx === cols.length-1 ? Infinity : cols[idx+1].x - 20}));
+    const colunaDe = (x) => { const l = limites.find(l => x >= l.ini && x < l.fim); return l ? l.k : null; };
+    const fimTabela = itens.filter(i => /ENDERE[ÇC]O DE ENTREGA|^Observa[çc]/i.test(i.s) && i.y < hProd.y).sort((a,b) => b.y - a.y)[0];
+    const yMin = fimTabela ? fimTabela.y : -Infinity;
+    const corpo = itens.filter(i => i.y < hProd.y - 3 && i.y > yMin);
+    // Âncora de cada linha: um código de produto na coluna "Produto" que tenha quantidade na mesma altura.
+    const ancoras = corpo.filter(i => colunaDe(i.x) === 'codigo' && /^[A-Z0-9][A-Z0-9.\-\/]*$/i.test(i.s)).sort((a,b) => b.y - a.y);
+    ancoras.forEach((a, idx) => {
+      const mesmaLinha = corpo.filter(o => Math.abs(o.y - a.y) <= 2.5);
+      const pega = (k) => mesmaLinha.filter(o => colunaDe(o.x) === k).sort((x,y) => x.x - y.x).map(o => o.s).join(' ');
+      const qtdTxt = pega('quantidade'), unitTxt = pega('unitario'), totTxt = pega('total');
+      if(!/\d/.test(qtdTxt)) return;
+      // descrição: linha da âncora + linhas de continuação até a próxima âncora
+      const proxY = idx+1 < ancoras.length ? ancoras[idx+1].y : yMin;
+      const descLinhas = corpo.filter(o => colunaDe(o.x) === 'descricao' && o.y <= a.y + 2.5 && o.y > proxY + 2.5).sort((x,y) => y.y - x.y).map(o => o.s);
+      const qtd = brNum((qtdTxt.match(/[\d.]+,\d+|\d+/)||['0'])[0]);
+      const unit = brNum((unitTxt.match(/[\d.]+,\d{2}/)||['0'])[0]);
+      const tot = brNum((totTxt.match(/[\d.]+,\d{2}/)||['0'])[0]);
+      r.itens.push({codigo: a.s, descricao: descLinhas.join(' ').slice(0, 80), quantidade: qtd, unitario: unit, total: tot || Math.round(qtd*unit*100)/100});
+    });
+  });
+  return r;
+}
+
 async function extrairGarantiaDoPdf(file){
+  try{
+    const lido = interpretarOrcamentoGarantia(await lerTextoDoPdf(file));
+    if(lido.clienteCodigo && lido.valorTotal > 0 && lido.itens.length){
+      lido.uf = (lido.uf||'').toUpperCase().slice(0,2);
+      return lido;
+    }
+  }catch(e){ console.warn('leitura direta do PDF falhou, tentando com IA', e); }
+  return extrairGarantiaDoPdfComIA(file);
+}
+async function extrairGarantiaDoPdfComIA(file){
   const base64 = await lerPdfComoBase64(file);
   const prompt = 'Analise este PDF de ORCAMENTO de venda. Leia TODAS as paginas. Responda APENAS com um JSON valido, compacto, sem texto antes ou depois, exatamente neste formato: {"numeroOrcamento":"","clienteCodigo":"","clienteNome":"","cnpj":"","municipio":"","uf":"","consultor":"","valorTotal":0,"valorIpi":0,"valorIcmsSt":0,"itens":[["codigo","descricao",0,0,0]]}. numeroOrcamento: o numero no campo "Orcamento:" (so o numero). clienteCodigo e clienteNome: o campo "Cliente:" vem no formato "numero - nome" (exemplo "Cliente: 18434 - INOX CAMPINAS LTDA H" -> clienteCodigo "18434", clienteNome "INOX CAMPINAS LTDA H"). cnpj: o CNPJ/CPF do cliente como aparece. municipio e uf: do cliente (uf = sigla de 2 letras maiusculas, campo "UF:"). consultor: nome no campo "Consultor". valorTotal: o campo "Total" das condicoes comerciais (valor final do orcamento). valorIpi: campo "Valor IPI". valorIcmsSt: campo "Valor ICMS ST". Valores como numero puro (sem R$, sem ponto de milhar, ponto como decimal; ex: "R$ 1.270,04" -> 1270.04); se o campo nao existir use 0. Cada item de "itens" e um array: [0]=codigo do produto (coluna "Produto"), [1]=descricao resumida (max 60 caracteres), [2]=quantidade (numero), [3]=valor unitario (numero), [4]=valor total do item (numero). Inclua TODOS os itens de TODAS as paginas.';
   const response = await fetch('/api/analisar-pedido', {

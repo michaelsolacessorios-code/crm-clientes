@@ -111,6 +111,21 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: false, message: 'Senha incorreta.' });
     }
 
+    // Garantia (recebe e confere a mercadoria devolvida). Fica numa chave própria
+    // (crm:garantia_conta) e não tem usuário nem senha padrão: só passa a existir depois que o
+    // gerente cadastra em Credenciais de acesso.
+    const contaGarantia = (await getKV(SUPABASE_URL, 'crm:garantia_conta', headers)) || {};
+    if (contaGarantia.usuario && usuario === contaGarantia.usuario) {
+      if (contaGarantia.senha && senhaConfere(senha, contaGarantia.senha)) {
+        if (precisaMigrar(contaGarantia.senha)) {
+          contaGarantia.senha = novoHash(senha);
+          await setKV(SUPABASE_URL, 'crm:garantia_conta', contaGarantia, headers);
+        }
+        return res.status(200).json({ ok: true, tipo: 'garantia', nome: contaGarantia.nome || 'Garantia', foto: contaGarantia.foto || null });
+      }
+      return res.status(200).json({ ok: false, message: 'Senha incorreta.' });
+    }
+
     // Vendedor
     const vendedor = vendors.find(v => v.usuario === usuario);
     if (vendedor) {

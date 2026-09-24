@@ -1565,18 +1565,15 @@ function mediaMensalVendaPorSku(){
   return medias;
 }
 
-// modo 'saldo'    → sub-aba Saldo de Estoque (sobe a planilha e mostra o saldo de cada item)
-// modo 'sugestao' → sub-aba Sugestão de Compras (média de venda, cobertura e sugestão)
-async function renderComprasEstoque(main, modo){
-  modo = modo === 'saldo' ? 'saldo' : 'sugestao';
-  const ehSaldo = modo === 'saldo';
+async function renderComprasEstoque(main){
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
   await Promise.all(STATE.vendors.map(v => getContatos(v.codigo)));
   const medias = mediaMensalVendaPorSku();
   const categorias = Array.from(new Set(STATE.estoque.map(i => categorizarItem(i.descricao)))).sort();
 
   main.innerHTML = `
-    ${ehSaldo ? `
+    <div class="page-header"><div class="eyebrow">Compras</div><h2>Saldo de estoque e sugestão de compra</h2></div>
+
     <div class="panel import-panel" style="border-left-color:var(--primary);">
       <div class="import-panel-title"><span class="import-badge" style="background:var(--primary);">+</span><h3>Subir saldo de estoque</h3></div>
       <p class="hint">Planilha com 6 colunas, nessa ordem: <b>Código</b>, <b>Descrição</b>, <b>Saldo</b>, <b>Reserva</b>, <b>Disponível</b>, <b>Previsão</b>. Substitui o estoque atual pelo dessa planilha.</p>
@@ -1585,12 +1582,12 @@ async function renderComprasEstoque(main, modo){
         <button class="primary-btn" id="btnProcessarEstoque">Processar</button>
       </div>
       <div id="msgEstoque"></div>
-    </div>` : ''}
+    </div>
 
-    ${STATE.estoque.length === 0 ? `<div class="empty-state">Nenhum saldo de estoque carregado ainda.${ehSaldo ? '' : ' Suba a planilha na sub-aba <b>Saldo de Estoque</b>.'}</div>` : `
+    ${STATE.estoque.length === 0 ? `<div class="empty-state">Nenhum saldo de estoque carregado ainda.</div>` : `
       <div class="panel">
         <div class="form-row">
-          <div style="${ehSaldo ? 'display:none;' : ''}"><label class="field-label">Cobertura desejada (meses)</label><input type="number" id="mesesCobertura" value="6" min="1" style="width:90px;"></div>
+          <div><label class="field-label">Cobertura desejada (meses)</label><input type="number" id="mesesCobertura" value="6" min="1" style="width:90px;"></div>
           <div><label class="field-label">Categoria</label>
             <select id="filtroCategoria" class="filter-select">
               <option value="">Todas as categorias</option>
@@ -1605,7 +1602,7 @@ async function renderComprasEstoque(main, modo){
     `}
   `;
 
-  if(ehSaldo) document.getElementById('btnProcessarEstoque').onclick = async () => {
+  document.getElementById('btnProcessarEstoque').onclick = async () => {
     const msg = document.getElementById('msgEstoque');
     const file = document.getElementById('f_estoque').files[0];
     if(!file){ msg.innerHTML = `<div class="msg err">Escolha o arquivo primeiro.</div>`; return; }
@@ -1615,7 +1612,7 @@ async function renderComprasEstoque(main, modo){
       STATE.estoque = itens;
       await safeSet('crm:estoque', STATE.estoque);
       msg.innerHTML = `<div class="msg ok">${itens.length} item(ns) carregado(s).</div>`;
-      await renderComprasEstoque(main, modo);
+      await renderComprasEstoque(main);
     }catch(err){
       msg.innerHTML = `<div class="msg err">${err.message}</div>`;
     }
@@ -1640,36 +1637,10 @@ async function renderComprasEstoque(main, modo){
     linhas = linhas.filter(l => l.saldo>0 || l.reserva>0 || l.disponivel>0 || l.previsao>0 || l.media>0);
     if(categoriaFiltro) linhas = linhas.filter(l => l.categoria === categoriaFiltro);
     if(busca) linhas = linhas.filter(l => l.codigo.includes(busca) || (l.descricao||'').toUpperCase().includes(busca));
-    if(ehSaldo) linhas.sort((a,b) => a.codigo.localeCompare(b.codigo));
-    else linhas.sort((a,b) => b.sugestao - a.sugestao);
+    linhas.sort((a,b) => b.sugestao - a.sugestao);
     LINHAS_ESTOQUE_ATUAIS = linhas;
 
     const box = document.getElementById('tabelaEstoque');
-    if(ehSaldo){
-      box.innerHTML = `
-        <div class="panel">
-          <p class="hint">${linhas.length} item(ns) com estoque ou movimento — ordenado por código.</p>
-          <table class="cred-table" style="table-layout:fixed;">
-            <colgroup><col style="width:110px;"><col><col style="width:130px;"><col style="width:75px;"><col style="width:75px;"><col style="width:80px;"><col style="width:80px;"></colgroup>
-            <thead><tr><th>Código</th><th>Descrição</th><th>Categoria</th><th>Saldo</th><th>Reserva</th><th>Disp.</th><th>Previsto</th></tr></thead>
-            <tbody>
-              ${linhas.map(l => `
-                <tr>
-                  <td style="font-size:12px; white-space:nowrap;">${l.codigo}</td>
-                  <td style="font-size:12px;">${l.descricao}</td>
-                  <td style="font-size:11.5px;">${l.categoria}</td>
-                  <td>${l.saldo}</td>
-                  <td>${l.reserva}</td>
-                  <td>${l.disponivel}</td>
-                  <td>${l.previsao}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      `;
-      return;
-    }
     box.innerHTML = `
       <div class="panel">
         <p class="hint">${linhas.length} item(ns) com estoque ou movimento nos últimos 8 meses — ordenado por sugestão de compra (maior primeiro).</p>
@@ -1701,17 +1672,6 @@ async function renderComprasEstoque(main, modo){
   document.getElementById('filtroCategoria').onchange = drawTabela;
   document.getElementById('buscaEstoque').oninput = drawTabela;
   document.getElementById('btnExportarEstoque').onclick = () => {
-    if(ehSaldo){
-      const linhasSaldo = LINHAS_ESTOQUE_ATUAIS.map(l => ({
-        'Código': l.codigo, 'Descrição': l.descricao, 'Categoria': l.categoria,
-        'Saldo': l.saldo, 'Reserva': l.reserva, 'Disponível': l.disponivel, 'Previsão': l.previsao,
-      }));
-      const wsS = XLSX.utils.json_to_sheet(linhasSaldo);
-      const wbS = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wbS, wsS, 'Saldo');
-      XLSX.writeFile(wbS, `saldo_estoque_${todayStr()}.xlsx`);
-      return;
-    }
     const linhas = LINHAS_ESTOQUE_ATUAIS.map(l => ({
       'Código': l.codigo, 'Descrição': l.descricao, 'Categoria': l.categoria,
       'Saldo': l.saldo, 'Reserva': l.reserva, 'Disponível': l.disponivel, 'Previsão': l.previsao,
@@ -1725,558 +1685,6 @@ async function renderComprasEstoque(main, modo){
     XLSX.writeFile(wb, `sugestao_compras_${todayStr()}.xlsx`);
   };
   drawTabela();
-}
-
-// =====================================================================================
-// ---------------- COMPRAS (sub-abas) + RECLAMAÇÃO DE ITEM ----------------
-// Aba Compras:
-//   • Gerente/Diretor e Comprador: Saldo de Estoque | Sugestão de Compras | Reclamação
-//   • Vendedor e usuário Garantia: só Reclamação
-// Reclamação: vendedor (ou Garantia) abre com código do item (descrição vem do cadastro),
-// problema, quantidades, data da compra e fotos. O comprador marca "Reclamado na China" e
-// depois fecha como Resolvida ou Não procede, escrevendo a solução.
-// Cada reclamação é uma linha própria no banco (api/reclamacao.js). Nada é apagado.
-// Vendedor/Garantia deixam de ver na LISTA as fechadas há mais de 7 dias (continuam no banco
-// e aparecem no Histórico por item de quem tem acesso).
-// =====================================================================================
-
-const RECL_STATUS = {
-  pendente:    {label:'Pendente',            cls:'warn',   cor:'var(--warn)',   soft:'var(--warn-soft)'},
-  reclamado:   {label:'Reclamado na China',  cls:'info',   cor:'var(--info)',   soft:'var(--info-soft)'},
-  resolvida:   {label:'Resolvida',           cls:'ok',     cor:'var(--ok)',     soft:'var(--ok-soft)'},
-  nao_procede: {label:'Não procede',         cls:'danger', cor:'var(--danger)', soft:'var(--danger-soft)'},
-};
-const RECL_DIAS_VISIVEL_FECHADA = 7;
-const RECL_MAX_FOTOS = 10;
-
-function reclTipo(){ return (STATE.session||{}).tipo; }
-function comprasTemAbasEstoque(){ return ['gerente','compras'].includes(reclTipo()); }
-function reclPodeVerHistorico(){ return ['gerente','compras','garantia'].includes(reclTipo()); }
-function reclPodeMudarStatus(){ return ['gerente','compras'].includes(reclTipo()); }
-function reclFechada(r){ return r.status === 'resolvida' || r.status === 'nao_procede'; }
-function reclNumeroFmt(n){ return '#' + String(n).padStart(6,'0'); }
-
-// ---------- Conversa com o servidor ----------
-async function reclApi(body){
-  const res = await fetch('/api/reclamacao', {
-    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body),
-  });
-  const data = await res.json().catch(() => ({}));
-  if(!res.ok){
-    const err = new Error(data.error || 'Falha ao falar com o servidor.');
-    err.status = res.status; err.atual = data.atual;
-    throw err;
-  }
-  return data;
-}
-async function listarReclamacoes(){
-  const res = await fetch('/api/reclamacao?acao=listar');
-  const data = await res.json().catch(() => ({}));
-  if(!res.ok) throw new Error(data.error || 'Não consegui carregar as reclamações.');
-  STATE.reclamacoes = data.reclamacoes || [];
-  return STATE.reclamacoes;
-}
-async function salvarReclamacao(r){
-  const data = await reclApi({acao:'salvar', reclamacao: r});
-  const salva = data.reclamacao;
-  if(Array.isArray(STATE.reclamacoes)){
-    const i = STATE.reclamacoes.findIndex(x => x.numero === salva.numero);
-    if(i === -1) STATE.reclamacoes.unshift(salva); else STATE.reclamacoes[i] = salva;
-  }
-  return salva;
-}
-
-// Reduz a foto (lado maior 1600px, JPEG 80%) antes de enviar — foto de celular cai de ~4MB pra ~300KB.
-function reclComprimirFoto(file){
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      const MAX = 1600;
-      const esc = Math.min(1, MAX / Math.max(img.width, img.height));
-      const w = Math.max(1, Math.round(img.width * esc)), h = Math.max(1, Math.round(img.height * esc));
-      const canvas = document.createElement('canvas');
-      canvas.width = w; canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
-      ctx.drawImage(img, 0, 0, w, h);
-      URL.revokeObjectURL(url);
-      canvas.toBlob(b => b ? resolve(b) : reject(new Error('Não consegui preparar a foto ' + file.name + '.')), 'image/jpeg', 0.8);
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Não consegui ler a foto "' + file.name + '". Use JPG ou PNG.')); };
-    img.src = url;
-  });
-}
-async function reclEnviarFoto(file){
-  const blob = await reclComprimirFoto(file);
-  const {path, uploadUrl} = await reclApi({acao:'url-upload'});
-  const r = await fetch(uploadUrl, {method:'PUT', headers:{'Content-Type':'image/jpeg', 'x-upsert':'false'}, body: blob});
-  if(!r.ok) throw new Error('Não consegui enviar a foto "' + file.name + '". Tente de novo.');
-  return path;
-}
-// Links temporários (1h) das fotos privadas — guardados em memória por 50 min.
-async function reclUrlsFotos(paths){
-  STATE.reclFotoCache = STATE.reclFotoCache || {};
-  const cache = STATE.reclFotoCache;
-  const agora = Date.now();
-  const faltam = (paths||[]).filter(p => !cache[p] || cache[p].ate < agora);
-  if(faltam.length){
-    const {urls} = await reclApi({acao:'urls-fotos', paths: faltam});
-    Object.entries(urls||{}).forEach(([p,u]) => { cache[p] = {url:u, ate: agora + 50*60*1000}; });
-  }
-  const out = {};
-  (paths||[]).forEach(p => { if(cache[p]) out[p] = cache[p].url; });
-  return out;
-}
-
-// Descrição do item pelo código — catálogo de SKUs, e se não tiver lá, o saldo de estoque.
-function reclBuscarItem(codigo){
-  const c = String(codigo||'').trim().toUpperCase();
-  if(!c) return null;
-  const cat = (STATE.catalogoSkus||[]).find(s => String(s.codigo).toUpperCase() === c);
-  if(cat && cat.descricao) return {codigo:c, descricao: cat.descricao};
-  const est = (STATE.estoque||[]).find(s => String(s.codigo).toUpperCase() === c);
-  if(est && est.descricao) return {codigo:c, descricao: est.descricao};
-  return null;
-}
-
-// ---------- Tela da aba Compras (sub-abas) ----------
-async function renderComprasModulo(main, rerender){
-  STATE.comprasUI = STATE.comprasUI || {};
-  const ui = STATE.comprasUI;
-  const abas = comprasTemAbasEstoque()
-    ? [{id:'saldo', label:'Saldo de Estoque'}, {id:'sugestao', label:'Sugestão de Compras'}, {id:'reclamacao', label:'Reclamação'}]
-    : [{id:'reclamacao', label:'Reclamação'}];
-  if(!abas.some(a => a.id === ui.aba)) ui.aba = abas[0].id;
-  const titulos = {saldo:'Saldo de Estoque', sugestao:'Sugestão de Compras', reclamacao:'Reclamação de item'};
-
-  main.innerHTML = `
-    <div class="page-header"><div class="eyebrow">Compras</div><h2>${titulos[ui.aba]}</h2></div>
-    ${abas.length > 1 ? `<div class="tabs" style="flex-wrap:wrap;">
-      ${abas.map(a => `<button class="tab-btn ${ui.aba===a.id?'active':''}" data-aba="${a.id}">${a.label}</button>`).join('')}
-    </div>` : ''}
-    <div id="comprasConteudo"></div>
-  `;
-  main.querySelectorAll('.tab-btn[data-aba]').forEach(b => {
-    b.onclick = () => { ui.aba = b.dataset.aba; renderComprasModulo(main, rerender); };
-  });
-  const box = main.querySelector('#comprasConteudo');
-  if(ui.aba === 'saldo' || ui.aba === 'sugestao') await renderComprasEstoque(box, ui.aba);
-  else await renderReclamacoes(box);
-}
-
-// ---------- Sub-aba Reclamação ----------
-async function renderReclamacoes(box){
-  STATE.reclUI = STATE.reclUI || {};
-  const ui = STATE.reclUI;
-  if(!reclPodeVerHistorico()) ui.vista = 'lista';
-  ui.vista = ui.vista || 'lista';
-
-  box.innerHTML = `<div class="loading" style="min-height:160px">Carregando reclamações…</div>`;
-  let todas;
-  try{ todas = await listarReclamacoes(); }
-  catch(err){ box.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`; return; }
-
-  const redesenhar = () => renderReclamacoes(box);
-  const pend = todas.filter(r => r.status === 'pendente').length;
-  const recl = todas.filter(r => r.status === 'reclamado').length;
-
-  box.innerHTML = `
-    <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:18px;">
-      <button class="primary-btn" id="reclNova">+ Nova reclamação</button>
-      ${reclPodeVerHistorico() ? `
-        <div style="display:flex; gap:6px; margin-left:auto;">
-          <button class="ghost-btn" id="reclVistaLista" style="${ui.vista==='lista'?'border-color:var(--primary); color:var(--primary); font-weight:600;':''}">Lista</button>
-          <button class="ghost-btn" id="reclVistaHist" style="${ui.vista==='historico'?'border-color:var(--primary); color:var(--primary); font-weight:600;':''}">🔎 Histórico por item</button>
-        </div>` : ''}
-    </div>
-    <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px;">
-      <span class="status-badge status-warn">🟡 Pendentes: ${pend}</span>
-      <span class="status-badge status-info">🔵 Reclamadas na China: ${recl}</span>
-    </div>
-    <div id="reclCorpo"></div>
-  `;
-  box.querySelector('#reclNova').onclick = () => abrirNovaReclamacao(redesenhar);
-  if(reclPodeVerHistorico()){
-    box.querySelector('#reclVistaLista').onclick = () => { ui.vista = 'lista'; redesenhar(); };
-    box.querySelector('#reclVistaHist').onclick = () => { ui.vista = 'historico'; redesenhar(); };
-  }
-  const corpo = box.querySelector('#reclCorpo');
-  if(ui.vista === 'historico') renderReclHistorico(corpo, todas, redesenhar);
-  else renderReclLista(corpo, todas, redesenhar);
-}
-
-function reclVisivelNaLista(r){
-  if(!reclFechada(r)) return true;
-  const quando = new Date(r.fechadoEm || r.atualizadoEm || r.criadoEm).getTime();
-  return !isNaN(quando) && (Date.now() - quando) < RECL_DIAS_VISIVEL_FECHADA * 86400000;
-}
-
-function renderReclLista(corpo, todas, redesenhar){
-  const ordem = {pendente:0, reclamado:1, resolvida:2, nao_procede:2};
-  const lista = todas.filter(reclVisivelNaLista)
-    .sort((a,b) => (ordem[a.status]-ordem[b.status]) || (b.numero - a.numero));
-  if(!lista.length){
-    corpo.innerHTML = `<div class="empty-state">Nenhuma reclamação em aberto.</div>`;
-    return;
-  }
-  corpo.innerHTML = `
-    <p class="hint" style="margin-bottom:10px;">Reclamações resolvidas ou que não procedem saem desta lista ${RECL_DIAS_VISIVEL_FECHADA} dias depois de fechadas.</p>
-    <div style="display:flex; flex-direction:column; gap:10px;">
-      ${lista.map(r => reclCardHTML(r)).join('')}
-    </div>
-  `;
-  corpo.querySelectorAll('[data-recl]').forEach(el => {
-    el.onclick = () => {
-      const r = (STATE.reclamacoes||[]).find(x => String(x.numero) === el.dataset.recl);
-      if(r) abrirDetalheReclamacao(r, redesenhar);
-    };
-  });
-}
-
-function reclCardHTML(r){
-  const st = RECL_STATUS[r.status] || RECL_STATUS.pendente;
-  const nFotos = (r.fotos||[]).length;
-  return `
-    <div data-recl="${r.numero}" style="cursor:pointer; background:${st.soft}; border:1px solid var(--border); border-left:5px solid ${st.cor}; border-radius:var(--radius); padding:14px 16px;">
-      <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between;">
-        <div style="font-weight:600; font-size:14.5px;">${reclNumeroFmt(r.numero)} · ${gEsc(r.codigo)} — ${gEsc(r.descricao)}</div>
-        <span class="status-badge status-${st.cls}">${st.label}</span>
-      </div>
-      <div class="hint" style="margin-top:6px;">
-        Aberta por <b>${gEsc((r.criadoPor||{}).nome||'—')}</b> em ${fmtDataHora(r.criadoEm)} ·
-        Comprou <b>${gEsc(r.qtdComprada)}</b> em ${fmtDatePt(r.dataCompra)} · Retornou <b>${gEsc(r.qtdRetornou)}</b>
-        ${nFotos ? ` · 📷 ${nFotos} foto${nFotos>1?'s':''}` : ''}
-      </div>
-      <div style="margin-top:6px; font-size:13.5px;">${gEsc(r.problema)}</div>
-      ${r.solucao ? `<div style="margin-top:8px; font-size:13.5px;"><b>${r.status==='nao_procede'?'Motivo':'Solução'}:</b> ${gEsc(r.solucao)}</div>` : ''}
-    </div>
-  `;
-}
-
-// ---------- Histórico por item (gerente/diretor, comprador e Garantia) ----------
-function renderReclHistorico(corpo, todas, redesenhar){
-  STATE.reclUI.busca = STATE.reclUI.busca || '';
-  STATE.reclUI.filtroStatus = STATE.reclUI.filtroStatus || '';
-  corpo.innerHTML = `
-    <div class="panel">
-      <div class="form-row" style="align-items:flex-end;">
-        <div><label class="field-label">Código do item</label><input type="text" id="reclBusca" placeholder="Ex: ABC123 (vazio = todos)" value="${gEsc(STATE.reclUI.busca)}" style="text-transform:uppercase;"></div>
-        <div><label class="field-label">Status</label>
-          <select id="reclFiltroStatus" class="filter-select">
-            <option value="">Todos</option>
-            ${Object.entries(RECL_STATUS).map(([k,v]) => `<option value="${k}" ${STATE.reclUI.filtroStatus===k?'selected':''}>${v.label}</option>`).join('')}
-          </select>
-        </div>
-        <div><button class="ghost-btn" id="reclExportar">⬇️ Exportar Excel</button></div>
-      </div>
-    </div>
-    <div id="reclHistTabela"></div>
-  `;
-  let linhasAtuais = [];
-  function desenhar(){
-    const busca = STATE.reclUI.busca.trim().toUpperCase();
-    const fs = STATE.reclUI.filtroStatus;
-    let linhas = todas.slice();
-    if(busca) linhas = linhas.filter(r => String(r.codigo||'').toUpperCase().includes(busca));
-    if(fs) linhas = linhas.filter(r => r.status === fs);
-    linhas.sort((a,b) => String(b.criadoEm||'').localeCompare(String(a.criadoEm||'')));
-    linhasAtuais = linhas;
-    const tot = linhas.reduce((acc,r) => { acc.c += Number(r.qtdComprada)||0; acc.r += Number(r.qtdRetornou)||0; return acc; }, {c:0, r:0});
-    const itemUnico = busca ? reclBuscarItem(busca) : null;
-    const t = corpo.querySelector('#reclHistTabela');
-    if(!linhas.length){ t.innerHTML = `<div class="empty-state">Nenhuma reclamação encontrada.</div>`; return; }
-    t.innerHTML = `
-      <div class="panel">
-        ${itemUnico ? `<div style="font-weight:600; margin-bottom:6px;">${gEsc(itemUnico.codigo)} — ${gEsc(itemUnico.descricao)}</div>` : ''}
-        <p class="hint">${linhas.length} reclamação(ões) · Total comprado: <b>${tot.c}</b> · Total retornado: <b>${tot.r}</b></p>
-        <div style="overflow-x:auto;">
-        <table class="cred-table">
-          <thead><tr><th>Nº</th><th>Aberta em</th><th>Por</th><th>Item</th><th>Compra</th><th>Qtd</th><th>Retornou</th><th>Status</th><th>Observação</th><th>Solução</th></tr></thead>
-          <tbody>
-            ${linhas.map(r => {
-              const st = RECL_STATUS[r.status] || RECL_STATUS.pendente;
-              return `<tr data-recl="${r.numero}" style="cursor:pointer;">
-                <td style="white-space:nowrap; font-size:12px;">${reclNumeroFmt(r.numero)}</td>
-                <td style="white-space:nowrap; font-size:12px;">${fmtDataHora(r.criadoEm)}</td>
-                <td style="font-size:12px;">${gEsc((r.criadoPor||{}).nome||'—')}</td>
-                <td style="font-size:12px;"><b>${gEsc(r.codigo)}</b><br>${gEsc(r.descricao)}</td>
-                <td style="white-space:nowrap; font-size:12px;">${fmtDatePt(r.dataCompra)}</td>
-                <td>${gEsc(r.qtdComprada)}</td>
-                <td>${gEsc(r.qtdRetornou)}</td>
-                <td><span class="status-badge status-${st.cls}">${st.label}</span></td>
-                <td style="font-size:12px; min-width:180px;">${gEsc(r.problema)}</td>
-                <td style="font-size:12px; min-width:180px;">${gEsc(r.solucao||'—')}</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-        </div>
-      </div>
-    `;
-    t.querySelectorAll('[data-recl]').forEach(el => {
-      el.onclick = () => {
-        const r = (STATE.reclamacoes||[]).find(x => String(x.numero) === el.dataset.recl);
-        if(r) abrirDetalheReclamacao(r, redesenhar);
-      };
-    });
-  }
-  corpo.querySelector('#reclBusca').oninput = (e) => { STATE.reclUI.busca = e.target.value; desenhar(); };
-  corpo.querySelector('#reclFiltroStatus').onchange = (e) => { STATE.reclUI.filtroStatus = e.target.value; desenhar(); };
-  corpo.querySelector('#reclExportar').onclick = () => {
-    const dados = linhasAtuais.map(r => ({
-      'Nº': reclNumeroFmt(r.numero),
-      'Aberta em': fmtDataHora(r.criadoEm),
-      'Aberta por': (r.criadoPor||{}).nome || '',
-      'Código': r.codigo, 'Descrição': r.descricao,
-      'Data da compra': fmtDatePt(r.dataCompra),
-      'Qtd comprada': Number(r.qtdComprada)||0,
-      'Qtd retornou': Number(r.qtdRetornou)||0,
-      'Status': (RECL_STATUS[r.status]||{}).label || r.status,
-      'Observação do vendedor': r.problema || '',
-      'Reclamado na China em': r.reclamadoEm ? fmtDataHora(r.reclamadoEm) : '',
-      'Solução': r.solucao || '',
-      'Fechada em': r.fechadoEm ? fmtDataHora(r.fechadoEm) : '',
-    }));
-    const ws = XLSX.utils.json_to_sheet(dados);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Reclamações');
-    const busca = STATE.reclUI.busca.trim().toUpperCase().replace(/[^A-Z0-9-]/g,'_');
-    XLSX.writeFile(wb, `reclamacoes${busca ? '_'+busca : ''}_${todayStr()}.xlsx`);
-  };
-  desenhar();
-}
-
-// ---------- Nova reclamação ----------
-function abrirNovaReclamacao(aoSalvar){
-  const fotos = []; // {file, url}
-  const backdrop = document.createElement('div');
-  backdrop.className = 'modal-backdrop';
-  backdrop.innerHTML = `
-    <div class="modal" style="max-width:600px; max-height:92vh; overflow-y:auto;">
-      <h3>Nova reclamação de item</h3>
-      <label class="field-label">Código do item</label>
-      <input type="text" id="rnCodigo" placeholder="Digite o código" style="width:100%; text-transform:uppercase; margin-bottom:6px;">
-      <div id="rnItemInfo" class="hint" style="margin-bottom:10px;">A descrição aparece sozinha quando o código for encontrado no cadastro.</div>
-      <label class="field-label">Descrição do item</label>
-      <input type="text" id="rnDescricao" readonly style="width:100%; margin-bottom:14px; background:var(--bg);">
-
-      <label class="field-label">Qual é o problema?</label>
-      <textarea id="rnProblema" placeholder="Descreva o defeito ou problema relatado pelo cliente"></textarea>
-
-      <div class="form-row" style="align-items:flex-end;">
-        <div><label class="field-label">Qtd comprada</label><input type="number" id="rnQtdComprada" min="1" step="1" style="width:120px;"></div>
-        <div><label class="field-label">Data da compra</label><input type="date" id="rnDataCompra" max="${todayStr()}"></div>
-        <div><label class="field-label">Qtd que retornou</label><input type="number" id="rnQtdRetornou" min="0" step="1" style="width:120px;"></div>
-      </div>
-
-      <label class="field-label" style="margin-top:8px;">Fotos (até ${RECL_MAX_FOTOS})</label>
-      <input type="file" id="rnFotos" accept="image/*" multiple>
-      <div id="rnPreviews" style="display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 4px;"></div>
-
-      <div id="rnMsg"></div>
-      <div class="modal-actions" style="margin-top:14px;">
-        <button class="ghost-btn" id="rnCancelar">Cancelar</button>
-        <button class="primary-btn" id="rnSalvar">Enviar reclamação</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(backdrop);
-  const $ = (id) => backdrop.querySelector('#'+id);
-  const fechar = () => { fotos.forEach(f => URL.revokeObjectURL(f.url)); backdrop.remove(); };
-  let enviando = false;
-  $('rnCancelar').onclick = () => { if(!enviando) fechar(); };
-
-  $('rnCodigo').oninput = () => {
-    const item = reclBuscarItem($('rnCodigo').value);
-    const desc = $('rnDescricao');
-    if(!$('rnCodigo').value.trim()){
-      desc.value = ''; desc.readOnly = true; desc.style.background = 'var(--bg)';
-      $('rnItemInfo').innerHTML = 'A descrição aparece sozinha quando o código for encontrado no cadastro.';
-    } else if(item){
-      desc.value = item.descricao; desc.readOnly = true; desc.style.background = 'var(--bg)';
-      $('rnItemInfo').innerHTML = `<span style="color:var(--ok);">✓ Item encontrado no cadastro.</span>`;
-    } else {
-      if(desc.readOnly) desc.value = '';
-      desc.readOnly = false; desc.style.background = '';
-      $('rnItemInfo').innerHTML = `<span style="color:var(--warn);">Código não encontrado no cadastro — confira o código ou escreva a descrição.</span>`;
-    }
-  };
-
-  function desenharPreviews(){
-    $('rnPreviews').innerHTML = fotos.map((f,i) => `
-      <div style="position:relative;">
-        <img src="${f.url}" style="width:84px; height:84px; object-fit:cover; border-radius:8px; border:1px solid var(--border);">
-        <button data-rm="${i}" title="Remover" style="position:absolute; top:-6px; right:-6px; width:22px; height:22px; border-radius:50%; border:none; background:var(--danger); color:#fff; cursor:pointer; font-size:13px; line-height:22px; padding:0;">×</button>
-      </div>`).join('');
-    $('rnPreviews').querySelectorAll('[data-rm]').forEach(b => {
-      b.onclick = () => { const i = Number(b.dataset.rm); URL.revokeObjectURL(fotos[i].url); fotos.splice(i,1); desenharPreviews(); };
-    });
-  }
-  $('rnFotos').onchange = (e) => {
-    const novos = Array.from(e.target.files||[]).filter(f => /^image\//.test(f.type) || /\.(jpe?g|png|webp|heic|heif)$/i.test(f.name));
-    const cabem = RECL_MAX_FOTOS - fotos.length;
-    novos.slice(0, cabem).forEach(f => fotos.push({file:f, url: URL.createObjectURL(f)}));
-    if(novos.length > cabem) $('rnMsg').innerHTML = `<div class="msg err">Máximo de ${RECL_MAX_FOTOS} fotos por reclamação.</div>`;
-    e.target.value = '';
-    desenharPreviews();
-  };
-
-  $('rnSalvar').onclick = async () => {
-    if(enviando) return;
-    const msg = $('rnMsg');
-    const codigo = $('rnCodigo').value.trim().toUpperCase();
-    const descricao = $('rnDescricao').value.trim();
-    const problema = $('rnProblema').value.trim();
-    const qtdComprada = Number($('rnQtdComprada').value);
-    const qtdRetornou = Number($('rnQtdRetornou').value);
-    const dataCompra = $('rnDataCompra').value;
-    const erro =
-      !codigo ? 'Informe o código do item.' :
-      !descricao ? 'Informe a descrição do item.' :
-      !problema ? 'Descreva o problema.' :
-      !(qtdComprada > 0) ? 'Informe a quantidade comprada.' :
-      !dataCompra ? 'Informe a data da compra.' :
-      ($('rnQtdRetornou').value === '' || qtdRetornou < 0) ? 'Informe quantos itens retornaram.' :
-      qtdRetornou > qtdComprada ? 'A quantidade que retornou não pode ser maior que a comprada.' : '';
-    if(erro){ msg.innerHTML = `<div class="msg err">${erro}</div>`; return; }
-
-    enviando = true;
-    const btn = $('rnSalvar');
-    btn.disabled = true;
-    try{
-      const paths = [];
-      for(let i = 0; i < fotos.length; i++){
-        btn.textContent = `Enviando foto ${i+1} de ${fotos.length}...`;
-        paths.push(await reclEnviarFoto(fotos[i].file));
-      }
-      btn.textContent = 'Salvando...';
-      const {numero} = await reclApi({acao:'proximo-numero'});
-      const agora = new Date().toISOString();
-      const quem = gQuem();
-      await salvarReclamacao({
-        numero, codigo, descricao, problema,
-        qtdComprada, qtdRetornou, dataCompra,
-        fotos: paths,
-        status: 'pendente',
-        criadoEm: agora, criadoPor: quem,
-        solucao: '',
-        historico: [{em: agora, por: quem, acao: 'aberta'}],
-        versao: 0,
-      });
-      fechar();
-      if(aoSalvar) aoSalvar();
-    }catch(err){
-      enviando = false;
-      btn.disabled = false; btn.textContent = 'Enviar reclamação';
-      msg.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`;
-    }
-  };
-  setTimeout(() => $('rnCodigo').focus(), 50);
-}
-
-// ---------- Detalhe + ações do comprador ----------
-const RECL_ACAO_TEXTO = {
-  aberta: 'Reclamação aberta',
-  reclamado: 'Reclamação feita ao fornecedor (China)',
-  resolvida: 'Marcada como resolvida',
-  nao_procede: 'Marcada como não procede',
-};
-
-function abrirDetalheReclamacao(r, aoMudar){
-  const st = RECL_STATUS[r.status] || RECL_STATUS.pendente;
-  const podeMudar = reclPodeMudarStatus() && !reclFechada(r);
-  const backdrop = document.createElement('div');
-  backdrop.className = 'modal-backdrop';
-  backdrop.innerHTML = `
-    <div class="modal" style="max-width:640px; max-height:92vh; overflow-y:auto; border-top:6px solid ${st.cor};">
-      <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
-        <h3 style="margin-bottom:4px;">${reclNumeroFmt(r.numero)} · ${gEsc(r.codigo)}</h3>
-        <span class="status-badge status-${st.cls}">${st.label}</span>
-      </div>
-      <div style="font-size:14px; margin-bottom:14px;">${gEsc(r.descricao)}</div>
-
-      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:10px; margin-bottom:14px;">
-        <div><div class="field-label">Qtd comprada</div>${gEsc(r.qtdComprada)}</div>
-        <div><div class="field-label">Data da compra</div>${fmtDatePt(r.dataCompra)}</div>
-        <div><div class="field-label">Qtd que retornou</div>${gEsc(r.qtdRetornou)}</div>
-        <div><div class="field-label">Aberta por</div>${gEsc((r.criadoPor||{}).nome||'—')}</div>
-      </div>
-
-      <div class="field-label">Problema relatado</div>
-      <div style="white-space:pre-wrap; font-size:14px; margin-bottom:14px;">${gEsc(r.problema)}</div>
-
-      ${r.solucao ? `
-        <div class="field-label">${r.status==='nao_procede'?'Motivo (não procede)':'Solução'}</div>
-        <div style="white-space:pre-wrap; font-size:14px; margin-bottom:14px; padding:10px 12px; border-radius:8px; background:${st.soft};">${gEsc(r.solucao)}</div>` : ''}
-
-      ${(r.fotos||[]).length ? `
-        <div class="field-label">Fotos (${r.fotos.length})</div>
-        <div id="rdFotos" style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px;"><span class="hint">Carregando fotos…</span></div>` : ''}
-
-      <div class="field-label">Andamento</div>
-      <div style="font-size:13px; margin-bottom:14px;">
-        ${(r.historico||[]).map(h => `<div style="padding:3px 0;">• ${fmtDataHora(h.em)} — ${RECL_ACAO_TEXTO[h.acao]||gEsc(h.acao)} <span class="hint">(${gEsc((h.por||{}).nome||'—')})</span></div>`).join('')}
-      </div>
-
-      ${podeMudar ? `
-        <div style="border-top:1px solid var(--border); padding-top:14px;">
-          <div class="field-label">Ações do comprador</div>
-          ${r.status === 'pendente' ? `<button class="primary-btn" id="rdReclamado" style="background:var(--info); border-color:var(--info); margin-bottom:12px;">🔵 Reclamação feita ao fornecedor</button>` : ''}
-          <label class="field-label">Solução / resposta do fornecedor</label>
-          <textarea id="rdSolucao" placeholder="Ex: fornecedor vai ressarcir, repor na próxima carga, desconto..."></textarea>
-          <div style="display:flex; flex-wrap:wrap; gap:8px;">
-            <button class="primary-btn" id="rdResolvida" style="background:var(--ok); border-color:var(--ok);">🟢 Resolvida</button>
-            <button class="primary-btn" id="rdNaoProcede" style="background:var(--danger); border-color:var(--danger);">🔴 Não procede</button>
-          </div>
-        </div>` : ''}
-
-      <div id="rdMsg"></div>
-      <div class="modal-actions" style="margin-top:14px;"><button class="ghost-btn" id="rdFechar">Fechar</button></div>
-    </div>
-  `;
-  document.body.appendChild(backdrop);
-  const $ = (id) => backdrop.querySelector('#'+id);
-  const fechar = () => backdrop.remove();
-  $('rdFechar').onclick = fechar;
-  backdrop.onclick = (e) => { if(e.target === backdrop) fechar(); };
-
-  if((r.fotos||[]).length){
-    reclUrlsFotos(r.fotos).then(urls => {
-      const el = $('rdFotos'); if(!el) return;
-      el.innerHTML = r.fotos.map(p => urls[p]
-        ? `<a href="${urls[p]}" target="_blank" rel="noopener"><img src="${urls[p]}" style="width:110px; height:110px; object-fit:cover; border-radius:8px; border:1px solid var(--border);"></a>`
-        : `<div class="hint">Foto indisponível</div>`).join('');
-    }).catch(err => { const el = $('rdFotos'); if(el) el.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`; });
-  }
-
-  async function mudarStatus(novo, exigeTexto){
-    const msg = $('rdMsg');
-    const texto = exigeTexto ? ($('rdSolucao').value || '').trim() : '';
-    if(exigeTexto && !texto){
-      msg.innerHTML = `<div class="msg err">Escreva ${novo==='nao_procede'?'o motivo':'a solução'} antes de fechar a reclamação.</div>`;
-      return;
-    }
-    backdrop.querySelectorAll('button').forEach(b => b.disabled = true);
-    try{
-      const agora = new Date().toISOString();
-      const quem = gQuem();
-      const nova = {...r, status: novo, historico: [...(r.historico||[]), {em: agora, por: quem, acao: novo}]};
-      if(novo === 'reclamado'){ nova.reclamadoEm = agora; nova.reclamadoPor = quem; }
-      else { nova.solucao = texto; nova.fechadoEm = agora; nova.fechadoPor = quem; }
-      await salvarReclamacao(nova);
-      fechar();
-      if(aoMudar) aoMudar();
-    }catch(err){
-      backdrop.querySelectorAll('button').forEach(b => b.disabled = false);
-      msg.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`;
-    }
-  }
-  if(podeMudar){
-    if($('rdReclamado')) $('rdReclamado').onclick = () => mudarStatus('reclamado', false);
-    $('rdResolvida').onclick = () => mudarStatus('resolvida', true);
-    $('rdNaoProcede').onclick = () => mudarStatus('nao_procede', true);
-  }
 }
 
 function nomeMesPt(mesChave){
@@ -4187,7 +3595,6 @@ async function renderVendorShell(){
     {page:'pedidos', label:'Pedidos'},
     {page:'financeira', label:'Financeira'},
     {page:'previsao', label:'Previsão de Compras'},
-    {page:'compras-estoque', label:'Compras'},
     {page:'garantia', label:'Garantia'},
     {page:'leads', label:'Leads'},
     {page:'inativos', label:'Clientes inativos'},
@@ -4209,7 +3616,6 @@ async function renderVendorShell(){
   else if(STATE.route.page==='inativos') await renderVendorInativos(main);
   else if(STATE.route.page==='assistente') renderVendorAssistenteIA(main);
   else if(STATE.route.page==='garantia') await renderGarantiaModulo(main, renderVendorShell);
-  else if(STATE.route.page==='compras-estoque') await renderComprasModulo(main, renderVendorShell);
   else renderVendorHistorico(main);
 }
 
@@ -4952,7 +4358,7 @@ async function renderComprasShell(){
   await Promise.all(STATE.vendors.map(v => getContatos(v.codigo)));
   if(STATE.route.page==='visao-geral') renderManagerOverview(main);
   else if(STATE.route.page==='elaboracao-metas') await renderElaboracaoMetas(main);
-  else if(STATE.route.page==='compras-estoque') await renderComprasModulo(main, renderComprasShell);
+  else if(STATE.route.page==='compras-estoque') await renderComprasEstoque(main);
   else await renderPrevisaoCompras(main);
 }
 
@@ -6729,7 +6135,7 @@ async function renderManagerShell(){
   else if(STATE.route.page==='elaboracao-metas') await renderElaboracaoMetas(main);
   else if(STATE.route.page==='financeira') await renderFinanceiroBody(main, () => renderManagerShell());
   else if(STATE.route.page==='previsao') await renderPrevisaoCompras(main);
-  else if(STATE.route.page==='compras-estoque') await renderComprasModulo(main, renderManagerShell);
+  else if(STATE.route.page==='compras-estoque') await renderComprasEstoque(main);
   else if(STATE.route.page==='conexoes') await renderConexoes(main);
   else if(STATE.route.page==='garantia') await renderGarantiaModulo(main, renderManagerShell);
   else if(STATE.route.page==='importacoes') renderManagerImportacoes(main);
@@ -7146,7 +6552,7 @@ async function desenharPainelContaGarantia(main){
     : `<div class="whoami-avatar whoami-avatar-fallback" style="width:38px; height:38px; background:var(--border); color:var(--ink-faint); font-size:14px;">${gEsc((c.nome||'?')[0].toUpperCase())}</div>`;
   painel.innerHTML = `
     <h3>Usuários de Garantia (conferência)</h3>
-    <p class="hint">Cada pessoa tem o próprio acesso (o histórico da garantia mostra quem conferiu). Eles só veem a aba Garantia: garantias autorizadas em que o cliente envia a mercadoria, conferência item a item e a marcação de "lançada no sistema". Não existe senha padrão.</p>
+    <p class="hint">Cada pessoa tem o próprio acesso (o histórico da garantia mostra quem conferiu). Eles só veem a aba Garantia: conferem as garantias em que o cliente envia a mercadoria e marcam "lançada no sistema" em todas as autorizadas (com ou sem envio). Não existe senha padrão.</p>
     ${contas.length ? `
       <table class="cred-table" style="margin-bottom:16px;">
         <thead><tr><th>Foto</th><th>Nome</th><th>Usuário</th><th>Nova senha</th><th></th></tr></thead>
@@ -8423,7 +7829,7 @@ const GARANTIA_COFINS = 0.03;
 const GARANTIA_STATUS = {
   pendente: {label:'Aguardando autorização', cls:'warn'},
   aguardando_mercadoria: {label:'Autorizada – aguardando mercadoria', cls:'info'},
-  conferida: {label:'Conferida – aguardando lançamento', cls:'info'},
+  conferida: {label:'Aguardando lançamento no sistema', cls:'info'},
   concluida: {label:'Concluída', cls:'ok'},
   recusada: {label:'Recusada', cls:'danger'},
 };
@@ -8753,7 +8159,11 @@ function garantiaVisivelParaSessao(g){
   const s = STATE.session || {};
   if(s.tipo === 'gerente') return true;
   if(s.tipo === 'vendedor') return g.vendedorCodigo === s.codigo || (g.criadoPor && g.criadoPor.codigo === s.codigo);
-  if(s.tipo === 'garantia') return !!g.clienteEnvia && ['aguardando_mercadoria','conferida','concluida'].includes(g.status);
+  if(s.tipo === 'garantia'){
+    // Com envio: veem desde "aguardando mercadoria". Sem envio: veem quando fica aguardando lançamento.
+    if(g.clienteEnvia) return ['aguardando_mercadoria','conferida','concluida'].includes(g.status);
+    return ['conferida','concluida'].includes(g.status);
+  }
   return false;
 }
 function abasGarantiaDaSessao(){
@@ -9299,7 +8709,7 @@ async function abrirDetalheGarantia(numero, aoMudar){
       acoes.innerHTML = `
         <div class="panel" style="margin-bottom:0; padding:16px 18px;">
           <h3 style="font-size:15px;">Autorização</h3>
-          <p class="hint" style="margin-bottom:10px;">${g.clienteEnvia ? 'Autorizando, a garantia vai para o pessoal da Garantia aguardar a mercadoria chegar e conferir.' : 'Cliente não envia a mercadoria: autorizando, a garantia já fica concluída.'}</p>
+          <p class="hint" style="margin-bottom:10px;">${g.clienteEnvia ? 'Autorizando, a garantia vai para o pessoal da Garantia aguardar a mercadoria chegar e conferir.' : 'Cliente não envia a mercadoria: autorizando, a garantia vai direto para "Aguardando lançamento" — o pessoal da Garantia lança no sistema e aí ela fica concluída.'}</p>
           <textarea id="gMotivo" placeholder="Motivo (obrigatório só para recusar)" style="min-height:50px;"></textarea>
           <div class="modal-actions">
             <button class="ghost-btn" id="gRecusar" style="color:var(--danger); border-color:var(--danger);">Recusar</button>
@@ -9313,10 +8723,8 @@ async function abrirDetalheGarantia(numero, aoMudar){
           alvo.status = 'aguardando_mercadoria';
           registrar(alvo, 'Autorizada — aguardando mercadoria');
         } else {
-          alvo.status = 'concluida';
-          alvo.concluidoEm = agora;
-          alvo.valorFinalConcluido = calcularGarantia(alvo).valorFinal;
-          registrar(alvo, 'Autorizada — concluída (sem envio de mercadoria)');
+          alvo.status = 'conferida';
+          registrar(alvo, 'Autorizada — aguardando lançamento no sistema (sem envio de mercadoria)');
         }
       }, `Garantia nº ${g.numero} autorizada.`);
       acoes.querySelector('#gRecusar').onclick = () => {
@@ -9366,12 +8774,12 @@ async function abrirDetalheGarantia(numero, aoMudar){
       acoes.innerHTML = `
         <div class="panel" style="margin-bottom:0; padding:16px 18px;">
           <h3 style="font-size:15px;">Lançamento no sistema</h3>
-          <p class="hint" style="margin-bottom:10px;">Conferida por ${gEsc(g.conferidoPor||'')} em ${fmtDataHora(g.conferidoEm)}. Lance <b>${fmtMoney(calc.valorFinal)}</b> no sistema interno e marque abaixo.</p>
+          <p class="hint" style="margin-bottom:10px;">${g.conferidoPor ? `Conferida por ${gEsc(g.conferidoPor)} em ${fmtDataHora(g.conferidoEm)}. ` : `Autorizada por ${gEsc(g.autorizadoPor||'')} em ${fmtDataHora(g.autorizadoEm)} (sem envio de mercadoria). `}Lance <b>${fmtMoney(calc.valorFinal)}</b> no sistema interno e marque abaixo.</p>
           <label style="display:flex; align-items:center; gap:10px; font-size:14.5px; font-weight:600; cursor:pointer; margin-bottom:12px;">
             <input type="checkbox" id="gChkLancada" style="width:20px; height:20px;"> Essa garantia já foi lançada no sistema
           </label>
           <div class="modal-actions">
-            ${ehGerente || s.tipo === 'garantia' ? `<button class="ghost-btn" id="gReabrirConf">Reabrir conferência</button>` : ''}
+            ${g.clienteEnvia && (ehGerente || s.tipo === 'garantia') ? `<button class="ghost-btn" id="gReabrirConf">Reabrir conferência</button>` : ''}
             <button class="primary-btn" id="gConfirmarLancada" disabled style="opacity:.5;">Confirmar e concluir</button>
           </div>
         </div>`;
@@ -9617,12 +9025,11 @@ function desenharBuscaItemGarantia(panel, base, redesenhar){
 
 // ---------- Tela do usuário Garantia ----------
 async function renderGarantiaShell(){
-  const items = [{page:'garantia', label:'Garantia'}, {page:'compras-estoque', label:'Compras'}];
-  if(!STATE.route || !items.some(i => i.page === STATE.route.page)) STATE.route = {page:'garantia'};
+  const items = [{page:'garantia', label:'Garantia'}];
+  STATE.route = {page:'garantia'};
   app.innerHTML = `<div class="shell">${sidebarHTML(items)}<div class="main" id="main"></div></div>`;
   bindSidebar(renderGarantiaShell);
-  if(STATE.route.page === 'compras-estoque') await renderComprasModulo(document.getElementById('main'), renderGarantiaShell);
-  else await renderGarantiaModulo(document.getElementById('main'), renderGarantiaShell);
+  await renderGarantiaModulo(document.getElementById('main'), renderGarantiaShell);
 }
 
 // ---------- Bloco "Compras x devoluções" no detalhe do cliente ----------

@@ -494,7 +494,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-14-22';
+const APP_VERSION = '2026-09-24-01';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -502,10 +502,15 @@ let HEARTBEAT_TIMER = null;
 async function enviarHeartbeat(){
   try{
     const versaoServidor = await safeGet('crm:app_version');
-    if(versaoServidor && versaoServidor !== APP_VERSION){
+    if(versaoServidor && versaoServidor > APP_VERSION){
       // Tem uma atualização nova no sistema — recarrega sozinho, sem precisar de ninguém clicar em nada.
       location.reload();
       return;
+    }
+    if(!versaoServidor || versaoServidor < APP_VERSION){
+      // Essa página é mais nova que a versão registrada no banco (acabou de sair uma atualização):
+      // registra a versão nova, e quem ainda está com a página antiga aberta recarrega sozinho.
+      await safeSet('crm:app_version', APP_VERSION);
     }
     const presenca = (await safeGet('crm:presenca')) || {};
     const minha = presenca[SESSION_ID] || {};
@@ -3402,6 +3407,7 @@ function render(){
   if(!STATE.session){ renderLogin(); return; }
   if(STATE.session.tipo === 'financeiro'){ renderFinanceiroShell(); return; }
   if(STATE.session.tipo === 'compras'){ renderComprasShell(); return; }
+  if(STATE.session.tipo === 'garantia'){ renderGarantiaShell(); return; }
   if(baseDesatualizadaBloqueando()){
     if(STATE.session.tipo === 'gerente'){ renderBloqueioBaseGerente(app); }
     else { renderBloqueioBaseVendedor(app); }
@@ -3511,6 +3517,9 @@ function renderLogin(){
       } else if(data.tipo === 'compras'){
         STATE.session = {tipo:'compras', nome: data.nome, foto: data.foto||null};
         STATE.route = {page:'previsao'};
+      } else if(data.tipo === 'garantia'){
+        STATE.session = {tipo:'garantia', nome: data.nome, foto: data.foto||null};
+        STATE.route = {page:'garantia'};
       } else {
         STATE.session = {tipo:'vendedor', codigo: data.codigo, nome: data.nome};
         STATE.route = {page:'dashboard'};
@@ -3538,6 +3547,7 @@ function sidebarHTML(items){
     : STATE.session.tipo==='gerente' ? (STATE.config.fotoGerente || null)
     : STATE.session.tipo==='financeiro' ? (STATE.config.fotoFinanceiro || null)
     : STATE.session.tipo==='compras' ? (STATE.config.fotoCompras || null)
+    : STATE.session.tipo==='garantia' ? ((STATE.contaGarantia||{}).foto || null)
     : null;
   return `
     <div class="sidebar">
@@ -3585,6 +3595,7 @@ async function renderVendorShell(){
     {page:'pedidos', label:'Pedidos'},
     {page:'financeira', label:'Financeira'},
     {page:'previsao', label:'Previsão de Compras'},
+    {page:'garantia', label:'Garantia'},
     {page:'leads', label:'Leads'},
     {page:'inativos', label:'Clientes inativos'},
     {page:'historico', label:'Histórico'},
@@ -3604,6 +3615,7 @@ async function renderVendorShell(){
   else if(STATE.route.page==='leads') renderVendorLeads(main);
   else if(STATE.route.page==='inativos') await renderVendorInativos(main);
   else if(STATE.route.page==='assistente') renderVendorAssistenteIA(main);
+  else if(STATE.route.page==='garantia') await renderGarantiaModulo(main, renderVendorShell);
   else renderVendorHistorico(main);
 }
 
@@ -5836,6 +5848,7 @@ async function abrirDetalhesCliente(codigo){
   const numeroPorId = {};
   cronologica.forEach(e => { if(e.vendeu){ contadorPedido++; numeroPorId[e.id] = contadorPedido; } });
   entradas.sort((a,b) => a.data < b.data ? 1 : -1);
+  const blocoGarantiasCliente = await blocoGarantiasDoClienteHTML(codigo);
 
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
@@ -5847,6 +5860,7 @@ async function abrirDetalhesCliente(codigo){
         ${vendedorAtual ? `<br>Vendedor responsável: <b>${vendedorAtual.nome}</b>` : (info ? '<br>Sem vendedor responsável hoje' : '')}
       </p>
       ${info ? creditoLineHTML(info) : ''}
+      ${blocoGarantiasCliente}
       ${info && info.vendedorCodigo ? `<button class="primary-btn" id="btnNovoPedidoDetalhes" style="width:100%; margin-bottom:12px;">📄 Subir novo pedido</button>` : ''}
       ${entradas.length===0 ? `<div class="empty-state">Nenhum contato registrado para este cliente ainda.</div>` : `
         <div class="client-list">
@@ -5879,6 +5893,9 @@ async function abrirDetalhesCliente(codigo){
   document.body.appendChild(backdrop);
   backdrop.querySelector('#fecharDetalhes').onclick = () => backdrop.remove();
   backdrop.onclick = (e) => { if(e.target===backdrop) backdrop.remove(); };
+  backdrop.querySelectorAll('.gLinhaGarantiaCliente').forEach(el => {
+    el.onclick = () => abrirDetalheGarantia(Number(el.dataset.garantia), null);
+  });
   const btnNovoPedido = backdrop.querySelector('#btnNovoPedidoDetalhes');
   if(btnNovoPedido) btnNovoPedido.onclick = () => { backdrop.remove(); abrirSubirPedidoModal(codigo); };
   backdrop.querySelectorAll('.excluirEntradaBtn').forEach(btn=>{
@@ -6100,6 +6117,7 @@ async function renderManagerShell(){
     {page:'financeira', label:'Financeira'},
     {page:'previsao', label:'Previsão de Compras'},
     {page:'compras-estoque', label:'Compras'},
+    {page:'garantia', label:'Garantia'},
     {page:'conexoes', label:'Conexões'},
     {page:'importacoes', label:'Importações'},
     {page:'credenciais', label:'Credenciais de acesso'},
@@ -6119,6 +6137,7 @@ async function renderManagerShell(){
   else if(STATE.route.page==='previsao') await renderPrevisaoCompras(main);
   else if(STATE.route.page==='compras-estoque') await renderComprasEstoque(main);
   else if(STATE.route.page==='conexoes') await renderConexoes(main);
+  else if(STATE.route.page==='garantia') await renderGarantiaModulo(main, renderManagerShell);
   else if(STATE.route.page==='importacoes') renderManagerImportacoes(main);
   else if(STATE.route.page==='credenciais') renderManagerCredenciais(main);
   else await renderManagerAdmin(main);
@@ -6518,6 +6537,74 @@ function renderManagerVendorDetail(main){
   draw();
 }
 
+// Credenciais do usuário Garantia ficam numa chave própria (crm:garantia_conta), separada da
+// crm:config — assim nenhuma tela antiga aberta que salve a config consegue apagar esse acesso.
+async function desenharPainelContaGarantia(main){
+  const painel = document.getElementById('painelContaGarantia');
+  if(!painel) return;
+  let conta;
+  try{ conta = (await safeGetCritico('crm:garantia_conta')) || {}; }
+  catch(err){ painel.innerHTML = `<h3>Usuário de Garantia (conferência)</h3><div class="msg err">${err.message}</div>`; return; }
+  STATE.contaGarantia = conta;
+  painel.innerHTML = `
+    <h3>Usuário de Garantia (conferência)</h3>
+    <p class="hint">Esse usuário só tem acesso à aba Garantia — vê as garantias já autorizadas em que o cliente envia a mercadoria de volta, confere item a item (veio / não veio, estoque ou descarte) e marca quando lançou no sistema. Não tem senha padrão: só consegue entrar depois que você definir a senha aqui.</p>
+    <div class="form-row" style="align-items:center;">
+      ${conta.foto ? `<img src="${conta.foto}" alt="${gEsc(conta.nome||'Garantia')}" style="width:46px; height:46px; border-radius:50%; object-fit:cover; flex-shrink:0;">` : `<div class="whoami-avatar whoami-avatar-fallback" style="width:46px; height:46px; flex-shrink:0; background:var(--border); color:var(--ink-faint);">${gEsc((conta.nome||'?')[0].toUpperCase())}</div>`}
+      <input type="file" id="f_foto_garantia" accept="image/*" style="max-width:220px;">
+    </div>
+    <div class="form-row">
+      <input type="text" id="novoNomeGarantia" placeholder="Nome" value="${gEsc(conta.nome || '')}">
+      <input type="text" id="novoUsuarioGarantia" placeholder="Usuário" value="${gEsc(conta.usuario || '')}">
+      <input type="text" id="novaSenhaGarantia" placeholder="${conta.senha ? 'Deixe em branco pra manter a atual' : 'Senha (obrigatória no 1º cadastro)'}">
+      <button class="primary-btn" id="btnSalvarGarantia">Salvar</button>
+    </div>
+    <div id="msgGarantiaConta"></div>
+  `;
+  async function salvarConta(campos){
+    const atual = (await safeGetCritico('crm:garantia_conta')) || {};
+    Object.assign(atual, campos);
+    if(!(await safeSet('crm:garantia_conta', atual))) throw new Error('Não consegui salvar. Tente de novo.');
+    STATE.contaGarantia = atual;
+  }
+  document.getElementById('btnSalvarGarantia').onclick = async () => {
+    const nome = document.getElementById('novoNomeGarantia').value.trim();
+    const usuario = document.getElementById('novoUsuarioGarantia').value.trim().toLowerCase();
+    const senha = document.getElementById('novaSenhaGarantia').value.trim();
+    const msg = document.getElementById('msgGarantiaConta');
+    if(!usuario){ msg.innerHTML = `<div class="msg err">Preencha o usuário.</div>`; return; }
+    if(!senha && !conta.senha){ msg.innerHTML = `<div class="msg err">Defina uma senha para o primeiro acesso.</div>`; return; }
+    const emUsoPorOutro =
+      (STATE.config.usuarioGerente||GERENTE_USUARIO_PADRAO)===usuario ||
+      (STATE.config.usuarioFinanceiro||'financeiro')===usuario ||
+      (STATE.config.usuarioCompras||'roberto')===usuario ||
+      (STATE.diretores||[]).some(d=>d.usuario===usuario) ||
+      STATE.vendors.some(v=>v.usuario===usuario);
+    if(emUsoPorOutro){ msg.innerHTML = `<div class="msg err">Esse nome de usuário já está em uso por outra conta.</div>`; return; }
+    try{
+      const campos = {nome: nome || 'Garantia', usuario};
+      if(senha) campos.senha = await hashSenha(senha);
+      await salvarConta(campos);
+      desenharPainelContaGarantia(main).then(() => {
+        const m = document.getElementById('msgGarantiaConta');
+        if(m) m.innerHTML = `<div class="msg ok">Credenciais do usuário de garantia salvas.</div>`;
+      });
+    }catch(err){
+      msg.innerHTML = `<div class="msg err">${err.message}</div>`;
+    }
+  };
+  document.getElementById('f_foto_garantia').onchange = async () => {
+    const file = document.getElementById('f_foto_garantia').files[0];
+    if(!file) return;
+    try{
+      await salvarConta({foto: await resizeImagemParaBase64(file)});
+      desenharPainelContaGarantia(main);
+    }catch(err){
+      document.getElementById('msgGarantiaConta').innerHTML = `<div class="msg err">Não consegui processar essa imagem.</div>`;
+    }
+  };
+}
+
 function renderManagerCredenciais(main){
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Acesso</div><h2>Credenciais de acesso</h2></div>
@@ -6656,7 +6743,13 @@ function renderManagerCredenciais(main){
       </div>
       <div id="msgComprasConta"></div>
     </div>
+
+    <div class="panel" id="painelContaGarantia">
+      <h3>Usuário de Garantia (conferência)</h3>
+      <p class="hint">Carregando…</p>
+    </div>
   `;
+  desenharPainelContaGarantia(main);
   document.getElementById('btnSalvarCompras').onclick = async () => {
     const nome = document.getElementById('novoNomeCompras').value.trim();
     const usuario = document.getElementById('novoUsuarioCompras').value.trim().toLowerCase();
@@ -6937,12 +7030,13 @@ async function baixarBackupCompleto(botao){
 // Junta tudo que existe de importante no sistema num objeto só (usado tanto pro backup manual
 // quanto pro automático).
 async function montarSnapshotCompleto(){
-  const chaves = ['crm:vendors','crm:roster','crm:inativos','crm:leads','crm:config','crm:diretores','crm:catalogo_skus','crm:promocao','crm:financeiro','crm:lixeira','crm:correcoes_vendedor','crm:categorias'];
+  const chaves = ['crm:vendors','crm:roster','crm:inativos','crm:leads','crm:config','crm:diretores','crm:catalogo_skus','crm:promocao','crm:financeiro','crm:lixeira','crm:correcoes_vendedor','crm:categorias','crm:garantia_conta'];
   STATE.vendors.forEach(v => chaves.push('crm:contatos:'+v.codigo));
   const backup = {geradoEm: new Date().toISOString(), dados: {}};
   for(const chave of chaves){
     backup.dados[chave] = await safeGet(chave);
   }
+  try{ backup.dados['crm:garantias'] = await listarGarantias(); }catch(e){ console.error('backup garantias', e); }
   return backup;
 }
 
@@ -7674,6 +7768,1148 @@ function renderManagerImportacoes(main){
 }
 
 // ---------------- INIT ----------------
+// =====================================================================================
+// ---------------- GARANTIA ----------------
+// Fluxo: vendedor sobe o PDF do orçamento → sistema lê cliente/UF/itens/total/IPI/ST →
+// vendedor informa o valor financeiro (valor da NF) e responde NF de devolução / envio de volta
+// → gerente/diretor autoriza ou recusa → (se o cliente envia de volta) o usuário Garantia
+// confere item a item e marca "lançada no sistema" → Concluída.
+// Cada garantia é uma linha própria no banco (api/garantia.js), com número que nunca repete.
+// Excluir nunca apaga: só marca como excluída (vai pra Lixeira da Garantia e pode ser restaurada).
+// =====================================================================================
+
+const GARANTIA_ICMS_SP = 0.18;
+const GARANTIA_ICMS_OUTRAS_UF = 0.04;
+const GARANTIA_PIS = 0.0065;
+const GARANTIA_COFINS = 0.03;
+
+const GARANTIA_STATUS = {
+  pendente: {label:'Aguardando autorização', cls:'warn'},
+  aguardando_mercadoria: {label:'Autorizada – aguardando mercadoria', cls:'info'},
+  conferida: {label:'Conferida – aguardando lançamento', cls:'info'},
+  concluida: {label:'Concluída', cls:'ok'},
+  recusada: {label:'Recusada', cls:'danger'},
+};
+
+function gEsc(v){
+  return String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+function gR2(v){ return Math.round(((Number(v)||0) + Number.EPSILON) * 100) / 100; }
+function gNum(v){
+  // Aceita "1.270,04", "1270,04", "1270.04" ou número.
+  if(typeof v === 'number') return isFinite(v) ? v : 0;
+  let s = String(v ?? '').trim().replace(/[R$\s]/g, '');
+  if(!s) return 0;
+  if(s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  const n = Number(s);
+  return isFinite(n) ? n : 0;
+}
+function gFmtNumInput(v){ return (v === null || v === undefined || v === '') ? '' : String(gR2(v)).replace('.', ','); }
+function gMesLocal(iso){
+  if(!iso) return '';
+  const d = new Date(iso);
+  if(isNaN(d)) return '';
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+}
+function gNomeMes(chave){
+  const [y,m] = chave.split('-').map(Number);
+  let label = new Date(y, m-1, 1).toLocaleDateString('pt-BR', {month:'long', year:'numeric'});
+  return label.charAt(0).toUpperCase()+label.slice(1);
+}
+function gSomarMes(chave, delta){
+  const [y,m] = chave.split('-').map(Number);
+  const d = new Date(y, m-1+delta, 1);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+}
+function gQuem(){
+  const s = STATE.session || {};
+  return {nome: s.nome || '', tipo: s.tipo || '', codigo: s.codigo || null};
+}
+
+// ---------- Conversa com o servidor ----------
+async function garantiaApi(body){
+  const res = await fetch('/api/garantia', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok){
+    const err = new Error(data.error || 'Falha ao falar com o servidor.');
+    err.status = res.status; err.atual = data.atual;
+    throw err;
+  }
+  return data;
+}
+async function listarGarantias(){
+  const res = await fetch('/api/garantia?acao=listar');
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok) throw new Error(data.error || 'Não consegui carregar as garantias.');
+  const lista = data.garantias || [];
+  STATE.garantias = lista;
+  return lista;
+}
+async function salvarGarantia(g){
+  const data = await garantiaApi({acao:'salvar', garantia: g});
+  const salva = data.garantia;
+  if(Array.isArray(STATE.garantias)){
+    const i = STATE.garantias.findIndex(x => x.numero === salva.numero);
+    if(i === -1) STATE.garantias.push(salva); else STATE.garantias[i] = salva;
+  }
+  return salva;
+}
+async function enviarPdfGarantia(file){
+  const {path, uploadUrl} = await garantiaApi({acao:'url-upload', nome: file.name});
+  const r = await fetch(uploadUrl, {method:'PUT', headers:{'Content-Type':'application/pdf', 'x-upsert':'false'}, body: file});
+  if(!r.ok) throw new Error('Não consegui enviar o PDF. Tente de novo.');
+  return path;
+}
+async function abrirPdfGarantia(path){
+  const aba = window.open('', '_blank'); // abre já (antes do await) pra não ser bloqueado como pop-up
+  try{
+    const {url} = await garantiaApi({acao:'url-pdf', path});
+    if(aba) aba.location.href = url; else window.location.href = url;
+  }catch(err){
+    if(aba) aba.close();
+    avisar(err.message);
+  }
+}
+
+// ---------- Cálculo ----------
+// Com NF de devolução: valor integral. Sem NF: total − IPI − ST − ICMS − PIS − Cofins, onde
+// ICMS/PIS/Cofins incidem sobre (valor financeiro − IPI − ST). ICMS 18% em SP, 4% nas demais UFs.
+// Itens que não vieram saem pelo valor proporcional: total do item × (valor da garantia ÷ total).
+function calcularGarantia(g){
+  const total = gR2(g.valorTotal);
+  const ipi = gR2(g.valorIpi);
+  const st = gR2(g.valorSt);
+  const vf = gR2(g.valorFinanceiro);
+  const uf = (g.uf||'').toUpperCase();
+  const aliqIcms = uf === 'SP' ? GARANTIA_ICMS_SP : GARANTIA_ICMS_OUTRAS_UF;
+  let base = 0, icms = 0, pis = 0, cofins = 0, deducoes = 0;
+  let valorAplicavel = total;
+  const integral = g.nfDevolucao === true;
+  if(!integral){
+    base = gR2(Math.max(0, vf - ipi - st));
+    icms = gR2(base * aliqIcms);
+    pis = gR2(base * GARANTIA_PIS);
+    cofins = gR2(base * GARANTIA_COFINS);
+    deducoes = gR2(ipi + st + icms + pis + cofins);
+    valorAplicavel = gR2(Math.max(0, total - deducoes));
+  }
+  const fator = total > 0 ? valorAplicavel / total : 0;
+  const itensNaoVieram = (g.clienteEnvia ? (g.itens||[]) : []).filter(i => i.conferencia && i.conferencia.veio === false);
+  const abatimentos = itensNaoVieram.map(i => ({item: i, valor: gR2((Number(i.total)||0) * fator)}));
+  const totalAbatido = gR2(abatimentos.reduce((s,a) => s + a.valor, 0));
+  const valorFinal = gR2(Math.max(0, valorAplicavel - totalAbatido));
+  return {total, ipi, st, vf, uf, aliqIcms, base, icms, pis, cofins, deducoes, integral, valorAplicavel, fator, abatimentos, totalAbatido, valorFinal};
+}
+function valorItemNaGarantia(g, item, calc){
+  calc = calc || calcularGarantia(g);
+  return gR2((Number(item.total)||0) * calc.fator);
+}
+// Itens que realmente contam como devolvidos (tira os que a conferência marcou como "não veio").
+function itensDevolvidosDaGarantia(g){
+  return (g.itens||[]).filter(i => !(g.clienteEnvia && i.conferencia && i.conferencia.veio === false));
+}
+// Linha "1.270,04 − 175,91 = 1.094,13" (e os itens que não vieram, se houver).
+function formulaGarantiaHTML(g, calc){
+  calc = calc || calcularGarantia(g);
+  let html = '';
+  if(calc.integral){
+    html = `<b>${fmtMoney(calc.total)}</b> <span style="color:var(--ink-soft);">(integral — com NF de devolução)</span>`;
+  } else {
+    html = `${fmtMoney(calc.total)} − ${fmtMoney(calc.deducoes)} <span style="color:var(--ink-soft);">(impostos)</span> = <b>${fmtMoney(calc.valorAplicavel)}</b>`;
+  }
+  if(calc.abatimentos.length){
+    html += `<br>${fmtMoney(calc.valorAplicavel)} − ${fmtMoney(calc.totalAbatido)} <span style="color:var(--ink-soft);">(${calc.abatimentos.length} item(ns) não vieram)</span> = <b>${fmtMoney(calc.valorFinal)}</b>`;
+  }
+  return html;
+}
+function detalheCalculoHTML(g, calc){
+  calc = calc || calcularGarantia(g);
+  const linha = (rotulo, valor, sinal='−') => `<tr><td>${rotulo}</td><td style="text-align:right; white-space:nowrap;">${sinal} ${fmtMoney(valor)}</td></tr>`;
+  let linhas = `<tr><td>Valor total do orçamento</td><td style="text-align:right; white-space:nowrap;">${fmtMoney(calc.total)}</td></tr>`;
+  if(calc.integral){
+    linhas += `<tr><td colspan="2" style="color:var(--ink-soft);">Cliente faz NF de devolução → garantia integral, sem descontos.</td></tr>`;
+  } else {
+    linhas += linha('IPI', calc.ipi);
+    linhas += linha('ICMS ST', calc.st);
+    linhas += `<tr><td colspan="2" style="color:var(--ink-soft); font-size:12px;">Base dos impostos: valor financeiro ${fmtMoney(calc.vf)} − IPI − ST = ${fmtMoney(calc.base)}</td></tr>`;
+    linhas += linha(`ICMS ${String(calc.aliqIcms*100).replace('.',',')}% (${calc.uf||'UF?'})`, calc.icms);
+    linhas += linha('PIS 0,65%', calc.pis);
+    linhas += linha('Cofins 3%', calc.cofins);
+    linhas += `<tr><td><b>Valor da garantia</b></td><td style="text-align:right;"><b>${fmtMoney(calc.valorAplicavel)}</b></td></tr>`;
+  }
+  calc.abatimentos.forEach(a => {
+    linhas += linha(`Não veio: ${gEsc(a.item.codigo)} (${a.item.quantidade} un.)`, a.valor);
+  });
+  if(calc.abatimentos.length){
+    linhas += `<tr><td><b>Valor final</b></td><td style="text-align:right;"><b>${fmtMoney(calc.valorFinal)}</b></td></tr>`;
+  }
+  return `<table class="cred-table">${linhas}</table>`;
+}
+
+// ---------- Leitura do PDF ----------
+async function extrairGarantiaDoPdf(file){
+  const base64 = await lerPdfComoBase64(file);
+  const prompt = 'Analise este PDF de ORCAMENTO de venda. Leia TODAS as paginas. Responda APENAS com um JSON valido, compacto, sem texto antes ou depois, exatamente neste formato: {"numeroOrcamento":"","clienteCodigo":"","clienteNome":"","cnpj":"","municipio":"","uf":"","consultor":"","valorTotal":0,"valorIpi":0,"valorIcmsSt":0,"itens":[["codigo","descricao",0,0,0]]}. numeroOrcamento: o numero no campo "Orcamento:" (so o numero). clienteCodigo e clienteNome: o campo "Cliente:" vem no formato "numero - nome" (exemplo "Cliente: 18434 - INOX CAMPINAS LTDA H" -> clienteCodigo "18434", clienteNome "INOX CAMPINAS LTDA H"). cnpj: o CNPJ/CPF do cliente como aparece. municipio e uf: do cliente (uf = sigla de 2 letras maiusculas, campo "UF:"). consultor: nome no campo "Consultor". valorTotal: o campo "Total" das condicoes comerciais (valor final do orcamento). valorIpi: campo "Valor IPI". valorIcmsSt: campo "Valor ICMS ST". Valores como numero puro (sem R$, sem ponto de milhar, ponto como decimal; ex: "R$ 1.270,04" -> 1270.04); se o campo nao existir use 0. Cada item de "itens" e um array: [0]=codigo do produto (coluna "Produto"), [1]=descricao resumida (max 60 caracteres), [2]=quantidade (numero), [3]=valor unitario (numero), [4]=valor total do item (numero). Inclua TODOS os itens de TODAS as paginas.';
+  const response = await fetch('/api/analisar-pedido', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({base64, prompt}),
+  });
+  const data = await response.json().catch(() => ({}));
+  if(!response.ok) throw new Error(data?.error || 'Erro ao ler o PDF (tente novamente).');
+  const textBlock = (data.content||[]).find(b => b.type === 'text');
+  if(!textBlock) throw new Error('Não consegui ler o conteúdo do PDF.');
+  const clean = textBlock.text.replace(/```json|```/g,'').trim();
+  let parsed;
+  try{ parsed = JSON.parse(clean); }
+  catch(e){
+    const ini = clean.indexOf('{'), fim = clean.lastIndexOf('}');
+    if(ini === -1 || fim <= ini) throw new Error('Não consegui interpretar os dados do PDF. Preencha os campos à mão.');
+    parsed = JSON.parse(clean.slice(ini, fim+1));
+  }
+  const itens = (Array.isArray(parsed.itens) ? parsed.itens : []).map(i => {
+    const arr = Array.isArray(i) ? i : [i.codigo, i.descricao, i.quantidade, i.unitario, i.total];
+    const quantidade = gNum(arr[2]);
+    const unitario = gNum(arr[3]);
+    let total = gNum(arr[4]);
+    if(!total && quantidade && unitario) total = gR2(quantidade * unitario);
+    return {codigo: String(arr[0]||'?').trim(), descricao: String(arr[1]||'').trim(), quantidade, unitario, total};
+  });
+  return {
+    numeroOrcamento: String(parsed.numeroOrcamento||'').trim(),
+    clienteCodigo: String(parsed.clienteCodigo||'').trim(),
+    clienteNome: String(parsed.clienteNome||'').trim(),
+    cnpj: String(parsed.cnpj||'').trim(),
+    municipio: String(parsed.municipio||'').trim(),
+    uf: String(parsed.uf||'').trim().toUpperCase().slice(0,2),
+    consultor: String(parsed.consultor||'').trim(),
+    valorTotal: gNum(parsed.valorTotal),
+    valorIpi: gNum(parsed.valorIpi),
+    valorSt: gNum(parsed.valorIcmsSt),
+    itens,
+  };
+}
+
+// ---------- Quem vê o quê ----------
+function garantiaVisivelParaSessao(g){
+  const s = STATE.session || {};
+  if(s.tipo === 'gerente') return true;
+  if(s.tipo === 'vendedor') return g.vendedorCodigo === s.codigo || (g.criadoPor && g.criadoPor.codigo === s.codigo);
+  if(s.tipo === 'garantia') return !!g.clienteEnvia && ['aguardando_mercadoria','conferida','concluida'].includes(g.status);
+  return false;
+}
+function abasGarantiaDaSessao(){
+  const t = (STATE.session||{}).tipo;
+  if(t === 'garantia') return [
+    {id:'aguardando', label:'A conferir'},
+    {id:'conferidas', label:'Aguardando lançamento'},
+    {id:'concluidas', label:'Concluídas'},
+  ];
+  const abas = [
+    {id:'nova', label:'+ Nova garantia'},
+    {id:'pendentes', label:'Pendentes'},
+    {id:'aguardando', label:'Aguardando mercadoria'},
+    {id:'conferidas', label:'Aguardando lançamento'},
+    {id:'concluidas', label:'Concluídas'},
+    {id:'recusadas', label:'Recusadas'},
+  ];
+  if(t === 'gerente'){ abas.push({id:'lixeira', label:'Lixeira'}); abas.push({id:'relatorio', label:'Relatório'}); }
+  return abas;
+}
+const GARANTIA_ABA_STATUS = {pendentes:'pendente', aguardando:'aguardando_mercadoria', conferidas:'conferida', concluidas:'concluida', recusadas:'recusada'};
+const GARANTIA_ABAS_COM_MES = ['concluidas','recusadas','lixeira','relatorio'];
+function mesDaGarantia(g){
+  if(g.status === 'concluida' && g.concluidoEm) return gMesLocal(g.concluidoEm);
+  if(g.status === 'recusada' && g.recusadoEm) return gMesLocal(g.recusadoEm);
+  return gMesLocal(g.criadoEm);
+}
+
+// ---------- Tela principal (reaproveitada por vendedor, gerente/diretor e usuário Garantia) ----------
+async function renderGarantiaModulo(main, rerender){
+  STATE.garantiaUI = STATE.garantiaUI || {};
+  const ui = STATE.garantiaUI;
+  const abas = abasGarantiaDaSessao();
+  if(!ui.aba || !abas.some(a => a.id === ui.aba)){
+    ui.aba = STATE.session.tipo === 'garantia' ? 'aguardando' : (STATE.session.tipo === 'gerente' ? 'pendentes' : 'nova');
+  }
+  ui.mes = ui.mes || currentMonthKey();
+  main.innerHTML = `<div class="loading" style="min-height:200px">Carregando garantias…</div>`;
+  let todas;
+  try{ todas = await listarGarantias(); }
+  catch(err){ main.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`; return; }
+  const visiveis = todas.filter(garantiaVisivelParaSessao);
+  const ativas = visiveis.filter(g => !g.excluida);
+  const contagem = {};
+  Object.entries(GARANTIA_ABA_STATUS).forEach(([aba, st]) => { contagem[aba] = ativas.filter(g => g.status === st).length; });
+
+  const redesenhar = () => renderGarantiaModulo(main, rerender);
+  const mostraMes = GARANTIA_ABAS_COM_MES.includes(ui.aba);
+
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Garantia</div><h2>${STATE.session.tipo === 'garantia' ? 'Conferência de garantias' : 'Garantias'}</h2></div>
+    <div class="tabs" style="flex-wrap:wrap;">
+      ${abas.map(a => {
+        const n = ['pendentes','aguardando','conferidas'].includes(a.id) ? contagem[a.id] : 0;
+        return `<button class="tab-btn ${ui.aba===a.id?'active':''}" data-aba="${a.id}">${a.label}${n ? ` <span class="status-badge status-${a.id==='pendentes'?'warn':'info'}" style="margin-left:4px; padding:2px 7px;">${n}</span>` : ''}</button>`;
+      }).join('')}
+    </div>
+    ${mostraMes ? `
+      <div style="display:flex; align-items:center; justify-content:center; gap:14px; margin:4px 0 18px;">
+        <button class="ghost-btn" id="gMesAnt" style="padding:6px 12px;">‹</button>
+        <div style="font-family:'Space Grotesk'; font-size:18px; font-weight:600; min-width:190px; text-align:center;">${gNomeMes(ui.mes)}</div>
+        <button class="ghost-btn" id="gMesProx" style="padding:6px 12px;">›</button>
+      </div>` : ''}
+    <div id="gConteudo"></div>
+  `;
+  main.querySelectorAll('.tab-btn[data-aba]').forEach(b => { b.onclick = () => { ui.aba = b.dataset.aba; redesenhar(); }; });
+  if(mostraMes){
+    main.querySelector('#gMesAnt').onclick = () => { ui.mes = gSomarMes(ui.mes, -1); redesenhar(); };
+    main.querySelector('#gMesProx').onclick = () => { ui.mes = gSomarMes(ui.mes, 1); redesenhar(); };
+  }
+  const conteudo = main.querySelector('#gConteudo');
+
+  if(ui.aba === 'nova'){ await renderNovaGarantia(conteudo, () => { ui.aba = STATE.session.tipo === 'gerente' ? 'pendentes' : 'pendentes'; redesenhar(); }); return; }
+  if(ui.aba === 'relatorio'){ renderRelatorioGarantias(conteudo, visiveis.filter(g => !g.excluida), redesenhar); return; }
+
+  let lista;
+  if(ui.aba === 'lixeira'){
+    lista = visiveis.filter(g => g.excluida && gMesLocal(g.excluidaEm || g.criadoEm) === ui.mes);
+  } else {
+    const st = GARANTIA_ABA_STATUS[ui.aba];
+    lista = ativas.filter(g => g.status === st);
+    if(mostraMes) lista = lista.filter(g => mesDaGarantia(g) === ui.mes);
+  }
+  lista.sort((a,b) => b.numero - a.numero);
+  const somaValor = gR2(lista.reduce((s,g) => s + calcularGarantia(g).valorFinal, 0));
+  conteudo.innerHTML = `
+    <p style="text-align:center; color:var(--ink-soft); font-size:13.5px; margin-bottom:16px;">
+      ${lista.length} garantia(s)${lista.length ? ` · ${fmtMoney(somaValor)}` : ''}
+    </p>
+    ${lista.length === 0 ? `<div class="empty-state">Nenhuma garantia aqui.</div>` : `
+      <div class="client-list">${lista.map(g => cardGarantiaHTML(g)).join('')}</div>
+    `}
+  `;
+  conteudo.querySelectorAll('[data-garantia]').forEach(el => {
+    el.onclick = () => abrirDetalheGarantia(Number(el.dataset.garantia), redesenhar);
+  });
+}
+
+function cardGarantiaHTML(g){
+  const calc = calcularGarantia(g);
+  const st = GARANTIA_STATUS[g.status] || {label:g.status, cls:'info'};
+  const mostrarFormula = STATE.session.tipo === 'garantia' || g.status === 'aguardando_mercadoria' || g.status === 'conferida';
+  return `
+    <div class="client-row status-${g.excluida ? 'danger' : st.cls}" data-garantia="${g.numero}" style="cursor:pointer;">
+      <div style="font-family:'Space Grotesk'; font-weight:700; font-size:18px; min-width:62px; color:var(--primary);">Nº ${g.numero}</div>
+      <div class="client-info">
+        <div class="client-name">${gEsc(g.clienteNome || 'Cliente')} <span class="client-num">Nº ${gEsc(g.clienteCodigo)}</span></div>
+        <div class="client-meta">
+          <span>${gEsc(g.uf || '—')}</span>
+          <span>Vendedor: ${gEsc(g.vendedorNome || '—')}</span>
+          <span>Lançada em ${fmtDataHora(g.criadoEm)}</span>
+          ${g.clienteEnvia ? '<span>📦 Cliente envia de volta</span>' : '<span>Sem envio de mercadoria</span>'}
+          <span>${g.nfDevolucao ? 'Com NF de devolução' : 'Sem NF de devolução'}</span>
+        </div>
+        ${mostrarFormula ? `<div class="client-meta" style="margin-top:5px; color:var(--ink);">${formulaGarantiaHTML(g, calc)}</div>` : ''}
+      </div>
+      <span class="status-badge status-${g.excluida ? 'danger' : st.cls}">${g.excluida ? 'Excluída' : st.label}</span>
+      <div style="font-family:'Space Grotesk'; font-weight:700; font-size:17px; white-space:nowrap;">${fmtMoney(calc.valorFinal)}</div>
+    </div>
+  `;
+}
+
+// ---------- Nova garantia ----------
+async function renderNovaGarantia(el, aoConcluir){
+  const poolInativos = await getInativos();
+  function buscarCliente(codigo){
+    const cod = Number(codigo);
+    if(!cod) return null;
+    const noRoster = STATE.roster.find(c => c.codigo === cod);
+    if(noRoster) return {...noRoster, vendedorCodigo: noRoster.vendedorCodigo};
+    const inativo = poolInativos.find(c => c.codigo === cod);
+    return inativo ? {...inativo, vendedorCodigo: null} : null;
+  }
+  const d = {
+    numeroOrcamento:'', clienteCodigo:'', clienteNome:'', cnpj:'', municipio:'', uf:'', consultor:'',
+    valorTotal:0, valorIpi:0, valorSt:0, valorFinanceiro:null,
+    nfDevolucao:null, clienteEnvia:null, fretePagoPor:'', freteValor:null, obs:'', itens:[],
+  };
+  let arquivoPdf = null;
+
+  el.innerHTML = `
+    <div class="panel">
+      <h3>1. PDF do orçamento</h3>
+      <p class="hint">Suba o PDF do orçamento da garantia. O sistema lê cliente, UF, itens, total, IPI e ICMS ST — confira tudo antes de lançar.</p>
+      <input type="file" id="gPdf" accept="application/pdf,.pdf">
+      <div id="gMsgPdf"></div>
+    </div>
+    <div id="gForm"></div>
+  `;
+  const form = el.querySelector('#gForm');
+
+  function campo(id, rotulo, valor, extra=''){
+    return `<div style="flex:1; min-width:150px;"><label class="field-label">${rotulo}</label><input type="text" id="${id}" value="${gEsc(valor)}" style="width:100%; padding:9px 12px; border:1px solid var(--border); border-radius:7px; font-size:13.5px;" ${extra}></div>`;
+  }
+  function toggle(nome, valor){
+    return `<div class="toggle-row" data-toggle="${nome}" style="max-width:320px;">
+      <button type="button" class="toggle-btn ${valor===true?'active':''}" data-val="sim">Sim</button>
+      <button type="button" class="toggle-btn ${valor===false?'active':''}" data-val="nao">Não</button>
+    </div>`;
+  }
+
+  function desenharResumo(){
+    const box = form.querySelector('#gResumo');
+    if(!box) return;
+    const somaItens = gR2(d.itens.reduce((s,i) => s + (Number(i.total)||0), 0));
+    const aviso = d.itens.length && Math.abs(somaItens - gR2(d.valorTotal)) > 0.05
+      ? `<div class="msg err" style="margin-bottom:10px;">A soma dos itens (${fmtMoney(somaItens)}) está diferente do valor total (${fmtMoney(d.valorTotal)}). Confira antes de lançar.</div>` : '';
+    if(d.nfDevolucao === null){ box.innerHTML = aviso + `<p class="hint">Responda se o cliente fará NF de devolução para ver o valor da garantia.</p>`; return; }
+    if(d.nfDevolucao === false && !(d.valorFinanceiro > 0)){ box.innerHTML = aviso + `<p class="hint">Informe o valor financeiro (valor da NF) para calcular os impostos.</p>`; return; }
+    const calc = calcularGarantia(d);
+    box.innerHTML = aviso + detalheCalculoHTML(d, calc) + `<div style="margin-top:12px; font-size:15px;">${formulaGarantiaHTML(d, calc)}</div>`;
+  }
+
+  function desenharItens(){
+    const box = form.querySelector('#gItens');
+    box.innerHTML = `
+      <table class="cred-table">
+        <thead><tr><th>Código</th><th>Descrição</th><th style="width:80px;">Qtd</th><th style="width:110px;">Unitário</th><th style="width:120px;">Total</th><th></th></tr></thead>
+        <tbody>
+          ${d.itens.map((i, idx) => `
+            <tr>
+              <td><input data-i="${idx}" data-f="codigo" value="${gEsc(i.codigo)}"></td>
+              <td><input data-i="${idx}" data-f="descricao" value="${gEsc(i.descricao)}"></td>
+              <td><input data-i="${idx}" data-f="quantidade" value="${gFmtNumInput(i.quantidade)}"></td>
+              <td><input data-i="${idx}" data-f="unitario" value="${gFmtNumInput(i.unitario)}"></td>
+              <td><input data-i="${idx}" data-f="total" value="${gFmtNumInput(i.total)}"></td>
+              <td><button type="button" class="ghost-btn" data-remover="${idx}" style="padding:5px 9px; color:var(--danger);">✕</button></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+      <button type="button" class="ghost-btn" id="gAddItem" style="margin-top:8px;">+ Adicionar item</button>
+    `;
+    box.querySelectorAll('input[data-i]').forEach(inp => {
+      inp.oninput = () => {
+        const item = d.itens[Number(inp.dataset.i)];
+        const f = inp.dataset.f;
+        item[f] = (f === 'codigo' || f === 'descricao') ? inp.value : gNum(inp.value);
+        if((f === 'quantidade' || f === 'unitario') && item.quantidade && item.unitario){
+          item.total = gR2(item.quantidade * item.unitario);
+          const tot = box.querySelector(`input[data-i="${inp.dataset.i}"][data-f="total"]`);
+          if(tot) tot.value = gFmtNumInput(item.total);
+        }
+        desenharResumo();
+      };
+    });
+    box.querySelectorAll('[data-remover]').forEach(b => { b.onclick = () => { d.itens.splice(Number(b.dataset.remover), 1); desenharItens(); desenharResumo(); }; });
+    box.querySelector('#gAddItem').onclick = () => { d.itens.push({codigo:'', descricao:'', quantidade:0, unitario:0, total:0}); desenharItens(); };
+  }
+
+  function desenharClienteInfo(){
+    const box = form.querySelector('#gClienteInfo');
+    const c = buscarCliente(d.clienteCodigo);
+    if(!d.clienteCodigo){ box.innerHTML = ''; return; }
+    if(!c){ box.innerHTML = `<div class="msg err">Cliente Nº ${gEsc(d.clienteCodigo)} não encontrado na base. Confira o número (a garantia pode ser lançada mesmo assim).</div>`; return; }
+    const v = c.vendedorCodigo ? STATE.vendors.find(x => x.codigo === c.vendedorCodigo) : null;
+    box.innerHTML = `<div class="msg ok">Cliente na base: <b>${gEsc(c.nome)}</b> · ${gEsc(c.municipio||'')}${c.uf?'/'+gEsc(c.uf):''} · ${v ? 'Vendedor: '+gEsc(v.nome) : 'Sem vendedor (inativos)'}</div>`;
+  }
+
+  function desenharForm(){
+    form.innerHTML = `
+      <div class="panel">
+        <h3>2. Dados do orçamento</h3>
+        <p class="hint">Confira o que foi lido do PDF e corrija se precisar.</p>
+        <div class="form-row">
+          ${campo('gCliCod', 'Nº do cliente', d.clienteCodigo)}
+          <div style="flex:3; min-width:220px;"><label class="field-label">Nome do cliente</label><input type="text" id="gCliNome" value="${gEsc(d.clienteNome)}" style="width:100%; padding:9px 12px; border:1px solid var(--border); border-radius:7px; font-size:13.5px;"></div>
+          ${campo('gUf', 'UF', d.uf, 'maxlength="2" style="text-transform:uppercase; width:100%; padding:9px 12px; border:1px solid var(--border); border-radius:7px; font-size:13.5px;"')}
+        </div>
+        <div id="gClienteInfo" style="margin-bottom:10px;"></div>
+        <div class="form-row">
+          ${campo('gOrc', 'Nº do orçamento', d.numeroOrcamento)}
+          ${campo('gTotal', 'Valor total (R$)', gFmtNumInput(d.valorTotal))}
+          ${campo('gIpi', 'IPI (R$)', gFmtNumInput(d.valorIpi))}
+          ${campo('gSt', 'ICMS ST (R$)', gFmtNumInput(d.valorSt))}
+        </div>
+        <h3 style="margin-top:14px; font-size:15px;">Itens</h3>
+        <div id="gItens" style="overflow-x:auto;"></div>
+      </div>
+
+      <div class="panel">
+        <h3>3. Perguntas</h3>
+        <div class="form-row">
+          ${campo('gVf', 'Valor financeiro — valor da NF (R$)', gFmtNumInput(d.valorFinanceiro), 'placeholder="ex: 464,94" style="width:100%; padding:9px 12px; border:1px solid var(--border); border-radius:7px; font-size:13.5px;"')}
+        </div>
+        <label class="field-label" style="margin-top:12px;">O cliente fará NF de devolução?</label>
+        ${toggle('nf', d.nfDevolucao)}
+        <label class="field-label" style="margin-top:16px;">O cliente vai enviar a mercadoria de volta?</label>
+        ${toggle('envia', d.clienteEnvia)}
+        <div id="gFreteBox" style="margin-top:14px; ${d.clienteEnvia===true?'':'display:none;'}">
+          <div class="form-row">
+            <div style="flex:1; min-width:180px;">
+              <label class="field-label">Quem paga o frete? (opcional)</label>
+              <select id="gFretePor" class="filter-select" style="width:100%;">
+                <option value="" ${!d.fretePagoPor?'selected':''}>Não informado</option>
+                <option value="cliente" ${d.fretePagoPor==='cliente'?'selected':''}>Cliente</option>
+                <option value="tf" ${d.fretePagoPor==='tf'?'selected':''}>TF Imports (nós)</option>
+              </select>
+            </div>
+            <div id="gFreteValorBox" style="flex:1; min-width:180px; ${d.fretePagoPor==='tf'?'':'display:none;'}">
+              <label class="field-label">Quanto custa o frete pra nós? (opcional)</label>
+              <input type="text" id="gFreteValor" value="${gFmtNumInput(d.freteValor)}" placeholder="R$" style="width:100%; padding:9px 12px; border:1px solid var(--border); border-radius:7px; font-size:13.5px;">
+            </div>
+          </div>
+        </div>
+        <label class="field-label" style="margin-top:14px;">Observação (opcional)</label>
+        <textarea id="gObs" class="import-area" style="min-height:60px;">${gEsc(d.obs)}</textarea>
+      </div>
+
+      <div class="panel">
+        <h3>4. Valor da garantia</h3>
+        <div id="gResumo"></div>
+        <div id="gMsgLancar"></div>
+        <button class="primary-btn" id="gLancar" style="margin-top:14px; width:100%;">Lançar garantia</button>
+      </div>
+    `;
+    desenharItens();
+    desenharClienteInfo();
+    desenharResumo();
+
+    const q = (s) => form.querySelector(s);
+    q('#gCliCod').oninput = () => {
+      d.clienteCodigo = q('#gCliCod').value.trim();
+      const c = buscarCliente(d.clienteCodigo);
+      if(c){
+        if(!q('#gCliNome').value.trim()){ d.clienteNome = c.nome; q('#gCliNome').value = c.nome; }
+        if(!q('#gUf').value.trim() && c.uf){ d.uf = c.uf.toUpperCase(); q('#gUf').value = d.uf; }
+      }
+      desenharClienteInfo(); desenharResumo();
+    };
+    q('#gCliNome').oninput = () => { d.clienteNome = q('#gCliNome').value; };
+    q('#gUf').oninput = () => { d.uf = q('#gUf').value.trim().toUpperCase(); desenharResumo(); };
+    q('#gOrc').oninput = () => { d.numeroOrcamento = q('#gOrc').value.trim(); };
+    q('#gTotal').oninput = () => { d.valorTotal = gNum(q('#gTotal').value); desenharResumo(); };
+    q('#gIpi').oninput = () => { d.valorIpi = gNum(q('#gIpi').value); desenharResumo(); };
+    q('#gSt').oninput = () => { d.valorSt = gNum(q('#gSt').value); desenharResumo(); };
+    q('#gVf').oninput = () => { const v = q('#gVf').value.trim(); d.valorFinanceiro = v ? gNum(v) : null; desenharResumo(); };
+    q('#gObs').oninput = () => { d.obs = q('#gObs').value; };
+    q('#gFretePor').onchange = () => {
+      d.fretePagoPor = q('#gFretePor').value;
+      q('#gFreteValorBox').style.display = d.fretePagoPor === 'tf' ? '' : 'none';
+      if(d.fretePagoPor !== 'tf') d.freteValor = null;
+    };
+    q('#gFreteValor').oninput = () => { const v = q('#gFreteValor').value.trim(); d.freteValor = v ? gNum(v) : null; };
+    form.querySelectorAll('[data-toggle]').forEach(grupo => {
+      grupo.querySelectorAll('.toggle-btn').forEach(b => {
+        b.onclick = () => {
+          const val = b.dataset.val === 'sim';
+          grupo.querySelectorAll('.toggle-btn').forEach(x => x.classList.toggle('active', x === b));
+          if(grupo.dataset.toggle === 'nf'){ d.nfDevolucao = val; desenharResumo(); }
+          else {
+            d.clienteEnvia = val;
+            q('#gFreteBox').style.display = val ? '' : 'none';
+            if(!val){ d.fretePagoPor = ''; d.freteValor = null; }
+          }
+        };
+      });
+    });
+    q('#gLancar').onclick = lancar;
+  }
+
+  async function lancar(){
+    const msg = form.querySelector('#gMsgLancar');
+    const btn = form.querySelector('#gLancar');
+    const erro = (t) => { msg.innerHTML = `<div class="msg err">${t}</div>`; };
+    if(!d.clienteCodigo) return erro('Informe o número do cliente.');
+    if(!(d.valorTotal > 0)) return erro('Informe o valor total do orçamento.');
+    if(!d.itens.length) return erro('A garantia precisa de pelo menos um item.');
+    if(d.itens.some(i => !String(i.codigo||'').trim() || !(i.quantidade > 0))) return erro('Todo item precisa de código e quantidade.');
+    if(d.uf.length !== 2) return erro('Informe a UF do cliente (2 letras).');
+    if(d.nfDevolucao === null) return erro('Responda se o cliente fará NF de devolução.');
+    if(d.clienteEnvia === null) return erro('Responda se o cliente vai enviar a mercadoria de volta.');
+    if(d.nfDevolucao === false && !(d.valorFinanceiro > 0)) return erro('Informe o valor financeiro (valor da NF) — sem ele não dá pra calcular os impostos.');
+    btn.disabled = true;
+    try{
+      let pdfPath = null;
+      if(arquivoPdf){ btn.textContent = 'Enviando PDF...'; pdfPath = await enviarPdfGarantia(arquivoPdf); }
+      btn.textContent = 'Gerando número...';
+      const {numero} = await garantiaApi({acao:'proximo-numero'});
+      const cli = buscarCliente(d.clienteCodigo);
+      const s = STATE.session;
+      const vendedorCodigo = s.tipo === 'vendedor' ? s.codigo : (cli && cli.vendedorCodigo ? cli.vendedorCodigo : null);
+      const vend = vendedorCodigo ? STATE.vendors.find(v => v.codigo === vendedorCodigo) : null;
+      const agora = new Date().toISOString();
+      const g = {
+        numero,
+        criadoEm: agora,
+        criadoPor: gQuem(),
+        vendedorCodigo,
+        vendedorNome: vend ? vend.nome : (s.tipo === 'vendedor' ? s.nome : ''),
+        clienteCodigo: Number(d.clienteCodigo) || d.clienteCodigo,
+        clienteNome: d.clienteNome || (cli ? cli.nome : ''),
+        cnpj: d.cnpj || (cli ? (cli.cnpj||'') : ''),
+        municipio: d.municipio || (cli ? (cli.municipio||'') : ''),
+        uf: d.uf,
+        numeroOrcamento: d.numeroOrcamento,
+        consultor: d.consultor,
+        valorTotal: gR2(d.valorTotal),
+        valorIpi: gR2(d.valorIpi),
+        valorSt: gR2(d.valorSt),
+        valorFinanceiro: d.valorFinanceiro === null ? null : gR2(d.valorFinanceiro),
+        nfDevolucao: d.nfDevolucao,
+        clienteEnvia: d.clienteEnvia,
+        fretePagoPor: d.clienteEnvia ? (d.fretePagoPor || null) : null,
+        freteValor: d.clienteEnvia && d.fretePagoPor === 'tf' && d.freteValor !== null ? gR2(d.freteValor) : null,
+        obs: d.obs.trim(),
+        itens: d.itens.map(i => ({codigo: String(i.codigo).trim(), descricao: String(i.descricao||'').trim(), quantidade: Number(i.quantidade)||0, unitario: gR2(i.unitario), total: gR2(i.total), conferencia: {veio:null, destino:null}})),
+        pdfPath,
+        pdfNome: arquivoPdf ? arquivoPdf.name : null,
+        status: 'pendente',
+        excluida: false,
+        historico: [{em: agora, por: s.nome, acao: 'Garantia lançada'}],
+        versao: 0,
+      };
+      btn.textContent = 'Salvando...';
+      await salvarGarantia(g);
+      await avisar(`Garantia <b>nº ${numero}</b> lançada. Valor: <b>${fmtMoney(calcularGarantia(g).valorFinal)}</b>. Agora ela aguarda autorização.`);
+      aoConcluir();
+    }catch(err){
+      btn.disabled = false; btn.textContent = 'Lançar garantia';
+      erro(gEsc(err.message));
+    }
+  }
+
+  el.querySelector('#gPdf').onchange = async () => {
+    const file = el.querySelector('#gPdf').files[0];
+    const msg = el.querySelector('#gMsgPdf');
+    if(!file) return;
+    if(file.size > 20*1024*1024){ msg.innerHTML = `<div class="msg err">PDF muito grande (máx. 20 MB).</div>`; return; }
+    arquivoPdf = file;
+    msg.innerHTML = `<div class="hint" style="margin-top:10px;">Lendo o PDF... (pode levar alguns segundos)</div>`;
+    try{
+      const lido = await extrairGarantiaDoPdf(file);
+      Object.assign(d, lido);
+      if(!d.clienteNome){ const c = buscarCliente(d.clienteCodigo); if(c) d.clienteNome = c.nome; }
+      if(!d.uf){ const c = buscarCliente(d.clienteCodigo); if(c && c.uf) d.uf = c.uf.toUpperCase(); }
+      msg.innerHTML = `<div class="msg ok">PDF lido: ${d.itens.length} item(ns). Confira os dados abaixo.</div>`;
+    }catch(err){
+      msg.innerHTML = `<div class="msg err">${gEsc(err.message)} Você pode preencher os dados à mão abaixo — o PDF continua anexado.</div>`;
+    }
+    desenharForm();
+  };
+  desenharForm();
+}
+
+// ---------- Detalhe da garantia (abre ao clicar) ----------
+async function abrirDetalheGarantia(numero, aoMudar){
+  let lista = STATE.garantias;
+  try{ lista = await listarGarantias(); }catch(e){ /* usa o que já tem */ }
+  const original = (lista||[]).find(x => x.numero === numero);
+  if(!original){ avisar('Garantia não encontrada.'); return; }
+  const g = JSON.parse(JSON.stringify(original)); // cópia de trabalho (a conferência mexe aqui antes de salvar)
+  const s = STATE.session;
+  const ehGerente = s.tipo === 'gerente';
+  const podeConferir = (s.tipo === 'garantia' || ehGerente) && !g.excluida;
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  document.body.appendChild(backdrop);
+  const fechar = (mudou) => { backdrop.remove(); if(mudou && aoMudar) aoMudar(); };
+  backdrop.onclick = (e) => { if(e.target === backdrop) fechar(false); };
+
+  async function gravar(mutar, textoOk){
+    const alvo = JSON.parse(JSON.stringify(g));
+    mutar(alvo);
+    try{
+      await salvarGarantia(alvo);
+      fechar(true);
+      if(textoOk) avisar(textoOk);
+    }catch(err){
+      avisar(gEsc(err.message));
+      if(err.status === 409) fechar(true);
+    }
+  }
+  function registrar(alvo, acao){
+    alvo.historico = alvo.historico || [];
+    alvo.historico.push({em: new Date().toISOString(), por: s.nome, acao});
+  }
+
+  function desenhar(){
+    const calc = calcularGarantia(g);
+    const st = GARANTIA_STATUS[g.status] || {label:g.status, cls:'info'};
+    const emConferencia = podeConferir && g.status === 'aguardando_mercadoria';
+    const mostrarConferencia = g.clienteEnvia && ['aguardando_mercadoria','conferida','concluida'].includes(g.status);
+    const todosMarcados = (g.itens||[]).every(i => i.conferencia && (i.conferencia.veio === false || (i.conferencia.veio === true && i.conferencia.destino)));
+    const linkCliente = s.tipo !== 'garantia';
+
+    backdrop.innerHTML = `
+      <div class="modal" style="max-width:860px; max-height:88vh; overflow-y:auto;">
+        <div style="display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap; margin-bottom:6px;">
+          <h3 style="margin-bottom:0; flex:1;">Garantia nº ${g.numero}</h3>
+          <span class="status-badge status-${g.excluida?'danger':st.cls}">${g.excluida ? 'Excluída' : st.label}</span>
+        </div>
+        <p style="font-size:13px; color:var(--ink-soft); line-height:1.6; margin-bottom:12px;">
+          <b ${linkCliente ? `class="client-name-link" id="gLinkCliente"` : ''} style="color:var(--ink);">${gEsc(g.clienteNome)} <span class="client-num">Nº ${gEsc(g.clienteCodigo)}</span></b>
+          · ${gEsc(g.municipio||'')}${g.uf ? '/'+gEsc(g.uf) : ''}${g.cnpj ? ' · CNPJ '+gEsc(g.cnpj) : ''}<br>
+          Vendedor: <b>${gEsc(g.vendedorNome||'—')}</b>${g.numeroOrcamento ? ` · Orçamento nº <b>${gEsc(g.numeroOrcamento)}</b>` : ''}${g.consultor ? ` · Consultor: ${gEsc(g.consultor)}` : ''}<br>
+          Lançada por ${gEsc(g.criadoPor ? g.criadoPor.nome : '—')} em ${fmtDataHora(g.criadoEm)}
+        </p>
+
+        <div class="form-row" style="gap:8px; margin-bottom:14px;">
+          <span class="status-badge status-${g.nfDevolucao?'ok':'warn'}">${g.nfDevolucao ? 'Com NF de devolução (integral)' : 'Sem NF de devolução'}</span>
+          <span class="status-badge status-info">${g.clienteEnvia ? '📦 Cliente envia a mercadoria de volta' : 'Cliente não envia a mercadoria'}</span>
+          ${g.clienteEnvia ? `<span class="status-badge status-info">Frete: ${g.fretePagoPor === 'tf' ? 'TF Imports'+(g.freteValor!==null && g.freteValor!==undefined ? ' — '+fmtMoney(g.freteValor) : '') : g.fretePagoPor === 'cliente' ? 'Cliente' : 'não informado'}</span>` : ''}
+          ${g.valorFinanceiro ? `<span class="status-badge status-info">Valor financeiro: ${fmtMoney(g.valorFinanceiro)}</span>` : ''}
+          ${g.pdfPath ? `<button class="ghost-btn" id="gAbrirPdf" style="padding:6px 12px;">📄 Abrir PDF</button>` : ''}
+        </div>
+        ${g.obs ? `<div class="msg" style="background:var(--bg); margin-bottom:12px;"><b>Observação:</b> ${gEsc(g.obs)}</div>` : ''}
+        ${g.status === 'recusada' ? `<div class="msg err" style="margin-bottom:12px;">Recusada por ${gEsc(g.recusadoPor||'')} em ${fmtDataHora(g.recusadoEm)}${g.motivoRecusa ? ': '+gEsc(g.motivoRecusa) : ''}</div>` : ''}
+
+        <h3 style="font-size:15px; margin:6px 0 8px;">Itens</h3>
+        <div style="overflow-x:auto;">
+        <table class="cred-table">
+          <thead><tr>
+            <th>Código</th><th>Descrição</th><th style="text-align:right;">Qtd</th><th style="text-align:right;">Unitário</th><th style="text-align:right;">Total</th>
+            <th style="text-align:right;">Na garantia</th>
+            ${mostrarConferencia ? '<th>Chegou?</th><th>Destino</th>' : ''}
+          </tr></thead>
+          <tbody>
+            ${(g.itens||[]).map((i, idx) => {
+              const conf = i.conferencia || {};
+              const naoVeio = conf.veio === false;
+              let colunasConf = '';
+              if(mostrarConferencia){
+                if(emConferencia){
+                  colunasConf = `
+                    <td style="white-space:nowrap;">
+                      <div class="toggle-row" style="gap:4px;">
+                        <button class="toggle-btn ${conf.veio===true?'active':''}" data-conf="${idx}" data-veio="sim" data-val="sim" style="padding:6px 10px;">✓ Veio</button>
+                        <button class="toggle-btn ${conf.veio===false?'active':''}" data-conf="${idx}" data-veio="nao" data-val="nao" style="padding:6px 10px; ${conf.veio===false?'border-color:var(--danger); color:var(--danger); background:var(--danger-soft);':''}">✗ Não veio</button>
+                      </div>
+                    </td>
+                    <td>${conf.veio === true ? `
+                      <select class="filter-select" data-destino="${idx}" style="padding:6px 8px; font-size:13px;">
+                        <option value="" ${!conf.destino?'selected':''}>Escolha…</option>
+                        <option value="estoque" ${conf.destino==='estoque'?'selected':''}>Volta pro estoque</option>
+                        <option value="descarte" ${conf.destino==='descarte'?'selected':''}>Descarte</option>
+                      </select>` : '—'}</td>`;
+                } else {
+                  colunasConf = `<td>${conf.veio === true ? '<span style="color:var(--ok); font-weight:600;">✓ Veio</span>' : conf.veio === false ? '<span style="color:var(--danger); font-weight:600;">✗ Não veio</span>' : '—'}</td>
+                    <td>${conf.destino === 'estoque' ? 'Estoque' : conf.destino === 'descarte' ? 'Descarte' : '—'}</td>`;
+                }
+              }
+              const riscado = naoVeio ? 'opacity:.5; text-decoration:line-through;' : '';
+              return `<tr>
+                <td style="white-space:nowrap; ${riscado}"><b>${gEsc(i.codigo)}</b></td><td style="${riscado}">${gEsc(i.descricao)}</td>
+                <td style="text-align:right; ${riscado}">${i.quantidade}</td>
+                <td style="text-align:right; white-space:nowrap; ${riscado}">${fmtMoney(i.unitario)}</td>
+                <td style="text-align:right; white-space:nowrap; ${riscado}">${fmtMoney(i.total)}</td>
+                <td style="text-align:right; white-space:nowrap; ${riscado}">${naoVeio ? '−'+fmtMoney(valorItemNaGarantia(g, i, calc)) : fmtMoney(valorItemNaGarantia(g, i, calc))}</td>
+                ${colunasConf}
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+        </div>
+        <p class="hint" style="font-size:12px; margin-top:6px;">Total: ${(g.itens||[]).reduce((a,i)=>a+(Number(i.quantidade)||0),0)} peça(s) · ${(g.itens||[]).length} SKU(s). "Na garantia" é a parte de cada item no valor da garantia (proporcional).</p>
+
+        <h3 style="font-size:15px; margin:16px 0 8px;">Cálculo</h3>
+        ${detalheCalculoHTML(g, calc)}
+        <div style="margin-top:10px; font-size:15.5px; padding:12px 14px; background:var(--bg); border-radius:10px;">
+          Valor a aplicar: ${formulaGarantiaHTML(g, calc)}
+        </div>
+
+        <div id="gAcoes" style="margin-top:18px;"></div>
+
+        <details style="margin-top:16px;">
+          <summary style="cursor:pointer; font-size:13px; color:var(--ink-soft);">Histórico da garantia</summary>
+          <div style="font-size:12.5px; color:var(--ink-soft); margin-top:8px; line-height:1.7;">
+            ${(g.historico||[]).map(h => `${fmtDataHora(h.em)} — <b>${gEsc(h.por)}</b>: ${gEsc(h.acao)}`).join('<br>')}
+          </div>
+        </details>
+
+        <div class="modal-actions" style="margin-top:16px; flex-wrap:wrap;">
+          ${ehGerente && !g.excluida ? `<button class="ghost-btn" id="gExcluir" style="color:var(--danger); border-color:var(--danger); margin-right:auto;">🗑️ Excluir</button>` : ''}
+          ${ehGerente && g.excluida ? `<button class="ghost-btn" id="gRestaurar" style="margin-right:auto;">↩️ Restaurar</button>` : ''}
+          <button class="ghost-btn" id="gFechar">Fechar</button>
+        </div>
+      </div>
+    `;
+
+    const acoes = backdrop.querySelector('#gAcoes');
+    if(!g.excluida && ehGerente && g.status === 'pendente'){
+      acoes.innerHTML = `
+        <div class="panel" style="margin-bottom:0; padding:16px 18px;">
+          <h3 style="font-size:15px;">Autorização</h3>
+          <p class="hint" style="margin-bottom:10px;">${g.clienteEnvia ? 'Autorizando, a garantia vai para o pessoal da Garantia aguardar a mercadoria chegar e conferir.' : 'Cliente não envia a mercadoria: autorizando, a garantia já fica concluída.'}</p>
+          <textarea id="gMotivo" placeholder="Motivo (obrigatório só para recusar)" style="min-height:50px;"></textarea>
+          <div class="modal-actions">
+            <button class="ghost-btn" id="gRecusar" style="color:var(--danger); border-color:var(--danger);">Recusar</button>
+            <button class="primary-btn" id="gAutorizar" style="background:var(--ok); border-color:var(--ok);">✓ Autorizar</button>
+          </div>
+        </div>`;
+      acoes.querySelector('#gAutorizar').onclick = () => gravar(alvo => {
+        const agora = new Date().toISOString();
+        alvo.autorizadoEm = agora; alvo.autorizadoPor = s.nome;
+        if(alvo.clienteEnvia){
+          alvo.status = 'aguardando_mercadoria';
+          registrar(alvo, 'Autorizada — aguardando mercadoria');
+        } else {
+          alvo.status = 'concluida';
+          alvo.concluidoEm = agora;
+          alvo.valorFinalConcluido = calcularGarantia(alvo).valorFinal;
+          registrar(alvo, 'Autorizada — concluída (sem envio de mercadoria)');
+        }
+      }, `Garantia nº ${g.numero} autorizada.`);
+      acoes.querySelector('#gRecusar').onclick = () => {
+        const motivo = acoes.querySelector('#gMotivo').value.trim();
+        if(!motivo){ avisar('Escreva o motivo da recusa.'); return; }
+        gravar(alvo => {
+          alvo.status = 'recusada';
+          alvo.recusadoEm = new Date().toISOString(); alvo.recusadoPor = s.nome; alvo.motivoRecusa = motivo;
+          registrar(alvo, 'Recusada: ' + motivo);
+        }, `Garantia nº ${g.numero} recusada.`);
+      };
+    }
+    if(emConferencia){
+      acoes.innerHTML = `
+        <div class="panel" style="margin-bottom:0; padding:16px 18px;">
+          <h3 style="font-size:15px;">Conferência</h3>
+          <p class="hint" style="margin-bottom:10px;">Marque cada item: se veio, escolha estoque ou descarte. Item que não veio sai da garantia pelo valor proporcional — o valor acima já se atualiza.</p>
+          <div class="modal-actions">
+            <button class="ghost-btn" id="gSalvarConf">Salvar e continuar depois</button>
+            <button class="primary-btn" id="gFinalizarConf" ${todosMarcados ? '' : 'disabled style="opacity:.5; cursor:not-allowed;"'}>Finalizar conferência</button>
+          </div>
+        </div>`;
+      acoes.querySelector('#gSalvarConf').onclick = () => gravar(alvo => { registrar(alvo, 'Conferência salva (parcial)'); }, 'Conferência salva.');
+      acoes.querySelector('#gFinalizarConf').onclick = () => {
+        if(!todosMarcados) return;
+        gravar(alvo => {
+          alvo.status = 'conferida';
+          alvo.conferidoEm = new Date().toISOString(); alvo.conferidoPor = s.nome;
+          const c = calcularGarantia(alvo);
+          registrar(alvo, `Conferência finalizada — valor ${fmtMoney(c.valorFinal)}${c.abatimentos.length ? ` (${c.abatimentos.length} item(ns) não vieram)` : ''}`);
+        }, `Conferência da garantia nº ${g.numero} finalizada. Falta marcar como lançada no sistema.`);
+      };
+      backdrop.querySelectorAll('[data-conf]').forEach(b => {
+        b.onclick = () => {
+          const item = g.itens[Number(b.dataset.conf)];
+          item.conferencia = item.conferencia || {veio:null, destino:null};
+          item.conferencia.veio = b.dataset.veio === 'sim';
+          if(!item.conferencia.veio) item.conferencia.destino = null;
+          desenhar();
+        };
+      });
+      backdrop.querySelectorAll('[data-destino]').forEach(sel => {
+        sel.onchange = () => { g.itens[Number(sel.dataset.destino)].conferencia.destino = sel.value || null; desenhar(); };
+      });
+    }
+    if(!g.excluida && podeConferir && g.status === 'conferida'){
+      acoes.innerHTML = `
+        <div class="panel" style="margin-bottom:0; padding:16px 18px;">
+          <h3 style="font-size:15px;">Lançamento no sistema</h3>
+          <p class="hint" style="margin-bottom:10px;">Conferida por ${gEsc(g.conferidoPor||'')} em ${fmtDataHora(g.conferidoEm)}. Lance <b>${fmtMoney(calc.valorFinal)}</b> no sistema interno e marque abaixo.</p>
+          <label style="display:flex; align-items:center; gap:10px; font-size:14.5px; font-weight:600; cursor:pointer; margin-bottom:12px;">
+            <input type="checkbox" id="gChkLancada" style="width:20px; height:20px;"> Essa garantia já foi lançada no sistema
+          </label>
+          <div class="modal-actions">
+            ${ehGerente || s.tipo === 'garantia' ? `<button class="ghost-btn" id="gReabrirConf">Reabrir conferência</button>` : ''}
+            <button class="primary-btn" id="gConfirmarLancada" disabled style="opacity:.5;">Confirmar e concluir</button>
+          </div>
+        </div>`;
+      const chk = acoes.querySelector('#gChkLancada');
+      const btnOk = acoes.querySelector('#gConfirmarLancada');
+      chk.onchange = () => { btnOk.disabled = !chk.checked; btnOk.style.opacity = chk.checked ? '1' : '.5'; };
+      btnOk.onclick = () => {
+        if(!chk.checked) return;
+        gravar(alvo => {
+          const agora = new Date().toISOString();
+          alvo.lancadaNoSistema = true;
+          alvo.lancadoSistemaEm = agora; alvo.lancadoSistemaPor = s.nome;
+          alvo.status = 'concluida'; alvo.concluidoEm = agora;
+          alvo.valorFinalConcluido = calcularGarantia(alvo).valorFinal;
+          registrar(alvo, 'Marcada como lançada no sistema — concluída');
+        }, `Garantia nº ${g.numero} concluída.`);
+      };
+      const reabrir = acoes.querySelector('#gReabrirConf');
+      if(reabrir) reabrir.onclick = () => gravar(alvo => { alvo.status = 'aguardando_mercadoria'; registrar(alvo, 'Conferência reaberta'); });
+    }
+    if(g.status === 'concluida' && g.lancadaNoSistema){
+      acoes.innerHTML = `<div class="msg ok">Lançada no sistema por ${gEsc(g.lancadoSistemaPor||'')} em ${fmtDataHora(g.lancadoSistemaEm)}.</div>`;
+    }
+
+    backdrop.querySelector('#gFechar').onclick = () => fechar(false);
+    const pdfBtn = backdrop.querySelector('#gAbrirPdf');
+    if(pdfBtn) pdfBtn.onclick = () => abrirPdfGarantia(g.pdfPath);
+    const link = backdrop.querySelector('#gLinkCliente');
+    if(link) link.onclick = () => { const cod = Number(g.clienteCodigo); if(cod) abrirDetalhesCliente(cod); };
+    const exc = backdrop.querySelector('#gExcluir');
+    if(exc) exc.onclick = async () => {
+      if(!(await confirmarAcao(`Excluir a garantia nº ${g.numero}? Ela vai para a Lixeira da Garantia e pode ser restaurada. O número não é reaproveitado.`))) return;
+      gravar(alvo => {
+        alvo.excluida = true; alvo.excluidaEm = new Date().toISOString(); alvo.excluidaPor = s.nome;
+        registrar(alvo, 'Excluída (lixeira)');
+      }, `Garantia nº ${g.numero} foi para a lixeira.`);
+    };
+    const rest = backdrop.querySelector('#gRestaurar');
+    if(rest) rest.onclick = () => gravar(alvo => {
+      alvo.excluida = false; alvo.restauradaEm = new Date().toISOString(); alvo.restauradaPor = s.nome;
+      registrar(alvo, 'Restaurada da lixeira');
+    }, `Garantia nº ${g.numero} restaurada.`);
+  }
+  desenhar();
+}
+
+// ---------- Relatório ----------
+function renderRelatorioGarantias(el, garantias, redesenhar){
+  const ui = STATE.garantiaUI;
+  ui.relFiltro = ui.relFiltro || 'concluidas';
+  ui.relDetalhe = ui.relDetalhe || 'valor';
+  ui.relAno = ui.relAno || Number(currentMonthKey().slice(0,4));
+  ui.relBusca = ui.relBusca || '';
+
+  // Base conforme o filtro: só concluídas, ou todas (menos recusadas/excluídas).
+  const base = garantias.filter(g => ui.relFiltro === 'concluidas' ? g.status === 'concluida' : g.status !== 'recusada');
+  const doMes = base.filter(g => mesDaGarantia(g) === ui.mes);
+
+  const porCliente = new Map();
+  const porSku = new Map();
+  let valorMes = 0, pecasMes = 0;
+  doMes.forEach(g => {
+    const calc = calcularGarantia(g);
+    valorMes += calc.valorFinal;
+    const chaveCli = String(g.clienteCodigo);
+    if(!porCliente.has(chaveCli)) porCliente.set(chaveCli, {codigo:g.clienteCodigo, nome:g.clienteNome, vendedor:g.vendedorNome||'', garantias:0, valor:0, pecas:0, skus:new Set()});
+    const pc = porCliente.get(chaveCli);
+    pc.garantias++; pc.valor += calc.valorFinal;
+    itensDevolvidosDaGarantia(g).forEach(i => {
+      const cod = String(i.codigo||'').trim().toUpperCase();
+      const qtd = Number(i.quantidade)||0;
+      const val = valorItemNaGarantia(g, i, calc);
+      pecasMes += qtd; pc.pecas += qtd; pc.skus.add(cod);
+      if(!porSku.has(cod)) porSku.set(cod, {codigo:cod, descricao:i.descricao||'', quantidade:0, valor:0, clientes:new Set()});
+      const ps = porSku.get(cod);
+      ps.quantidade += qtd; ps.valor += val; ps.clientes.add(chaveCli);
+      if(!ps.descricao && i.descricao) ps.descricao = i.descricao;
+    });
+  });
+  const clientesOrd = [...porCliente.values()].map(c => ({...c, valor:gR2(c.valor)}));
+  const skusOrd = [...porSku.values()].map(s => ({...s, valor:gR2(s.valor)})).sort((a,b) => b.quantidade - a.quantidade || b.valor - a.valor);
+
+  const card = (id, num, rotulo) => `
+    <div class="stat-card ${ui.relDetalhe===id?'accent':''}" data-rel="${id}" style="cursor:pointer; ${ui.relDetalhe===id?'border-color:var(--accent);':''}">
+      <div class="num">${num}</div><div class="label">${rotulo}</div>
+    </div>`;
+
+  let detalheHTML = '', dadosExcel = [], nomeExcel = '';
+  if(ui.relDetalhe === 'valor'){
+    const rows = [...clientesOrd].sort((a,b) => b.valor - a.valor);
+    dadosExcel = rows.map(c => ({'Cliente Nº':c.codigo, 'Cliente':c.nome, 'Vendedor':c.vendedor, 'Garantias':c.garantias, 'Valor devolvido (R$)':c.valor}));
+    nomeExcel = 'clientes-que-mais-devolveram';
+    detalheHTML = `<h3>Clientes que mais devolveram — em valor</h3>
+      ${rows.length ? `<table class="cred-table"><thead><tr><th>#</th><th>Cliente</th><th>Vendedor</th><th style="text-align:right;">Garantias</th><th style="text-align:right;">Valor</th></tr></thead><tbody>
+        ${rows.map((c,i) => `<tr><td>${i+1}º</td><td><b>${gEsc(c.nome)}</b> <span class="client-num">Nº ${gEsc(c.codigo)}</span></td><td>${gEsc(c.vendedor||'—')}</td><td style="text-align:right;">${c.garantias}</td><td style="text-align:right; white-space:nowrap;"><b>${fmtMoney(c.valor)}</b></td></tr>`).join('')}
+      </tbody></table>` : `<div class="empty-state">Nenhuma devolução nesse mês.</div>`}`;
+  } else if(ui.relDetalhe === 'sku'){
+    dadosExcel = skusOrd.map(s => ({'Código':s.codigo, 'Descrição':s.descricao, 'Quantidade devolvida':s.quantidade, 'Nº de clientes':s.clientes.size, 'Valor (R$)':s.valor}));
+    nomeExcel = 'skus-mais-devolvidos';
+    detalheHTML = `<h3>SKUs com mais devolução</h3>
+      ${skusOrd.length ? `<table class="cred-table"><thead><tr><th>#</th><th>Código</th><th>Descrição</th><th style="text-align:right;">Quantidade</th><th style="text-align:right;">Clientes</th><th style="text-align:right;">Valor</th></tr></thead><tbody>
+        ${skusOrd.map((s,i) => `<tr><td>${i+1}º</td><td style="white-space:nowrap;"><b>${gEsc(s.codigo)}</b></td><td>${gEsc(s.descricao)}</td><td style="text-align:right;"><b>${s.quantidade}</b></td><td style="text-align:right;">${s.clientes.size}</td><td style="text-align:right; white-space:nowrap;">${fmtMoney(s.valor)}</td></tr>`).join('')}
+      </tbody></table>` : `<div class="empty-state">Nenhuma devolução nesse mês.</div>`}`;
+  } else {
+    const rows = [...clientesOrd].sort((a,b) => b.pecas - a.pecas);
+    dadosExcel = rows.map(c => ({'Cliente Nº':c.codigo, 'Cliente':c.nome, 'Vendedor':c.vendedor, 'Peças devolvidas':c.pecas, 'SKUs distintos':c.skus.size, 'Valor (R$)':c.valor}));
+    nomeExcel = 'volume-devolvido-por-cliente';
+    detalheHTML = `<h3>Volume devolvido por cliente</h3>
+      ${rows.length ? `<table class="cred-table"><thead><tr><th>#</th><th>Cliente</th><th>Vendedor</th><th style="text-align:right;">Peças</th><th style="text-align:right;">SKUs</th><th style="text-align:right;">Valor</th></tr></thead><tbody>
+        ${rows.map((c,i) => `<tr><td>${i+1}º</td><td><b>${gEsc(c.nome)}</b> <span class="client-num">Nº ${gEsc(c.codigo)}</span></td><td>${gEsc(c.vendedor||'—')}</td><td style="text-align:right;"><b>${c.pecas}</b></td><td style="text-align:right;">${c.skus.size}</td><td style="text-align:right; white-space:nowrap;">${fmtMoney(c.valor)}</td></tr>`).join('')}
+      </tbody></table>` : `<div class="empty-state">Nenhuma devolução nesse mês.</div>`}`;
+  }
+
+  el.innerHTML = `
+    <div class="toolbar" style="justify-content:center;">
+      <div class="toggle-row" style="min-width:320px;">
+        <button class="toggle-btn ${ui.relFiltro==='concluidas'?'active':''}" data-filtro="concluidas" data-val="sim">Só concluídas</button>
+        <button class="toggle-btn ${ui.relFiltro==='todas'?'active':''}" data-filtro="todas" data-val="sim">Todas</button>
+      </div>
+    </div>
+    <p class="hint" style="text-align:center; font-size:12.5px; color:var(--ink-soft); margin-bottom:14px;">
+      Valor = valor final da garantia. Concluídas contam no mês da conclusão; em "Todas", as ainda não concluídas contam no mês em que foram lançadas (recusadas e excluídas ficam de fora).
+    </p>
+    <div class="progress-row">
+      ${card('valor', fmtMoney(gR2(valorMes)), `Valor devolvido · ${doMes.length} garantia(s)`)}
+      ${card('sku', skusOrd.length, 'SKUs distintos devolvidos')}
+      ${card('volume', pecasMes, 'Peças devolvidas (volume)')}
+    </div>
+    <div class="panel">
+      ${detalheHTML}
+      ${dadosExcel.length ? `<button class="ghost-btn" id="gRelExcel" style="margin-top:12px;">⬇️ Baixar em Excel</button>` : ''}
+    </div>
+    <div class="panel" id="gBuscaItemPanel"></div>
+  `;
+  el.querySelectorAll('[data-filtro]').forEach(b => { b.onclick = () => { ui.relFiltro = b.dataset.filtro; redesenhar(); }; });
+  el.querySelectorAll('[data-rel]').forEach(c => { c.onclick = () => { ui.relDetalhe = c.dataset.rel; redesenhar(); }; });
+  const bx = el.querySelector('#gRelExcel');
+  if(bx) bx.onclick = () => baixarXlsx(dadosExcel, 'Garantias', `${nomeExcel}-${ui.mes}.xlsx`);
+  desenharBuscaItemGarantia(el.querySelector('#gBuscaItemPanel'), base, redesenhar);
+}
+
+// Busca por item: devoluções do item no ano, mês a mês, e quem devolveu.
+function desenharBuscaItemGarantia(panel, base, redesenhar){
+  const ui = STATE.garantiaUI;
+  const termo = ui.relBusca.trim().toUpperCase();
+  const ano = String(ui.relAno);
+  const meses = Array.from({length:12}, (_,i) => ano+'-'+String(i+1).padStart(2,'0'));
+  const porMes = Object.fromEntries(meses.map(m => [m, {quantidade:0, valor:0}]));
+  const porCliente = new Map();
+  const skusAchados = new Map();
+  if(termo){
+    base.forEach(g => {
+      const mes = mesDaGarantia(g);
+      if(!mes.startsWith(ano+'-')) return;
+      const calc = calcularGarantia(g);
+      itensDevolvidosDaGarantia(g).forEach(i => {
+        const cod = String(i.codigo||'').trim().toUpperCase();
+        const desc = String(i.descricao||'').toUpperCase();
+        if(!cod.includes(termo) && !desc.includes(termo)) return;
+        const qtd = Number(i.quantidade)||0, val = valorItemNaGarantia(g, i, calc);
+        porMes[mes].quantidade += qtd; porMes[mes].valor += val;
+        skusAchados.set(cod, i.descricao||'');
+        const ck = String(g.clienteCodigo);
+        if(!porCliente.has(ck)) porCliente.set(ck, {codigo:g.clienteCodigo, nome:g.clienteNome, quantidade:0, valor:0});
+        const pc = porCliente.get(ck); pc.quantidade += qtd; pc.valor += val;
+      });
+    });
+  }
+  const totalQtd = meses.reduce((s,m) => s + porMes[m].quantidade, 0);
+  const totalVal = gR2(meses.reduce((s,m) => s + porMes[m].valor, 0));
+  const maxQtd = Math.max(1, ...meses.map(m => porMes[m].quantidade));
+  const clientes = [...porCliente.values()].sort((a,b) => b.quantidade - a.quantidade);
+  const nomesMesCurto = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+
+  panel.innerHTML = `
+    <h3>Buscar devoluções de um item</h3>
+    <p class="hint">Digite o código ou parte da descrição (ex: PCI-BC-083). Usa o mesmo filtro de cima (só concluídas / todas).</p>
+    <div class="form-row">
+      <input type="text" id="gBuscaItem" placeholder="Código ou descrição do item" value="${gEsc(ui.relBusca)}" style="flex:3;">
+      <button class="ghost-btn" id="gAnoAnt" style="flex:0; padding:9px 12px;">‹</button>
+      <div style="font-family:'Space Grotesk'; font-weight:600; font-size:16px; min-width:60px; text-align:center;">${ano}</div>
+      <button class="ghost-btn" id="gAnoProx" style="flex:0; padding:9px 12px;">›</button>
+    </div>
+    <div id="gBuscaResultado">
+    ${!termo ? '' : totalQtd === 0 ? `<div class="empty-state">Nenhuma devolução de "${gEsc(ui.relBusca)}" em ${ano}.</div>` : `
+      <div class="progress-row" style="margin-top:6px;">
+        <div class="stat-card"><div class="num">${totalQtd}</div><div class="label">Peças devolvidas em ${ano}</div></div>
+        <div class="stat-card"><div class="num">${fmtMoney(totalVal)}</div><div class="label">Valor devolvido em ${ano}</div></div>
+        <div class="stat-card"><div class="num">${clientes.length}</div><div class="label">Clientes que devolveram</div></div>
+      </div>
+      ${skusAchados.size > 1 ? `<p class="hint">A busca pegou ${skusAchados.size} SKUs: ${[...skusAchados.keys()].map(gEsc).join(', ')}.</p>` : ''}
+      <div style="display:flex; align-items:flex-end; gap:6px; height:150px; padding:10px 4px 0; border-bottom:1px solid var(--border); margin-bottom:6px;">
+        ${meses.map((m,i) => {
+          const q = porMes[m].quantidade;
+          const h = q ? Math.max(4, Math.round(q / maxQtd * 120)) : 0;
+          return `<div title="${nomesMesCurto[i]}/${ano}: ${q} peça(s) · ${fmtMoney(gR2(porMes[m].valor))}" style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; cursor:default;">
+            <div style="font-size:11px; color:var(--ink-soft); margin-bottom:3px;">${q || ''}</div>
+            <div style="width:60%; max-width:34px; height:${h}px; background:var(--info); border-radius:4px 4px 0 0;"></div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div style="display:flex; gap:6px; padding:0 4px; margin-bottom:16px;">
+        ${nomesMesCurto.map(n => `<div style="flex:1; text-align:center; font-size:11px; color:var(--ink-soft);">${n}</div>`).join('')}
+      </div>
+      <table class="cred-table" style="margin-bottom:16px;">
+        <thead><tr><th>Mês</th><th style="text-align:right;">Peças</th><th style="text-align:right;">Valor</th></tr></thead>
+        <tbody>${meses.map((m,i) => `<tr><td>${nomesMesCurto[i]}/${ano}</td><td style="text-align:right;">${porMes[m].quantidade}</td><td style="text-align:right;">${fmtMoney(gR2(porMes[m].valor))}</td></tr>`).join('')}
+        <tr><td><b>Total ${ano}</b></td><td style="text-align:right;"><b>${totalQtd}</b></td><td style="text-align:right;"><b>${fmtMoney(totalVal)}</b></td></tr></tbody>
+      </table>
+      <h3 style="font-size:15px;">Quem devolveu em ${ano}</h3>
+      <table class="cred-table">
+        <thead><tr><th>Cliente</th><th style="text-align:right;">Peças</th><th style="text-align:right;">Valor</th></tr></thead>
+        <tbody>${clientes.map(c => `<tr><td><b>${gEsc(c.nome)}</b> <span class="client-num">Nº ${gEsc(c.codigo)}</span></td><td style="text-align:right;">${c.quantidade}</td><td style="text-align:right;">${fmtMoney(gR2(c.valor))}</td></tr>`).join('')}</tbody>
+      </table>
+      <button class="ghost-btn" id="gBuscaExcel" style="margin-top:12px;">⬇️ Baixar em Excel</button>
+    `}
+    </div>
+  `;
+  const input = panel.querySelector('#gBuscaItem');
+  let timer = null;
+  input.oninput = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      ui.relBusca = input.value;
+      desenharBuscaItemGarantia(panel, base, redesenhar);
+      const novo = panel.querySelector('#gBuscaItem');
+      novo.focus(); novo.setSelectionRange(novo.value.length, novo.value.length);
+    }, 350);
+  };
+  panel.querySelector('#gAnoAnt').onclick = () => { ui.relAno--; desenharBuscaItemGarantia(panel, base, redesenhar); };
+  panel.querySelector('#gAnoProx').onclick = () => { ui.relAno++; desenharBuscaItemGarantia(panel, base, redesenhar); };
+  const bx = panel.querySelector('#gBuscaExcel');
+  if(bx) bx.onclick = () => {
+    const linhasMes = meses.map((m,i) => ({'Mês': `${nomesMesCurto[i]}/${ano}`, 'Peças': porMes[m].quantidade, 'Valor (R$)': gR2(porMes[m].valor)}));
+    const linhasCli = clientes.map(c => ({'Cliente Nº': c.codigo, 'Cliente': c.nome, 'Peças': c.quantidade, 'Valor (R$)': gR2(c.valor)}));
+    if(typeof XLSX === 'undefined'){ avisar('Biblioteca de planilha não carregou. Tente recarregar a página.'); return; }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhasMes), 'Mês a mês');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhasCli), 'Clientes');
+    XLSX.writeFile(wb, `devolucoes-${termo.replace(/[^A-Z0-9-]/g,'_')}-${ano}.xlsx`);
+  };
+}
+
+// ---------- Tela do usuário Garantia ----------
+async function renderGarantiaShell(){
+  const items = [{page:'garantia', label:'Garantia'}];
+  STATE.route = {page:'garantia'};
+  app.innerHTML = `<div class="shell">${sidebarHTML(items)}<div class="main" id="main"></div></div>`;
+  bindSidebar(renderGarantiaShell);
+  await renderGarantiaModulo(document.getElementById('main'), renderGarantiaShell);
+}
+
+// ---------- Bloco "Compras x devoluções" no detalhe do cliente ----------
+function compradoNaHistoriaDoCliente(codigo){
+  const hist = historicoDeCompraDoCliente(codigo);
+  if(!hist) return {valor:0, desde:null};
+  let valor = 0, desde = null;
+  Object.values(hist).forEach(p => {
+    if(p.meses && Object.keys(p.meses).length){
+      Object.entries(p.meses).forEach(([mes, m]) => { valor += (m.valor||0); if(!desde || mes < desde) desde = mes; });
+    } else {
+      valor += (p.valor||0);
+    }
+  });
+  return {valor: gR2(valor), desde};
+}
+async function blocoGarantiasDoClienteHTML(codigo){
+  let garantias = [];
+  try{ garantias = (await listarGarantias()).filter(g => !g.excluida && String(g.clienteCodigo) === String(codigo)); }catch(e){}
+  garantias.sort((a,b) => b.numero - a.numero);
+  const comprado = compradoNaHistoriaDoCliente(codigo);
+  const devolvido = gR2(garantias.filter(g => g.status === 'concluida').reduce((s,g) => s + calcularGarantia(g).valorFinal, 0));
+  const pct = comprado.valor > 0 ? (devolvido / comprado.valor * 100) : null;
+  return `
+    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin:6px 0 12px;">
+      <div class="stat-card" style="padding:11px 12px;"><div class="num" style="font-size:16px;">${fmtMoney(comprado.valor)}</div><div class="label" style="font-size:11.5px;">Comprado na história${comprado.desde ? ' (desde '+comprado.desde.slice(5)+'/'+comprado.desde.slice(0,4)+')' : ''}</div></div>
+      <div class="stat-card" style="padding:11px 12px;"><div class="num" style="font-size:16px;">${fmtMoney(devolvido)}</div><div class="label" style="font-size:11.5px;">Devolvido na história (garantias)</div></div>
+      <div class="stat-card" style="padding:11px 12px;"><div class="num" style="font-size:16px;">${pct === null ? '—' : pct.toFixed(1).replace('.',',')+'%'}</div><div class="label" style="font-size:11.5px;">% de devolução</div></div>
+    </div>
+    ${garantias.length ? `
+      <div style="font-size:12.5px; font-weight:600; color:var(--ink-soft); margin-bottom:6px;">Garantias do cliente</div>
+      <div style="display:flex; flex-direction:column; gap:5px; margin-bottom:12px;">
+        ${garantias.map(g => {
+          const st = GARANTIA_STATUS[g.status] || {label:g.status, cls:'info'};
+          return `<div class="client-row status-${st.cls} gLinhaGarantiaCliente" data-garantia="${g.numero}" style="padding:8px 11px; cursor:pointer; gap:8px;">
+            <b style="font-size:13px;">Nº ${g.numero}</b>
+            <span style="font-size:12px; color:var(--ink-soft); flex:1;">${fmtDatePt((g.criadoEm||'').slice(0,10))}</span>
+            <span class="status-badge status-${st.cls}" style="font-size:10.5px;">${st.label}</span>
+            <b style="font-size:13px;">${fmtMoney(calcularGarantia(g).valorFinal)}</b>
+          </div>`;
+        }).join('')}
+      </div>` : ''}
+  `;
+}
+
+
 (async function init(){
   try{
     await loadAll();

@@ -2623,7 +2623,7 @@ async function renderPrevisaoCompras(main){
                       ${item.intencoes.map(i => `
                         <div class="hint" style="margin:0; display:flex; justify-content:space-between; gap:8px;">
                           <span><b>${i.quantidade}</b> un. — ${i.vendedorNome} → ${i.clienteNome} (Nº ${i.clienteCodigo})</span>
-                          ${(i.vendedorCodigo===STATE.session.codigo || STATE.session.tipo==='gerente') ? `<button class="ghost-btn btnExcluirIntencao" data-container="${cont.id}" data-item="${item.id}" data-intencao="${i.id}" style="padding:2px 8px; font-size:11px;">excluir</button>` : ''}
+                          ${(i.vendedorCodigo===STATE.session.codigo || STATE.session.tipo==='gerente' || STATE.session.tipo==='compras') ? `<button class="ghost-btn btnExcluirIntencao" data-container="${cont.id}" data-item="${item.id}" data-intencao="${i.id}" style="padding:2px 8px; font-size:11px;">excluir</button>` : ''}
                         </div>
                       `).join('')}
                     </div>

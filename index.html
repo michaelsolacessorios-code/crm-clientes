@@ -7398,8 +7398,11 @@ function renderManagerCredenciais(main){
           ${STATE.diretores.map(d => `
             <tr data-id="${d.id}">
               <td>
-                ${d.foto ? `<img src="${d.foto}" alt="${d.nome}" style="width:32px; height:32px; border-radius:50%; object-fit:cover;">` : `<div class="whoami-avatar whoami-avatar-fallback" style="width:32px; height:32px; background:var(--border); color:var(--ink-faint); font-size:12px;">${(d.nome||'?')[0].toUpperCase()}</div>`}
-                <input type="file" class="diretorFotoInput" accept="image/*" data-id="${d.id}" style="max-width:90px; font-size:11px; margin-top:4px;">
+                <label title="Clique para escolher a foto" style="display:flex; flex-direction:column; align-items:center; gap:4px; cursor:pointer; min-width:84px;">
+                  ${d.foto ? `<img src="${d.foto}" alt="${d.nome}" style="width:48px; height:48px; border-radius:50%; object-fit:cover; border:2px solid var(--border);">` : `<div class="whoami-avatar whoami-avatar-fallback" style="width:48px; height:48px; background:var(--border); color:var(--ink-faint); font-size:16px;">${(d.nome||'?')[0].toUpperCase()}</div>`}
+                  <span class="ghost-btn" style="font-size:11.5px; padding:4px 8px; min-height:0; white-space:nowrap;">📷 ${d.foto ? 'Trocar foto' : 'Pôr foto'}</span>
+                  <input type="file" class="diretorFotoInput" accept="image/*" data-id="${d.id}" style="display:none;">
+                </label>
               </td>
               <td><input type="text" class="diretorNomeInput" value="${d.nome}" data-id="${d.id}"></td>
               <td><input type="text" class="diretorUsuarioInput" value="${d.usuario}" data-id="${d.id}"></td>
@@ -7668,8 +7671,10 @@ function renderManagerCredenciais(main){
       if(!d || !file) return;
       try{
         d.foto = await resizeImagemParaBase64(file);
-        await safeSet('crm:diretores', STATE.diretores);
+        if(!(await safeSet('crm:diretores', STATE.diretores))) throw new Error('salvar');
         renderManagerCredenciais(main);
+        const m = document.getElementById('msgDiretores');
+        if(m) m.innerHTML = `<div class="msg ok">Foto de ${d.nome} salva. Aparece no próximo login dele.</div>`;
       }catch(err){
         document.getElementById('msgDiretores').innerHTML = `<div class="msg err">Não consegui processar essa imagem.</div>`;
       }

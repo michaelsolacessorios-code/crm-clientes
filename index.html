@@ -1846,10 +1846,10 @@ async function renderComprasModulo(main, rerender){
   STATE.comprasUI = STATE.comprasUI || {};
   const ui = STATE.comprasUI;
   const abas = comprasTemAbasEstoque()
-    ? [{id:'previsao', label:'Previsão de Compras'}, {id:'saldo', label:'Saldo de Estoque'}, {id:'sugestao', label:'Sugestão de Compras'}]
+    ? [{id:'previsao', label:'Previsão de Compras'}, {id:'saldo', label:'Saldo de Estoque'}, {id:'sugestao', label:'Sugestão de Compras'}, {id:'reclamacao', label:'Reclamação'}]
     : [{id:'previsao', label:'Previsão de Compras'}];
   if(!abas.some(a => a.id === ui.aba)) ui.aba = abas[0].id;
-  const titulos = {previsao:'Previsão de Compras', saldo:'Saldo de Estoque', sugestao:'Sugestão de Compras'};
+  const titulos = {previsao:'Previsão de Compras', saldo:'Saldo de Estoque', sugestao:'Sugestão de Compras', reclamacao:'Reclamação de item'};
 
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Compras</div><h2>${titulos[ui.aba]}</h2></div>
@@ -1863,6 +1863,7 @@ async function renderComprasModulo(main, rerender){
   });
   const box = main.querySelector('#comprasConteudo');
   if(ui.aba === 'saldo' || ui.aba === 'sugestao') await renderComprasEstoque(box, ui.aba);
+  else if(ui.aba === 'reclamacao') await renderReclamacoes(box);
   else await renderPrevisaoCompras(box);
 }
 
@@ -4952,7 +4953,6 @@ async function renderComprasShell(){
   normalizarRotaAntiga();
   const items = [
     {page:'compras-estoque', label:'Compras'},
-    {page:'garantia', label:'Garantia'},
     {page:'visao-geral', label:'Visão geral'},
     {page:'elaboracao-metas', label:'Elaboração de Metas'},
   ];
@@ -4963,7 +4963,6 @@ async function renderComprasShell(){
   await Promise.all(STATE.vendors.map(v => getContatos(v.codigo)));
   if(STATE.route.page==='visao-geral') renderManagerOverview(main);
   else if(STATE.route.page==='elaboracao-metas') await renderElaboracaoMetas(main);
-  else if(STATE.route.page==='garantia') await renderGarantiaModulo(main, renderComprasShell);
   else await renderComprasModulo(main, renderComprasShell);
 }
 
@@ -8801,8 +8800,6 @@ function abasGarantiaDaSessao(){
     {id:'concluidas', label:'Concluídas'},
     {id:'reclamacao', label:'Reclamação'},
   ];
-  // Usuário de Compras (Roberto) só usa a Reclamação dentro da Garantia (marca "Reclamado na China").
-  if(t === 'compras') return [{id:'reclamacao', label:'Reclamação'}];
   const abas = [
     {id:'nova', label:'+ Nova garantia'},
     {id:'pendentes', label:'Pendentes'},
@@ -8810,8 +8807,9 @@ function abasGarantiaDaSessao(){
     {id:'conferidas', label:'Aguardando lançamento'},
     {id:'concluidas', label:'Concluídas'},
     {id:'recusadas', label:'Recusadas'},
-    {id:'reclamacao', label:'Reclamação'},
   ];
+  // Reclamação: vendedor vê aqui na Garantia; gerente/diretor vê dentro de Compras.
+  if(t !== 'gerente') abas.push({id:'reclamacao', label:'Reclamação'});
   if(t === 'gerente'){ abas.push({id:'lixeira', label:'Lixeira'}); abas.push({id:'relatorio', label:'Relatório'}); }
   return abas;
 }
@@ -8829,7 +8827,7 @@ async function renderGarantiaModulo(main, rerender){
   const ui = STATE.garantiaUI;
   const abas = abasGarantiaDaSessao();
   if(!ui.aba || !abas.some(a => a.id === ui.aba)){
-    ui.aba = STATE.session.tipo === 'garantia' ? 'aguardando' : (STATE.session.tipo === 'compras' ? 'reclamacao' : (STATE.session.tipo === 'gerente' ? 'pendentes' : 'nova'));
+    ui.aba = STATE.session.tipo === 'garantia' ? 'aguardando' : (STATE.session.tipo === 'gerente' ? 'pendentes' : 'nova');
   }
   ui.mes = ui.mes || currentMonthKey();
   // Sub-aba Reclamação: não depende das garantias, desenha direto.

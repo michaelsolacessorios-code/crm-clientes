@@ -1416,7 +1416,7 @@ function indicadoresContainerGeral(container, mesChave){
   const codes = new Set(container.itens.map(i => i.codigo));
   let volume = 0, valor = 0;
   const skusVendidos = new Set();
-  STATE.vendors.forEach(v => {
+  vendorsVisiveis(mesChave).forEach(v => {
     const contatos = STATE.contatosCache[v.codigo] || {};
     Object.values(contatos).forEach(reg => {
       (reg.historico||[]).forEach(h => {
@@ -2456,7 +2456,7 @@ async function renderElaboracaoMetas(main){
   function drawSugestao(){
     const ultimosMeses = meses.slice(-3); // até os 3 últimos meses fechados
     const box = document.getElementById('sugestaoMetas');
-    const linhas = STATE.vendors.map(v => ({v, calc: calcularSugestaoMeta(v.codigo, ultimosMeses)}));
+    const linhas = vendorsVisiveis(currentMonthKey()).map(v => ({v, calc: calcularSugestaoMeta(v.codigo, ultimosMeses)}));
     box.innerHTML = `
       <div class="panel" style="border-left-color:var(--ok);">
         <h3>💡 Sugestão de meta pro próximo mês</h3>
@@ -2874,7 +2874,7 @@ function promocaoCardGeralHTML(mesChave){
   if((STATE.promocao||[]).length === 0) return '';
   let valor = 0, volume = 0;
   const skusVendidos = new Set();
-  STATE.vendors.forEach(v => {
+  vendorsVisiveis(mesChave).forEach(v => {
     const ind = indicadoresPromocao(v.codigo, mesChave);
     if(!ind) return;
     valor += ind.valor; volume += ind.volume;
@@ -3763,6 +3763,15 @@ function isAgendadoFuturo(contatos, codigo){
   return !!(ag && ag > todayStr());
 }
 
+// Vendedor que saiu da equipe pode ser ocultado dos painéis a partir de um mês (ocultoDesde = 'AAAA-MM').
+// Meses anteriores continuam mostrando ele normalmente (histórico preservado). Nada é apagado.
+function vendedorOcultoNoMes(v, mesChave){
+  mesChave = mesChave || STATE.mesSelecionado || currentMonthKey();
+  return !!(v && v.ocultoDesde && mesChave >= v.ocultoDesde);
+}
+function vendorsVisiveis(mesChave){
+  return STATE.vendors.filter(v => !vendedorOcultoNoMes(v, mesChave));
+}
 function clientsForVendor(codigo){
   return STATE.roster.filter(c => c.vendedorCodigo === codigo);
 }
@@ -6873,7 +6882,7 @@ async function renderManagerInativos(main){
         <span class="day-pill">Última compra: ${fmtDatePt(c.ultimaCompra)}${c.ultimaCompra ? ` (há ${daysBetween(c.ultimaCompra)}d)` : ""}</span>
         <select class="filter-select atribuir-select" data-codigo="${c.codigo}" style="min-width:150px;">
           <option value="">Atribuir a...</option>
-          ${STATE.vendors.map(v=>`<option value="${v.codigo}">${v.nome} (Nº ${vendorNumero(v)})</option>`).join('')}
+          ${vendorsVisiveis(currentMonthKey()).map(v=>`<option value="${v.codigo}">${v.nome} (Nº ${vendorNumero(v)})</option>`).join('')}
         </select>
       </div>
     `;}).join('');
@@ -7001,7 +7010,7 @@ function totalSkusEVolumeEquipe(mesChave){
   mesChave = mesChave || STATE.mesSelecionado || currentMonthKey();
   const skuCodesUnicos = new Set();
   let totalUnidades = 0;
-  STATE.vendors.forEach(v => {
+  vendorsVisiveis(mesChave).forEach(v => {
     const contatos = STATE.contatosCache[v.codigo] || {};
     Object.values(contatos).forEach(reg => {
       (reg.historico||[]).forEach(h => {
@@ -7018,9 +7027,12 @@ function totalSkusEVolumeEquipe(mesChave){
 }
 
 function renderManagerOverview(main){
-  const totalClientes = STATE.roster.length;
+  const mesVisao = STATE.mesSelecionado||currentMonthKey();
+  const vendVisiveis = vendorsVisiveis(mesVisao);
+  const codigosOcultos = new Set(STATE.vendors.filter(v => vendedorOcultoNoMes(v, mesVisao)).map(v => v.codigo));
+  const totalClientes = STATE.roster.filter(c => !codigosOcultos.has(c.vendedorCodigo)).length;
   let totalAtrasados = 0, totalHojeFeitos = 0, totalHoje = 0, totalVendas = 0, totalValorVendas = 0, totalPositivados = 0, totalContatadosMes = 0, totalMetaVendas = 0, totalDevedores = 0, totalValorDevido = 0;
-  STATE.vendors.forEach(v=>{
+  vendVisiveis.forEach(v=>{
     const s = vendorStats(v.codigo);
     const m = vendorMonthStats(v.codigo);
     const inad = vendorInadimplenciaStats(v.codigo);
@@ -7085,7 +7097,7 @@ function renderManagerOverview(main){
     <div class="panel">
       <h3>Distribuição das vendas por estado</h3>
       <p class="hint">Percentual do valor vendido este mês em cada UF (todos os vendedores somados).</p>
-      ${distribuicaoUfHTML(STATE.vendors.map(v=>v.codigo), STATE.mesSelecionado||currentMonthKey())}
+      ${distribuicaoUfHTML(vendVisiveis.map(v=>v.codigo), STATE.mesSelecionado||currentMonthKey())}
     </div>
 
     <div class="panel" style="border-color:#111;">
@@ -7094,7 +7106,7 @@ function renderManagerOverview(main){
       <table class="cred-table">
         <thead><tr><th>Vendedor</th><th>Clientes devedores</th><th>Total devido</th></tr></thead>
         <tbody>
-          ${STATE.vendors.map(v => {
+          ${vendVisiveis.map(v => {
             const inad = vendorInadimplenciaStats(v.codigo);
             return `<tr><td>${v.nome} <span class="client-num">Nº ${vendorNumero(v)}</span></td><td>${inad.qtd}</td><td>${fmtMoney(inad.total)}</td></tr>`;
           }).join('')}
@@ -7116,7 +7128,7 @@ function renderManagerOverview(main){
     if(STATE.session.tipo === 'gerente') renderManagerShell(); else renderComprasShell();
   };
   const cards = document.getElementById('cards');
-  cards.innerHTML = STATE.vendors.map(v => {
+  cards.innerHTML = vendVisiveis.map(v => {
     const s = vendorStats(v.codigo);
     const m = vendorMonthStats(v.codigo);
     return `
@@ -7153,7 +7165,7 @@ function renderManagerOverview(main){
 }
 
 function renderManagerVendorDetail(main){
-  const selected = STATE.route.codigo || STATE.vendors[0].codigo;
+  const selected = STATE.route.codigo || (vendorsVisiveis()[0] || STATE.vendors[0]).codigo;
   main.innerHTML = `
     <div class="page-header" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
       <div><div class="eyebrow">Vendedores</div><h2>Carteira por vendedor</h2></div>
@@ -7161,7 +7173,7 @@ function renderManagerVendorDetail(main){
     </div>
     <div class="toolbar">
       <select class="filter-select" id="selVendor">
-        ${STATE.vendors.map(v => `<option value="${v.codigo}" ${v.codigo===selected?'selected':''}>${v.nome}</option>`).join('')}
+        ${STATE.vendors.filter(v => !vendedorOcultoNoMes(v) || v.codigo===selected).map(v => `<option value="${v.codigo}" ${v.codigo===selected?'selected':''}>${v.nome}</option>`).join('')}
       </select>
       <input type="text" class="search-input" id="busca" placeholder="Buscar por nome ou número...">
       <select class="filter-select" id="filtroStatus">
@@ -7362,10 +7374,11 @@ function renderManagerCredenciais(main){
               <td>${v.nome}${v.bloqueado ? ' <span class="status-badge status-danger" style="font-size:10.5px;">BLOQUEADO</span>' : ''}</td>
               <td>${v.usuario}</td>
               <td><input type="text" class="senhaInput" placeholder="Deixe em branco pra manter a atual" data-codigo="${v.codigo}"></td>
-              <td>${v.bloqueado ? '🔒 Bloqueado' : '✅ Ativo'}</td>
+              <td>${v.bloqueado ? '🔒 Bloqueado' : '✅ Ativo'}${v.ocultoDesde ? `<br><span style="font-size:11px; color:var(--ink-faint);">🙈 Oculto dos painéis desde ${nomeMesPt(v.ocultoDesde)}</span>` : ''}</td>
               <td>
                 <button class="ghost-btn salvarSenhaBtn" data-codigo="${v.codigo}">Salvar</button>
                 <button class="ghost-btn btnToggleBloqueio" data-codigo="${v.codigo}">${v.bloqueado ? 'Desbloquear' : 'Bloquear acesso'}</button>
+                <button class="ghost-btn btnToggleOculto" data-codigo="${v.codigo}">${v.ocultoDesde ? '👁️ Mostrar nos painéis' : '🙈 Ocultar dos painéis'}</button>
               </td>
             </tr>
           `).join('')}
@@ -7383,7 +7396,7 @@ function renderManagerCredenciais(main){
         </div>
         <div>
           <label class="field-label">Para (recebe)</label>
-          <select id="transferirPara">${STATE.vendors.map(v=>`<option value="${v.codigo}">${v.nome}</option>`).join('')}</select>
+          <select id="transferirPara">${vendorsVisiveis(currentMonthKey()).map(v=>`<option value="${v.codigo}">${v.nome}</option>`).join('')}</select>
         </div>
         <button class="primary-btn" id="btnTransferirVendedor">Transferir tudo</button>
       </div>
@@ -7601,6 +7614,21 @@ function renderManagerCredenciais(main){
       const acao = v.bloqueado ? 'desbloquear o acesso' : 'BLOQUEAR o acesso';
       if(!(await confirmarAcao(`Tem certeza que quer ${acao} de ${v.nome}?`))) return;
       v.bloqueado = !v.bloqueado;
+      await safeSet('crm:vendors', STATE.vendors);
+      renderManagerCredenciais(main);
+    };
+  });
+  document.querySelectorAll('.btnToggleOculto').forEach(btn => {
+    btn.onclick = async () => {
+      const v = STATE.vendors.find(x=>x.codigo===Number(btn.dataset.codigo));
+      if(v.ocultoDesde){
+        if(!(await confirmarAcao(`Voltar a mostrar ${v.nome} nos painéis (visão geral, totais da equipe, listas de vendedores)?`))) return;
+        delete v.ocultoDesde;
+      } else {
+        const mes = currentMonthKey();
+        if(!(await confirmarAcao(`Ocultar ${v.nome} dos painéis a partir de ${nomeMesPt(mes)}? Ele some da visão geral, dos totais da equipe e das listas de vendedores. Os meses anteriores continuam mostrando ele, e nenhum dado é apagado. Pra impedir o login, use também "Bloquear acesso".`))) return;
+        v.ocultoDesde = mes;
+      }
       await safeSet('crm:vendors', STATE.vendors);
       renderManagerCredenciais(main);
     };

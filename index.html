@@ -9143,11 +9143,19 @@ async function renderGarantiaModulo(main, rerender){
       }).join('')}
     </div>
     ${mostraMes ? `
+      <div style="display:flex; align-items:center; justify-content:center; gap:8px; margin:4px 0 12px; flex-wrap:wrap;">
+        <span style="font-size:12.5px; color:var(--ink-soft);">Período:</span>
+        <div class="toggle-row" style="min-width:260px;">
+          <button class="toggle-btn ${ui.periodo!=='tudo'?'active':''}" data-periodo="mes" data-val="sim">Por mês</button>
+          <button class="toggle-btn ${ui.periodo==='tudo'?'active':''}" data-periodo="tudo" data-val="sim">Todo o período</button>
+        </div>
+      </div>
+      ${ui.periodo !== 'tudo' ? `
       <div style="display:flex; align-items:center; justify-content:center; gap:14px; margin:4px 0 18px;">
         <button class="ghost-btn" id="gMesAnt" style="padding:6px 12px;">‹</button>
         <div style="font-family:'Space Grotesk'; font-size:18px; font-weight:600; min-width:190px; text-align:center;">${gNomeMes(ui.mes)}</div>
         <button class="ghost-btn" id="gMesProx" style="padding:6px 12px;">›</button>
-      </div>` : ''}
+      </div>` : ''}` : ''}
     ${ui.aba !== 'nova' ? `
       <div style="display:flex; align-items:center; justify-content:center; gap:8px; margin:0 0 14px; flex-wrap:wrap;">
         <span style="font-size:12.5px; color:var(--ink-soft);">Origem:</span>
@@ -9161,7 +9169,8 @@ async function renderGarantiaModulo(main, rerender){
   `;
   main.querySelectorAll('.tab-btn[data-aba]').forEach(b => { b.onclick = () => { ui.aba = b.dataset.aba; redesenhar(); }; });
   main.querySelectorAll('[data-origem]').forEach(b => { b.onclick = () => { ui.origem = b.dataset.origem; redesenhar(); }; });
-  if(mostraMes){
+  main.querySelectorAll('[data-periodo]').forEach(b => { b.onclick = () => { ui.periodo = b.dataset.periodo; redesenhar(); }; });
+  if(mostraMes && ui.periodo !== 'tudo'){
     main.querySelector('#gMesAnt').onclick = () => { ui.mes = gSomarMes(ui.mes, -1); redesenhar(); };
     main.querySelector('#gMesProx').onclick = () => { ui.mes = gSomarMes(ui.mes, 1); redesenhar(); };
   }
@@ -9172,11 +9181,11 @@ async function renderGarantiaModulo(main, rerender){
 
   let lista;
   if(ui.aba === 'lixeira'){
-    lista = visiveis.filter(g => g.excluida && gMesLocal(g.excluidaEm || g.criadoEm) === ui.mes);
+    lista = visiveis.filter(g => g.excluida && (ui.periodo === 'tudo' || gMesLocal(g.excluidaEm || g.criadoEm) === ui.mes));
   } else {
     const st = GARANTIA_ABA_STATUS[ui.aba];
     lista = ativas.filter(g => g.status === st);
-    if(mostraMes) lista = lista.filter(g => mesDaGarantia(g) === ui.mes);
+    if(mostraMes && ui.periodo !== 'tudo') lista = lista.filter(g => mesDaGarantia(g) === ui.mes);
   }
   lista.sort((a,b) => b.numero - a.numero);
   const somaValor = gR2(lista.reduce((s,g) => s + calcularGarantia(g).valorFinal, 0));
@@ -9923,7 +9932,7 @@ function renderRelatorioGarantias(el, garantias, redesenhar){
 
   // Base conforme o filtro: só concluídas, ou todas (menos recusadas/excluídas).
   const base = garantias.filter(g => !gSacPreDecisao(g)).filter(g => ui.relFiltro === 'concluidas' ? g.status === 'concluida' : g.status !== 'recusada');
-  const doMes = base.filter(g => mesDaGarantia(g) === ui.mes);
+  const doMes = ui.periodo === 'tudo' ? base : base.filter(g => mesDaGarantia(g) === ui.mes);
 
   const porCliente = new Map();
   const porSku = new Map();
@@ -9962,14 +9971,14 @@ function renderRelatorioGarantias(el, garantias, redesenhar){
     detalheHTML = `<h3>Clientes que mais devolveram — em valor</h3>
       ${rows.length ? `<table class="cred-table"><thead><tr><th>#</th><th>Cliente</th><th>Vendedor</th><th style="text-align:right;">Garantias</th><th style="text-align:right;">Valor</th></tr></thead><tbody>
         ${rows.map((c,i) => `<tr><td>${i+1}º</td><td><b>${gEsc(c.nome)}</b> <span class="client-num">Nº ${gEsc(c.codigo)}</span></td><td>${gEsc(c.vendedor||'—')}</td><td style="text-align:right;">${c.garantias}</td><td style="text-align:right; white-space:nowrap;"><b>${fmtMoney(c.valor)}</b></td></tr>`).join('')}
-      </tbody></table>` : `<div class="empty-state">Nenhuma devolução nesse mês.</div>`}`;
+      </tbody></table>` : `<div class="empty-state">Nenhuma devolução nesse período.</div>`}`;
   } else if(ui.relDetalhe === 'sku'){
     dadosExcel = skusOrd.map(s => ({'Código':s.codigo, 'Descrição':s.descricao, 'Quantidade devolvida':s.quantidade, 'Nº de clientes':s.clientes.size, 'Valor (R$)':s.valor}));
     nomeExcel = 'skus-mais-devolvidos';
     detalheHTML = `<h3>SKUs com mais devolução</h3>
       ${skusOrd.length ? `<table class="cred-table"><thead><tr><th>#</th><th>Código</th><th>Descrição</th><th style="text-align:right;">Quantidade</th><th style="text-align:right;">Clientes</th><th style="text-align:right;">Valor</th></tr></thead><tbody>
         ${skusOrd.map((s,i) => `<tr><td>${i+1}º</td><td style="white-space:nowrap;"><b>${gEsc(s.codigo)}</b></td><td>${gEsc(s.descricao)}</td><td style="text-align:right;"><b>${s.quantidade}</b></td><td style="text-align:right;">${s.clientes.size}</td><td style="text-align:right; white-space:nowrap;">${fmtMoney(s.valor)}</td></tr>`).join('')}
-      </tbody></table>` : `<div class="empty-state">Nenhuma devolução nesse mês.</div>`}`;
+      </tbody></table>` : `<div class="empty-state">Nenhuma devolução nesse período.</div>`}`;
   } else {
     const rows = [...clientesOrd].sort((a,b) => b.pecas - a.pecas);
     dadosExcel = rows.map(c => ({'Cliente Nº':c.codigo, 'Cliente':c.nome, 'Vendedor':c.vendedor, 'Peças devolvidas':c.pecas, 'SKUs distintos':c.skus.size, 'Valor (R$)':c.valor}));
@@ -9977,7 +9986,7 @@ function renderRelatorioGarantias(el, garantias, redesenhar){
     detalheHTML = `<h3>Volume devolvido por cliente</h3>
       ${rows.length ? `<table class="cred-table"><thead><tr><th>#</th><th>Cliente</th><th>Vendedor</th><th style="text-align:right;">Peças</th><th style="text-align:right;">SKUs</th><th style="text-align:right;">Valor</th></tr></thead><tbody>
         ${rows.map((c,i) => `<tr><td>${i+1}º</td><td><b>${gEsc(c.nome)}</b> <span class="client-num">Nº ${gEsc(c.codigo)}</span></td><td>${gEsc(c.vendedor||'—')}</td><td style="text-align:right;"><b>${c.pecas}</b></td><td style="text-align:right;">${c.skus.size}</td><td style="text-align:right; white-space:nowrap;">${fmtMoney(c.valor)}</td></tr>`).join('')}
-      </tbody></table>` : `<div class="empty-state">Nenhuma devolução nesse mês.</div>`}`;
+      </tbody></table>` : `<div class="empty-state">Nenhuma devolução nesse período.</div>`}`;
   }
 
   el.innerHTML = `
@@ -9996,7 +10005,7 @@ function renderRelatorioGarantias(el, garantias, redesenhar){
       ${card('volume', pecasMes, 'Peças devolvidas (volume)')}
     </div>
     <p style="text-align:center; font-size:13px; color:var(--ink-soft); margin:-4px 0 14px;">
-      No mês: Garantia <b>${fmtMoney(gR2(doMes.filter(g => !gEhSac(g)).reduce((a,g) => a + calcularGarantia(g).valorFinal, 0)))}</b>
+      ${ui.periodo === 'tudo' ? 'Todo o período' : 'No mês'}: Garantia <b>${fmtMoney(gR2(doMes.filter(g => !gEhSac(g)).reduce((a,g) => a + calcularGarantia(g).valorFinal, 0)))}</b>
       · <span style="color:#7B4FC9;">SAC (crédito por problema) <b>${fmtMoney(gR2(doMes.filter(gEhSac).reduce((a,g) => a + calcularGarantia(g).valorFinal, 0)))}</b></span>
     </p>
     <div class="panel">
@@ -10008,7 +10017,7 @@ function renderRelatorioGarantias(el, garantias, redesenhar){
   el.querySelectorAll('[data-filtro]').forEach(b => { b.onclick = () => { ui.relFiltro = b.dataset.filtro; redesenhar(); }; });
   el.querySelectorAll('[data-rel]').forEach(c => { c.onclick = () => { ui.relDetalhe = c.dataset.rel; redesenhar(); }; });
   const bx = el.querySelector('#gRelExcel');
-  if(bx) bx.onclick = () => baixarXlsx(dadosExcel, 'Garantias', `${nomeExcel}-${ui.mes}.xlsx`);
+  if(bx) bx.onclick = () => baixarXlsx(dadosExcel, 'Garantias', `${nomeExcel}-${ui.periodo === 'tudo' ? 'todo-periodo' : ui.mes}.xlsx`);
   desenharBuscaItemGarantia(el.querySelector('#gBuscaItemPanel'), base, redesenhar);
 }
 

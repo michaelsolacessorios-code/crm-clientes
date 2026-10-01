@@ -125,6 +125,10 @@
   .mes-bar .mes-badge.atual{background:var(--primary-soft); color:var(--primary);}
   .mes-bar .mes-badge.fechado{background:#111; color:#fff;}
   .meta-big .num{font-size:44px !important; line-height:1.05;}
+  .meta-big .progress-row{display:grid !important; grid-template-columns:repeat(3, minmax(0,1fr)); gap:18px;}
+  .meta-big .stat-card{max-width:none !important; width:auto !important; min-width:0; padding:24px 26px;}
+  .meta-big .num-money{word-break:break-word;}
+  @media (max-width:900px){ .meta-big .progress-row{grid-template-columns:1fr;} }
   .meta-big .num .den{font-size:0.62em; color:var(--ink-soft); font-weight:700;}
   .meta-big .num-money{font-family:'Space Grotesk'; font-size:32px; font-weight:600; line-height:1.1;}
   .meta-big .num-money-meta{font-family:'Space Grotesk'; font-size:20px; font-weight:700; color:var(--ink-soft); margin-top:4px;}

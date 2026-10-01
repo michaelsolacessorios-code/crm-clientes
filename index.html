@@ -115,6 +115,20 @@
 
   .main{flex:1; padding:32px 40px; overflow-y:auto; max-width:1140px;}
   .page-header{margin-bottom:24px;}
+  .page-header:has(.mes-bar){flex-direction:column; align-items:flex-start !important;}
+  .mes-bar{display:inline-flex; align-items:center; gap:8px; background:var(--surface); border:2px solid var(--primary); border-radius:14px; padding:6px 8px; box-shadow:var(--shadow-soft);}
+  .mes-bar .mes-bar-label{font-size:13px; font-weight:700; color:var(--ink-soft); padding-left:6px;}
+  .mes-bar select{font-family:'Space Grotesk'; font-size:17px; font-weight:700; border:none; background:transparent; color:var(--ink); padding:6px 4px; cursor:pointer; min-width:170px;}
+  .mes-bar .mes-nav{border:1px solid var(--border); background:var(--bg); border-radius:10px; width:36px; height:36px; font-size:16px; cursor:pointer; color:var(--ink);}
+  .mes-bar .mes-nav:disabled{opacity:.35; cursor:default;}
+  .mes-bar .mes-badge{font-size:11.5px; font-weight:700; padding:4px 10px; border-radius:20px;}
+  .mes-bar .mes-badge.atual{background:var(--primary-soft); color:var(--primary);}
+  .mes-bar .mes-badge.fechado{background:#111; color:#fff;}
+  .meta-big .num{font-size:44px !important; line-height:1.05;}
+  .meta-big .num .den{font-size:0.62em; color:var(--ink-soft); font-weight:700;}
+  .meta-big .num-money{font-family:'Space Grotesk'; font-size:32px; font-weight:600; line-height:1.1;}
+  .meta-big .num-money-meta{font-family:'Space Grotesk'; font-size:20px; font-weight:700; color:var(--ink-soft); margin-top:4px;}
+  .meta-big .label{font-size:14px;}
   #comprasConteudo > .page-header, #cfgConteudo > .page-header{display:none;}
   .page-header .eyebrow{font-size:13.5px; color:var(--ink-soft); margin-bottom:5px; font-weight:600;}
   .page-header h2{font-family:'Space Grotesk'; font-size:29px; font-weight:600; letter-spacing:-0.3px;}
@@ -4002,7 +4016,24 @@ function mesesDisponiveis(){
 function mesSeletorHTML(id){
   const meses = mesesDisponiveis();
   const atual = STATE.mesSelecionado || currentMonthKey();
-  return `<select class="filter-select" id="${id}">${meses.map(m=>`<option value="${m.chave}" ${m.chave===atual?'selected':''}>${m.label}</option>`).join('')}</select>`;
+  const idx = Math.max(0, meses.findIndex(m => m.chave === atual));
+  const ehAtual = atual === currentMonthKey();
+  return `<div class="mes-bar">
+    <span class="mes-bar-label">📅 Mês:</span>
+    <button type="button" class="mes-nav" title="Mês anterior" ${idx>=meses.length-1?'disabled':''} onclick="mesNavegar('${id}',1)">◀</button>
+    <select id="${id}">${meses.map(m=>`<option value="${m.chave}" ${m.chave===atual?'selected':''}>${m.label}</option>`).join('')}</select>
+    <button type="button" class="mes-nav" title="Próximo mês" ${idx<=0?'disabled':''} onclick="mesNavegar('${id}',-1)">▶</button>
+    <span class="mes-badge ${ehAtual?'atual':'fechado'}">${ehAtual?'Mês atual (parcial)':'Mês fechado'}</span>
+  </div>`;
+}
+// Setas do seletor de mês: troca o mês e dispara o mesmo "change" do select.
+function mesNavegar(id, passo){
+  const sel = document.getElementById(id);
+  if(!sel) return;
+  const novo = sel.selectedIndex + passo;
+  if(novo < 0 || novo >= sel.options.length) return;
+  sel.selectedIndex = novo;
+  sel.dispatchEvent(new Event('change'));
 }
 
 // Calcula em que ponto do mês estamos e compara com a média dos indicadores do vendedor.
@@ -7057,25 +7088,23 @@ function renderManagerOverview(main){
     </div>
     <p style="font-size:12.5px; color:var(--ink-soft); margin-bottom:16px; margin-top:-10px;">📅 Última atualização da base: <b style="color:var(--ink);">${ultimaAtualizacaoTxt}</b></p>
 
-    <div class="panel">
-      <h3 style="text-transform:capitalize">Meta da equipe — ${mesNome}</h3>
+    <div class="panel meta-big">
+      <h3 style="text-transform:capitalize">Meta da equipe — ${mesNome}${mesEhAtual ? '' : ' (fechamento)'}</h3>
       <p class="hint">Meta total somando todos os vendedores, e o quanto foi atingido nesse mês.</p>
       <div class="progress-row">
         <div class="stat-card">
-          <div class="num display">${totalContatadosMes}<span style="font-size:0.5em; color:var(--ink-faint); font-weight:700;"> / ${totalClientes}</span></div>
+          <div class="num display">${totalContatadosMes}<span class="den"> / ${totalClientes}</span></div>
           <div class="label">Contato — clientes contatados (${pctContatoGeral}%)</div>
           <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${pctContatoGeral}%; background:${pctContatoGeral>=100?'var(--ok)':'var(--accent)'}"></div></div>
         </div>
         <div class="stat-card">
-          <div class="num display">${totalPositivados}<span style="font-size:0.5em; color:var(--ink-faint); font-weight:700;"> / ${totalClientes}</span></div>
+          <div class="num display">${totalPositivados}<span class="den"> / ${totalClientes}</span></div>
           <div class="label">Positivação — clientes que compraram (${pctPositivacaoGeral}%)</div>
           <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${pctPositivacaoGeral}%; background:${pctPositivacaoGeral>=100?'var(--ok)':'var(--accent)'}"></div></div>
         </div>
         <div class="stat-card ok">
-          <div class="num display" style="display:flex; align-items:baseline; gap:5px; flex-wrap:wrap; font-size:20px;">
-            <span>${fmtMoney(totalValorVendas)}</span>
-            <span style="font-size:0.5em; color:var(--ink-faint); font-weight:700;">/ ${fmtMoney(totalMetaVendas)}</span>
-          </div>
+          <div class="num-money" style="color:var(--ok);">${fmtMoney(totalValorVendas)}</div>
+          <div class="num-money-meta">/ ${fmtMoney(totalMetaVendas)}</div>
           <div class="label">Valores — vendido de meta total (${pctVendasGeral}%)</div>
           <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${pctVendasGeral}%; background:${pctVendasGeral>=100?'var(--ok)':'var(--accent)'}"></div></div>
         </div>

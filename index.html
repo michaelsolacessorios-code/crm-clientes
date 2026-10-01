@@ -1179,6 +1179,9 @@ async function processarImportacaoBase(linhas, modoSincronizacao){
   const novosParaAdicionar = [];
   const novosRoster = [];
   const codigosNaPlanilha = new Set();
+  // Clientes que estão numa carteira do CRM, mas que a planilha diz ser de um vendedor que NÃO
+  // está cadastrado no CRM (ex.: 29) ou sem vendedor. No modo sincronização eles voltam pra inativos.
+  const semVendedorNoCrm = new Map(); // codigo -> ultimaCompra da planilha
 
   linhas.forEach(row => {
     const [status, codigo, dataCad, nome, ultimaCompraRaw, municipio, uf, cnpj, ie, vendedor, ddd, telefone, contato, limite, saldoDevedor, saldoCredito, primeiraCompra, cpf, maiorCompra] = row;
@@ -1204,6 +1207,7 @@ async function processarImportacaoBase(linhas, modoSincronizacao){
         c.vendedorCodigo = vendedorCrm.codigo;
         reatribuidos++;
       }
+      if(!vendedorCrm) semVendedorNoCrm.set(codigo, ultimaCompra || null);
       atualizadosCarteira++;
       return;
     }
@@ -1271,11 +1275,20 @@ async function processarImportacaoBase(linhas, modoSincronizacao){
   // Exceção: clientes marcados como "Cliente não identificado" (registros temporários que guardam
   // uma venda real presa a um código inventado) nunca são removidos automaticamente — só saem
   // dessa condição quando alguém resolver o caso manualmente (apagar/reconciliar com o cliente real).
-  let removidosDaCarteira = 0;
+  // Também saem: quem está na planilha com vendedor que não existe no CRM (a planilha manda).
+  // Inadimplentes ficam protegidos (são atrelados pela lista financeira, não pela base).
+  let removidosDaCarteira = 0, removidosVendedorForaCrm = 0;
   const paraRemoverDaCarteira = modoSincronizacao
-    ? STATE.roster.filter(c => c.vendedorCodigo && !codigosNaPlanilha.has(c.codigo) && !(c.nome||'').startsWith('Cliente não identificado'))
+    ? STATE.roster.filter(c => {
+        if(!c.vendedorCodigo || (c.nome||'').startsWith('Cliente não identificado')) return false;
+        if(!codigosNaPlanilha.has(c.codigo)) return true;
+        if(semVendedorNoCrm.has(c.codigo) && !c.inadimplente){ removidosVendedorForaCrm++; return true; }
+        return false;
+      })
     : [];
-  removidosDaCarteira = paraRemoverDaCarteira.length;
+  // Remove do resumo as repetições do mesmo código (conta cliente, não linha).
+  removidosDaCarteira = new Set(paraRemoverDaCarteira.map(c=>c.codigo)).size;
+  removidosVendedorForaCrm = new Set(paraRemoverDaCarteira.filter(c=>semVendedorNoCrm.has(c.codigo)).map(c=>c.codigo)).size;
 
   return {
     aplicar: async () => {
@@ -1283,21 +1296,29 @@ async function processarImportacaoBase(linhas, modoSincronizacao){
       novosRoster.forEach(n => STATE.roster.push(n));
       if(paraRemoverDaCarteira.length > 0){
         const codigosRemover = new Set(paraRemoverDaCarteira.map(c=>c.codigo));
+        const jaNoPool = new Set(inativosPool.map(c=>c.codigo));
         paraRemoverDaCarteira.forEach(c => {
+          if(jaNoPool.has(c.codigo)) return; // não duplica na fila de inativos
+          jaNoPool.add(c.codigo);
           inativosPool.push({
             codigo: c.codigo, nome: c.nome, municipio: c.municipio||'', uf: c.uf||'',
             cnpj: c.cnpj||'', telefone: c.telefone||'', contato: c.contato||'',
-            ultimaCompra: null, limiteCredito: c.limiteCredito, saldoDevedor: c.saldoDevedor,
+            ultimaCompra: semVendedorNoCrm.get(c.codigo) || null, limiteCredito: c.limiteCredito, saldoDevedor: c.saldoDevedor,
             inadimplente: c.inadimplente||false, valorDevido: c.valorDevido||0,
           });
         });
         STATE.roster = STATE.roster.filter(c => !codigosRemover.has(c.codigo));
       }
+      if(modoSincronizacao){
+        // Sincronizar também limpa cliente repetido na carteira (mesmo código 2x) — fica o primeiro.
+        const vistos = new Set();
+        STATE.roster = STATE.roster.filter(c => { if(vistos.has(c.codigo)) return false; vistos.add(c.codigo); return true; });
+      }
       await safeSet('crm:roster', STATE.roster);
       await safeSet('crm:inativos', inativosPool);
       await aplicarCorrecoesVendedor();
     },
-    resumo: {atualizadosCarteira, atualizadosInativos, novosInativos, novosNaCarteira, ignorados, reatribuidos, reativadosDaFilaDeInativos, removidosDaCarteira, total: linhas.length},
+    resumo: {atualizadosCarteira, atualizadosInativos, novosInativos, novosNaCarteira, ignorados, reatribuidos, reativadosDaFilaDeInativos, removidosDaCarteira, removidosVendedorForaCrm, total: linhas.length},
   };
 }
 
@@ -8433,7 +8454,7 @@ function renderManagerImportacoes(main){
           ${r.novosNaCarteira} cliente(s) novo(s) entram <b>direto na carteira do vendedor</b> indicado na planilha.<br>
           ${r.atualizadosInativos} cliente(s) na fila de inativos foram atualizados.<br>
           ${r.novosInativos} cliente(s) novo(s) (sem vendedor cadastrado no CRM) vão entrar na fila de inativos.<br>
-          ${modoSincronizacao ? `${r.reatribuidos} cliente(s) tiveram o <b>vendedor corrigido</b> (estava errado).<br>${r.reativadosDaFilaDeInativos} cliente(s) <b>voltaram da fila de inativos</b> pra carteira do vendedor indicado na planilha.<br>${r.removidosDaCarteira} cliente(s) <b>saem da carteira</b> (não apareceram mais na planilha pra esse vendedor) e voltam pra "Clientes inativos".<br>` : ''}
+          ${modoSincronizacao ? `${r.reatribuidos} cliente(s) tiveram o <b>vendedor corrigido</b> (estava errado).<br>${r.reativadosDaFilaDeInativos} cliente(s) <b>voltaram da fila de inativos</b> pra carteira do vendedor indicado na planilha.<br>${r.removidosDaCarteira} cliente(s) <b>saem da carteira</b> e voltam pra "Clientes inativos" — ${r.removidosDaCarteira - r.removidosVendedorForaCrm} sumiram da planilha e ${r.removidosVendedorForaCrm} estão na planilha com um vendedor que não está cadastrado no CRM (ex.: 29). Inadimplentes não são tirados.<br>` : ''}
           ${r.ignorados} linha(s) ignorada(s) (sem CNPJ, sem compra, ou dado incompleto).
         </div>
         ${riscoAlto ? `

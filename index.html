@@ -1434,18 +1434,38 @@ function resumoContainerPrevisao(container){
   return {totalChegando, totalReservado, pct};
 }
 
+// Período em que as vendas de um container contam, dentro do mês selecionado.
+// contagem 'mes'    -> só no mês em que deu entrada.
+// contagem '30dias' -> do dia da entrada até 30 dias depois (pode atravessar meses).
+// Retorna {ini, fim} (YYYY-MM-DD) ou null se o container não conta nesse mês.
+function janela30Fim(cont){
+  const d = new Date(cont.chegouEm+'T12:00:00'); d.setDate(d.getDate()+30);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function janelaContainer(cont, mesChave){
+  if(cont.status!=='chegou' || !cont.chegouEm) return null;
+  const iniMes = mesChave+'-01', fimMes = mesChave+'-31';
+  const ini = cont.chegouEm;
+  const fim = cont.contagem==='30dias' ? janela30Fim(cont) : cont.chegouEm.slice(0,7)+'-31';
+  const a = ini > iniMes ? ini : iniMes;
+  const b = fim < fimMes ? fim : fimMes;
+  return a <= b ? {ini:a, fim:b} : null;
+}
+
 // Depois que o container "dá entrada", a gente para de rastrear intenção de venda e passa a
 // contar vendas de verdade — quantas unidades dos itens daquele container um vendedor vendeu
 // naquele mês, e quantos SKUs diferentes dele já saíram.
 function indicadoresContainerVendedor(vendedorCodigo, container, mesChave){
   mesChave = mesChave || STATE.mesSelecionado || currentMonthKey();
   const codes = new Set(container.itens.map(i => i.codigo));
+  const jan = janelaContainer(container, mesChave);
+  if(!jan) return {volume:0, valor:0, qtdSkus:0};
   const contatos = STATE.contatosCache[vendedorCodigo] || {};
   let volume = 0, valor = 0;
   const skusVendidos = new Set();
   Object.values(contatos).forEach(reg => {
     (reg.historico||[]).forEach(h => {
-      if(!h.vendeu || !h.data || h.data.slice(0,7)!==mesChave) return;
+      if(!h.vendeu || !h.data) return; const dia = h.data.slice(0,10); if(dia < jan.ini || dia > jan.fim) return;
       const itens = (h.skus && h.skus.itens) || [];
       let pedidoTemItemDoContainer = false;
       itens.forEach(i => {
@@ -1463,13 +1483,15 @@ function indicadoresContainerVendedor(vendedorCodigo, container, mesChave){
 function indicadoresContainerGeral(container, mesChave){
   mesChave = mesChave || STATE.mesSelecionado || currentMonthKey();
   const codes = new Set(container.itens.map(i => i.codigo));
+  const jan = janelaContainer(container, mesChave);
+  if(!jan) return {volume:0, valor:0, qtdSkus:0};
   let volume = 0, valor = 0;
   const skusVendidos = new Set();
   vendorsVisiveis(mesChave).forEach(v => {
     const contatos = STATE.contatosCache[v.codigo] || {};
     Object.values(contatos).forEach(reg => {
       (reg.historico||[]).forEach(h => {
-        if(!h.vendeu || !h.data || h.data.slice(0,7)!==mesChave) return;
+        if(!h.vendeu || !h.data) return; const dia = h.data.slice(0,10); if(dia < jan.ini || dia > jan.fim) return;
         const itens = (h.skus && h.skus.itens) || [];
         let pedidoTemItemDoContainer = false;
         itens.forEach(i => {
@@ -1485,7 +1507,10 @@ function indicadoresContainerGeral(container, mesChave){
 // Monta os quadradinhos de "vendas do container" pra colocar no dashboard — um por container
 // que já deu entrada. geral=true soma todos os vendedores (gerente); senão é só de um vendedor.
 function containersChegadosCardsHTML(mesChave, vendedorCodigo){
-  const chegados = (STATE.previsoes||[]).filter(c => c.status==='chegou');
+  mesChave = mesChave || STATE.mesSelecionado || currentMonthKey();
+  // Só mostra o container no mês em que ele deu entrada no estoque.
+  // Só mostra o container nos meses em que as vendas dele contam (mês da entrada ou janela de 30 dias).
+  const chegados = (STATE.previsoes||[]).filter(c => janelaContainer(c, mesChave));
   if(chegados.length===0) return '';
   return chegados.map(cont => {
     const ind = vendedorCodigo ? indicadoresContainerVendedor(vendedorCodigo, cont, mesChave) : indicadoresContainerGeral(cont, mesChave);
@@ -1493,6 +1518,7 @@ function containersChegadosCardsHTML(mesChave, vendedorCodigo){
       <div class="stat-card accent">
         <div class="num display" style="font-size:20px;">${fmtMoney(ind.valor)}</div>
         <div class="label">Vendido do container ${cont.nome}${vendedorCodigo?'':' (equipe)'}</div>
+        <div class="hint" style="margin:2px 0 0; font-size:11.5px;">${cont.contagem==='30dias' ? `30 dias: ${fmtDatePt(cont.chegouEm)} a ${fmtDatePt(janela30Fim(cont))}` : `Só no mês da entrada (${fmtDatePt(cont.chegouEm)})`}</div>
         <div style="display:flex; gap:14px; margin-top:8px; font-size:12.5px; color:var(--ink-soft);">
           <span><b style="color:var(--ink);">${ind.qtdSkus}</b> SKU(s)</span>
           <span><b style="color:var(--ink);">${ind.volume}</b> un. (volume)</span>
@@ -2674,6 +2700,11 @@ async function renderPrevisaoCompras(main){
           <input type="text" id="nomeContainer" placeholder="Ex: TF2605" style="max-width:160px;">
           <input type="date" id="previsaoChegadaContainer" title="Previsão de chegada">
           <input type="file" id="f_previsao" accept=".xlsx,.xls">
+          <select id="contagemContainer" title="Como contar as vendas desse container nos indicadores">
+            <option value="">Contar vendas por...</option>
+            <option value="mes">Apenas dentro do mês da entrada</option>
+            <option value="30dias">30 dias a partir da entrada</option>
+          </select>
           <button class="primary-btn" id="btnProcessarPrevisao">Adicionar container</button>
         </div>
         <div id="msgPrevisao"></div>
@@ -2695,6 +2726,7 @@ async function renderPrevisaoCompras(main){
           <div style="text-align:right;">
             ${cont.previsaoChegada ? `<div style="font-size:13px; font-weight:600; color:var(--accent);">Previsão de chegada: ${fmtDatePt(cont.previsaoChegada)}</div>` : ''}
             <span class="hint" style="margin:0;">Cadastrado em ${fmtDatePt(cont.criadoEm)}</span>
+            <div class="hint" style="margin:0;">Contagem: ${cont.contagem==='30dias' ? '30 dias a partir da entrada' : 'apenas no mês da entrada'}</div>
           </div>
         </div>
         <div style="margin:10px 0 4px;">
@@ -2789,17 +2821,20 @@ async function renderPrevisaoCompras(main){
       const nome = document.getElementById('nomeContainer').value.trim();
       const previsaoChegada = document.getElementById('previsaoChegadaContainer').value || null;
       const file = document.getElementById('f_previsao').files[0];
+      const contagem = document.getElementById('contagemContainer').value;
+      if(!contagem){ msg.innerHTML = `<div class="msg err">Escolha como contar as vendas: 30 dias ou apenas dentro do mês.</div>`; return; }
       if(!nome){ msg.innerHTML = `<div class="msg err">Dá um nome pro container (ex: TF2605).</div>`; return; }
       if(!file){ msg.innerHTML = `<div class="msg err">Escolha o arquivo.</div>`; return; }
       msg.innerHTML = `<div class="hint">Lendo planilha...</div>`;
       try{
         const itens = await lerPlanilhaPrevisao(file);
         STATE.previsoes = STATE.previsoes || [];
-        STATE.previsoes.push({id: 'cont'+Date.now(), nome, criadoEm: todayStr(), previsaoChegada, itens});
+        STATE.previsoes.push({id: 'cont'+Date.now(), nome, criadoEm: todayStr(), previsaoChegada, contagem, itens});
         await safeSet('crm:previsoes', STATE.previsoes);
         msg.innerHTML = `<div class="msg ok">Container ${nome} adicionado com ${itens.length} item(ns).</div>`;
         document.getElementById('nomeContainer').value = '';
         document.getElementById('f_previsao').value = '';
+        document.getElementById('contagemContainer').value = '';
         drawContainers();
       }catch(err){
         msg.innerHTML = `<div class="msg err">${err.message}</div>`;

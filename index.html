@@ -3608,7 +3608,7 @@ function distribuicaoVendasPorUF(vendedoresCodigos, mesChave){
   const porUf = {};
   let totalGeral = 0;
   vendedoresCodigos.forEach(vc => {
-    const clientes = clientsForVendor(vc);
+    const clientes = clientesDoVendedorNoMes(vc, mesChave);
     const contatos = STATE.contatosCache[vc] || {};
     clientes.forEach(c => {
       const reg = contatos[c.codigo];
@@ -3867,6 +3867,24 @@ function vendorsVisiveis(mesChave){
 function clientsForVendor(codigo){
   return STATE.roster.filter(c => c.vendedorCodigo === codigo);
 }
+// Clientes que contam nas vendas de um vendedor num mês.
+// Mês atual: a carteira de hoje. Mês fechado: a carteira de hoje + todo cliente que tem venda/contato
+// registrado por esse vendedor naquele mês, mesmo que depois tenha mudado de vendedor ou ido pra
+// inativos — assim trocar carteira não muda o resultado de um mês que já passou.
+function clientesDoVendedorNoMes(codigo, mesChave){
+  const carteira = clientsForVendor(codigo);
+  if(!mesChave || mesChave === currentMonthKey()) return carteira;
+  const contatos = STATE.contatosCache[codigo] || {};
+  const jaTem = new Set(carteira.map(c => String(c.codigo)));
+  const extras = [];
+  Object.entries(contatos).forEach(([cod, reg]) => {
+    if(jaTem.has(String(cod))) return;
+    if(!(reg && (reg.historico||[]).some(h => h.data && h.data.slice(0,7) === mesChave))) return;
+    const noRoster = STATE.roster.find(c => String(c.codigo) === String(cod));
+    extras.push(noRoster ? {...noRoster, foraDaCarteira: true} : {codigo: Number(cod) || cod, nome: reg.nome || ('Cliente Nº ' + cod), uf: reg.uf || '', foraDaCarteira: true});
+  });
+  return carteira.concat(extras);
+}
 
 // Foto cadastrada pelo gerente tem prioridade; senão usa a foto padrão embutida (se houver).
 function vendorPhotoSrc(v){
@@ -4020,6 +4038,7 @@ function vendorMonthStats(vendedorCodigo, mesChave){
   mesChave = mesChave || STATE.mesSelecionado || currentMonthKey();
   const mesEhAtual = mesChave === currentMonthKey();
   const clientes = clientsForVendor(vendedorCodigo);
+  const clientesDoMes = clientesDoVendedorNoMes(vendedorCodigo, mesChave);
   const contatos = STATE.contatosCache[vendedorCodigo] || {};
   const mk = mesChave;
   let contatadosMes = 0, numVendas = 0, valorVendas = 0, totalUnidades = 0;
@@ -4030,9 +4049,9 @@ function vendorMonthStats(vendedorCodigo, mesChave){
   const agendamentosHoje = [];
   const clientesPositivados = new Set();
   let atrasados = 0;
-  clientes.forEach(c => {
+  clientesDoMes.forEach(c => {
     const reg = contatos[c.codigo];
-    if(statusFor(reg?.ultimoContato) === 'danger') atrasados++;
+    if(!c.foraDaCarteira && statusFor(reg?.ultimoContato) === 'danger') atrasados++;
     if(!reg) return;
     const tocouEsteMes = (reg.historico||[]).some(h => h.data.slice(0,7)===mk);
     if(tocouEsteMes) contatadosMes++;

@@ -125,7 +125,9 @@ export default async function handler(req, res) {
           contaGarantia.senha = novoHash(senha);
           await setKV(SUPABASE_URL, 'crm:garantia_contas', contasGarantia, headers);
         }
-        return res.status(200).json({ ok: true, tipo: 'garantia', nome: contaGarantia.nome || 'Garantia', foto: contaGarantia.foto || null });
+        // perfil 'estoque' = vê o módulo Estoque inteiro (Garantia + SAC); senão só a conferência da Garantia.
+        const tipo = contaGarantia.perfil === 'estoque' ? 'estoque' : 'garantia';
+        return res.status(200).json({ ok: true, tipo, nome: contaGarantia.nome || (tipo === 'estoque' ? 'Estoque' : 'Garantia'), foto: contaGarantia.foto || null });
       }
       return res.status(200).json({ ok: false, message: 'Senha incorreta.' });
     }

@@ -87,6 +87,11 @@
   }
   .nav-item:hover{background:rgba(255,255,255,.08); color:#fff;}
   .nav-item.active{background:rgba(255,255,255,.16); color:#fff;}
+  .nav-group{justify-content:space-between;}
+  .nav-group.open{background:rgba(255,255,255,.10); color:#fff;}
+  .nav-caret{font-size:12px; opacity:.85;}
+  .nav-sub{margin:2px 0 4px 14px; padding-left:8px; border-left:2px solid rgba(255,255,255,.3); display:flex; flex-direction:column; gap:2px;}
+  .nav-sub .nav-item{font-size:13.5px; padding:8px 12px;}
   .sidebar-footer{margin-top:auto; padding-top:18px; border-top:1px solid rgba(255,255,255,.15);}
   .whoami-row{display:flex; align-items:center; gap:11px; margin-bottom:12px;}
   .whoami-avatar{width:46px; height:46px; border-radius:50%; object-fit:cover; flex-shrink:0; border:2px solid rgba(255,255,255,.3); box-shadow:0 2px 6px rgba(0,0,0,.2);}
@@ -186,6 +191,8 @@
   .client-row.status-warn{border-left-color:var(--warn);}
   .client-row.status-info{border-left-color:var(--info);}
   .client-row.status-danger{border-left-color:var(--danger);}
+  .client-row.g-sac{border-left-color:#7B4FC9 !important; background:#F7F2FE;}
+  .sac-badge{display:inline-block; background:#7B4FC9; color:#fff; font-size:11px; font-weight:700; padding:2px 8px; border-radius:20px; letter-spacing:.3px; vertical-align:middle;}
   .client-row.comprou-mes{background:var(--ok-soft);}
   .comprou-mes-linha{font-size:13px; color:var(--ok); font-weight:700; margin-top:3px;}
   .meta-cliente-linha{margin-top:4px;}
@@ -4189,6 +4196,7 @@ function render(){
   if(STATE.session.tipo === 'financeiro'){ renderFinanceiroShell(); return; }
   if(STATE.session.tipo === 'compras'){ renderComprasShell(); return; }
   if(STATE.session.tipo === 'garantia'){ renderGarantiaShell(); return; }
+  if(STATE.session.tipo === 'estoque'){ renderEstoqueShell(); return; }
   if(baseDesatualizadaBloqueando()){
     if(STATE.session.tipo === 'gerente'){ renderBloqueioBaseGerente(app); }
     else { renderBloqueioBaseVendedor(app); }
@@ -4301,6 +4309,9 @@ function renderLogin(){
       } else if(data.tipo === 'garantia'){
         STATE.session = {tipo:'garantia', nome: data.nome, foto: data.foto||null};
         STATE.route = {page:'garantia'};
+      } else if(data.tipo === 'estoque'){
+        STATE.session = {tipo:'estoque', nome: data.nome, foto: data.foto||null};
+        STATE.route = {page:'sac'};
       } else {
         STATE.session = {tipo:'vendedor', codigo: data.codigo, nome: data.nome};
         STATE.route = {page:'dashboard'};
@@ -4328,16 +4339,26 @@ function sidebarHTML(items){
     : STATE.session.tipo==='gerente' ? (STATE.config.fotoGerente || null)
     : STATE.session.tipo==='financeiro' ? (STATE.config.fotoFinanceiro || null)
     : STATE.session.tipo==='compras' ? (STATE.config.fotoCompras || null)
-    : STATE.session.tipo==='garantia' ? (STATE.session.foto || null)
+    : (STATE.session.tipo==='garantia' || STATE.session.tipo==='estoque') ? (STATE.session.foto || null)
     : null;
   return `
     <div class="sidebar">
       <button class="menu-toggle" id="btn-menu" aria-label="Abrir menu">☰</button>
       <div class="brand"><div class="mark"><img src="${LOGO_SRC}" alt="TF Imports"></div><div class="name">TF Imports</div></div>
-      <div class="mobile-page">${(items.find(it => it.page===activePage)||{}).label || ''}</div>
+      <div class="mobile-page">${(items.flatMap(it => it.children ? it.children : [it]).find(it => it.page===activePage)||{}).label || ''}</div>
       <nav>
         <div class="drawer-head"><img src="${LOGO_SRC}" alt="">TF Imports</div>
-        ${items.map(it => `<div class="nav-item ${activePage===it.page?'active':''}" data-page="${it.page}">${it.label}</div>`).join('')}
+        ${items.map(it => {
+          if(!it.children) return `<div class="nav-item ${activePage===it.page?'active':''}" data-page="${it.page}">${it.label}</div>`;
+          STATE.menuGrupos = STATE.menuGrupos || {};
+          const filhoAtivo = it.children.some(c => c.page===activePage);
+          const aberto = filhoAtivo || STATE.menuGrupos[it.group];
+          return `
+            <div class="nav-item nav-group ${aberto?'open':''}" data-group="${it.group}">${it.label}<span class="nav-caret">${aberto?'▾':'▸'}</span></div>
+            <div class="nav-sub" style="${aberto?'':'display:none;'}">
+              ${it.children.map(c => `<div class="nav-item ${activePage===c.page?'active':''}" data-page="${c.page}">${c.label}</div>`).join('')}
+            </div>`;
+        }).join('')}
       </nav>
     </div>
     <div class="menu-overlay" id="menu-overlay"></div>
@@ -4355,7 +4376,18 @@ function bindSidebar(onNav){
   const overlay = document.getElementById('menu-overlay');
   if(btnMenu && shellEl) btnMenu.onclick = () => shellEl.classList.toggle('menu-aberto');
   if(overlay && shellEl) overlay.onclick = () => shellEl.classList.remove('menu-aberto');
-  document.querySelectorAll('.nav-item').forEach(el=>{
+  document.querySelectorAll('.nav-group').forEach(el=>{
+    el.onclick = () => {
+      STATE.menuGrupos = STATE.menuGrupos || {};
+      const sub = el.nextElementSibling;
+      const abrir = sub.style.display === 'none';
+      sub.style.display = abrir ? '' : 'none';
+      el.classList.toggle('open', abrir);
+      el.querySelector('.nav-caret').textContent = abrir ? '▾' : '▸';
+      STATE.menuGrupos[el.dataset.group] = abrir;
+    };
+  });
+  document.querySelectorAll('.nav-item[data-page]').forEach(el=>{
     el.onclick = () => { STATE.route = {page: el.dataset.page}; onNav(); try{ window.scrollTo(0,0); }catch(e){} };
   });
   document.getElementById('btn-logout').onclick = () => { if(HEARTBEAT_TIMER) clearInterval(HEARTBEAT_TIMER); STATE.session = null; render(); };
@@ -4396,7 +4428,7 @@ async function renderVendorShell(){
     {page:'pedidos', label:'Pedidos'},
     {page:'financeira', label:'Financeira'},
     {page:'compras-estoque', label:'Compras'},
-    {page:'garantia', label:'Garantia'},
+    {group:'estoque', label:'Estoque', children:[ {page:'garantia', label:'Garantia'}, {page:'sac', label:'SAC'} ]},
     {page:'leads', label:'Leads'},
     {page:'inativos', label:'Clientes inativos'},
     {page:'historico', label:'Histórico'},
@@ -4416,6 +4448,7 @@ async function renderVendorShell(){
   else if(STATE.route.page==='inativos') await renderVendorInativos(main);
   else if(STATE.route.page==='assistente') renderVendorAssistenteIA(main);
   else if(STATE.route.page==='garantia') await renderGarantiaModulo(main, renderVendorShell);
+  else if(STATE.route.page==='sac') await renderSacModulo(main);
   else if(STATE.route.page==='compras-estoque') await renderComprasModulo(main, renderVendorShell);
   else renderVendorHistorico(main);
 }
@@ -6884,7 +6917,7 @@ async function renderManagerShell(){
     {page:'elaboracao-metas', label:'Elaboração de Metas'},
     {page:'financeira', label:'Financeira'},
     {page:'compras-estoque', label:'Compras'},
-    {page:'garantia', label:'Garantia'},
+    {group:'estoque', label:'Estoque', children:[ {page:'garantia', label:'Garantia'}, {page:'sac', label:'SAC'} ]},
     {page:'credenciais', label:'Configurações'},
   ];
   app.innerHTML = `<div class="shell">${sidebarHTML(items)}<div class="main" id="main"></div></div>`;
@@ -6900,6 +6933,7 @@ async function renderManagerShell(){
   else if(STATE.route.page==='financeira') await renderFinanceiroBody(main, () => renderManagerShell());
   else if(STATE.route.page==='compras-estoque') await renderComprasModulo(main, renderManagerShell);
   else if(STATE.route.page==='garantia') await renderGarantiaModulo(main, renderManagerShell);
+  else if(STATE.route.page==='sac') await renderSacModulo(main);
   else await renderConfiguracoes(main);
 }
 
@@ -7354,17 +7388,22 @@ async function desenharPainelContaGarantia(main){
     ? `<img src="${c.foto}" alt="${gEsc(c.nome)}" style="width:38px; height:38px; border-radius:50%; object-fit:cover;">`
     : `<div class="whoami-avatar whoami-avatar-fallback" style="width:38px; height:38px; background:var(--border); color:var(--ink-faint); font-size:14px;">${gEsc((c.nome||'?')[0].toUpperCase())}</div>`;
   painel.innerHTML = `
-    <h3>Usuários de Garantia (conferência)</h3>
+    <h3>Usuários de Garantia e Estoque</h3>
+    <p class="hint"><b>Estoque</b>: vê o módulo Estoque inteiro (Garantia + SAC), dá o retorno do SAC e confere as garantias. <b>Garantia</b>: só a conferência abaixo.</p>
     <p class="hint">Cada pessoa tem o próprio acesso (o histórico da garantia mostra quem conferiu). Eles só veem a aba Garantia: conferem as garantias em que o cliente envia a mercadoria e marcam "lançada no sistema" em todas as autorizadas (com ou sem envio). Não existe senha padrão.</p>
     ${contas.length ? `
       <table class="cred-table" style="margin-bottom:16px;">
-        <thead><tr><th>Foto</th><th>Nome</th><th>Usuário</th><th>Nova senha</th><th></th></tr></thead>
+        <thead><tr><th>Foto</th><th>Nome</th><th>Usuário</th><th>Acesso</th><th>Nova senha</th><th></th></tr></thead>
         <tbody>
           ${contas.map(c => `
             <tr style="${c.bloqueado ? 'opacity:.55;' : ''}">
               <td style="white-space:nowrap;">${avatar(c)}<br><label style="font-size:11px; color:var(--primary); cursor:pointer;">trocar<input type="file" accept="image/*" data-foto="${c.id}" style="display:none;"></label></td>
               <td><input data-campo="nome" data-id="${c.id}" value="${gEsc(c.nome||'')}"></td>
               <td><input data-campo="usuario" data-id="${c.id}" value="${gEsc(c.usuario||'')}"></td>
+              <td><select data-perfil="${c.id}" class="filter-select" style="padding:6px 8px;">
+                <option value="garantia" ${c.perfil!=='estoque'?'selected':''}>Garantia</option>
+                <option value="estoque" ${c.perfil==='estoque'?'selected':''}>Estoque</option>
+              </select></td>
               <td><input data-campo="senha" data-id="${c.id}" placeholder="em branco = mantém"></td>
               <td style="white-space:nowrap;">
                 <button class="primary-btn" data-salvar="${c.id}" style="padding:7px 12px; font-size:13px;">Salvar</button>
@@ -7374,11 +7413,15 @@ async function desenharPainelContaGarantia(main){
             </tr>`).join('')}
         </tbody>
       </table>` : `<div class="empty-state" style="padding:20px; margin-bottom:14px;">Nenhum usuário de garantia ainda.</div>`}
-    <div style="font-size:13px; font-weight:600; color:var(--ink-soft); margin-bottom:8px;">+ Cadastrar novo usuário de garantia</div>
+    <div style="font-size:13px; font-weight:600; color:var(--ink-soft); margin-bottom:8px;">+ Cadastrar novo usuário de garantia / estoque</div>
     <div class="form-row">
       <input type="text" id="novoNomeGarantia" placeholder="Nome">
       <input type="text" id="novoUsuarioGarantia" placeholder="Usuário">
       <input type="text" id="novaSenhaGarantia" placeholder="Senha">
+      <select id="novoPerfilGarantia" class="filter-select">
+        <option value="garantia">Acesso: Garantia</option>
+        <option value="estoque">Acesso: Estoque</option>
+      </select>
       <button class="primary-btn" id="btnCriarGarantia">Cadastrar</button>
     </div>
     <div id="msgGarantiaConta"></div>
@@ -7411,7 +7454,8 @@ async function desenharPainelContaGarantia(main){
     if(usuarioEmUso(usuario, null)){ msg().innerHTML = `<div class="msg err">Esse nome de usuário já está em uso por outra conta.</div>`; return; }
     try{
       const hash = await hashSenha(senha);
-      await alterarConta(null, lista => { lista.push({id: 'gar'+genId(), nome, usuario, senha: hash, foto: null, bloqueado: false, criadoEm: new Date().toISOString()}); });
+      const perfil = document.getElementById('novoPerfilGarantia').value === 'estoque' ? 'estoque' : 'garantia';
+      await alterarConta(null, lista => { lista.push({id: 'gar'+genId(), nome, usuario, senha: hash, perfil, foto: null, bloqueado: false, criadoEm: new Date().toISOString()}); });
       redesenharComMsg(`Usuário <b>${gEsc(usuario)}</b> cadastrado.`);
     }catch(err){ msg().innerHTML = `<div class="msg err">${err.message}</div>`; }
   };
@@ -7424,7 +7468,9 @@ async function desenharPainelContaGarantia(main){
       if(usuarioEmUso(usuario, id)){ msg().innerHTML = `<div class="msg err">Esse nome de usuário já está em uso por outra conta.</div>`; return; }
       try{
         const hash = senha ? await hashSenha(senha) : null;
-        await alterarConta(id, lista => { const c = lista.find(x => x.id === id); if(c){ c.nome = nome; c.usuario = usuario; if(hash) c.senha = hash; } });
+        const perfilSel = painel.querySelector(`select[data-perfil="${id}"]`);
+        const perfil = perfilSel && perfilSel.value === 'estoque' ? 'estoque' : 'garantia';
+        await alterarConta(id, lista => { const c = lista.find(x => x.id === id); if(c){ c.nome = nome; c.usuario = usuario; c.perfil = perfil; if(hash) c.senha = hash; } });
         redesenharComMsg(`Usuário <b>${gEsc(usuario)}</b> atualizado.`);
       }catch(err){ msg().innerHTML = `<div class="msg err">${err.message}</div>`; }
     };
@@ -8656,7 +8702,13 @@ const GARANTIA_STATUS = {
   conferida: {label:'Aguardando lançamento no sistema', cls:'info'},
   concluida: {label:'Concluída', cls:'ok'},
   recusada: {label:'Recusada', cls:'danger'},
+  sac_analise: {label:'Aguardando análise do estoque', cls:'warn'},
+  sac_decisao: {label:'Aguardando decisão da gerência', cls:'warn'},
 };
+// Usuários que conferem a mercadoria (Garantia) e o Estoque (vê o módulo Estoque inteiro).
+function gConferente(t){ t = t || (STATE.session||{}).tipo; return t === 'garantia' || t === 'estoque'; }
+function gEhSac(g){ return g && g.origem === 'sac'; }
+function gSacPreDecisao(g){ return g && (g.status === 'sac_analise' || g.status === 'sac_decisao'); }
 
 function gEsc(v){
   return String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -8981,7 +9033,7 @@ async function extrairGarantiaDoPdfComIA(file){
 // ---------- Quem vê o quê ----------
 function garantiaVisivelParaSessao(g){
   const s = STATE.session || {};
-  if(s.tipo === 'gerente') return true;
+  if(s.tipo === 'gerente' || s.tipo === 'estoque') return true;
   if(s.tipo === 'vendedor') return g.vendedorCodigo === s.codigo || (g.criadoPor && g.criadoPor.codigo === s.codigo);
   if(s.tipo === 'garantia'){
     // Com envio: veem desde "aguardando mercadoria". Sem envio: veem quando fica aguardando lançamento.
@@ -8997,6 +9049,13 @@ function abasGarantiaDaSessao(){
     {id:'conferidas', label:'Aguardando lançamento'},
     {id:'concluidas', label:'Concluídas'},
     {id:'reclamacao', label:'Reclamação'},
+  ];
+  if(t === 'estoque') return [
+    {id:'aguardando', label:'A conferir'},
+    {id:'conferidas', label:'Aguardando lançamento'},
+    {id:'concluidas', label:'Concluídas'},
+    {id:'recusadas', label:'Recusadas'},
+    {id:'relatorio', label:'Relatório'},
   ];
   const abas = [
     {id:'nova', label:'+ Nova garantia'},
@@ -9025,7 +9084,7 @@ async function renderGarantiaModulo(main, rerender){
   const ui = STATE.garantiaUI;
   const abas = abasGarantiaDaSessao();
   if(!ui.aba || !abas.some(a => a.id === ui.aba)){
-    ui.aba = STATE.session.tipo === 'garantia' ? 'aguardando' : (STATE.session.tipo === 'gerente' ? 'pendentes' : 'nova');
+    ui.aba = gConferente() ? 'aguardando' : (STATE.session.tipo === 'gerente' ? 'pendentes' : 'nova');
   }
   ui.mes = ui.mes || currentMonthKey();
   // Sub-aba Reclamação: não depende das garantias, desenha direto.
@@ -9045,7 +9104,10 @@ async function renderGarantiaModulo(main, rerender){
   let todas;
   try{ todas = await listarGarantias(); }
   catch(err){ main.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`; return; }
-  const visiveis = todas.filter(garantiaVisivelParaSessao);
+  ui.origem = ui.origem || 'todas';
+  const visiveis = todas.filter(garantiaVisivelParaSessao)
+    .filter(g => !gSacPreDecisao(g)) // SAC ainda em análise/decisão fica só na aba SAC
+    .filter(g => ui.origem === 'todas' ? true : ui.origem === 'sac' ? gEhSac(g) : !gEhSac(g));
   const ativas = visiveis.filter(g => !g.excluida);
   const contagem = {};
   Object.entries(GARANTIA_ABA_STATUS).forEach(([aba, st]) => { contagem[aba] = ativas.filter(g => g.status === st).length; });
@@ -9054,7 +9116,7 @@ async function renderGarantiaModulo(main, rerender){
   const mostraMes = GARANTIA_ABAS_COM_MES.includes(ui.aba);
 
   main.innerHTML = `
-    <div class="page-header"><div class="eyebrow">Garantia</div><h2>${STATE.session.tipo === 'garantia' ? 'Conferência de garantias' : 'Garantias'}</h2></div>
+    <div class="page-header"><div class="eyebrow">${STATE.session.tipo === 'garantia' ? 'Garantia' : 'Estoque › Garantia'}</div><h2>${gConferente() ? 'Conferência de garantias' : 'Garantias'}</h2></div>
     <div class="tabs" style="flex-wrap:wrap;">
       ${abas.map(a => {
         const n = ['pendentes','aguardando','conferidas'].includes(a.id) ? contagem[a.id] : 0;
@@ -9067,9 +9129,19 @@ async function renderGarantiaModulo(main, rerender){
         <div style="font-family:'Space Grotesk'; font-size:18px; font-weight:600; min-width:190px; text-align:center;">${gNomeMes(ui.mes)}</div>
         <button class="ghost-btn" id="gMesProx" style="padding:6px 12px;">›</button>
       </div>` : ''}
+    ${ui.aba !== 'nova' ? `
+      <div style="display:flex; align-items:center; justify-content:center; gap:8px; margin:0 0 14px; flex-wrap:wrap;">
+        <span style="font-size:12.5px; color:var(--ink-soft);">Origem:</span>
+        <div class="toggle-row" style="min-width:300px;">
+          <button class="toggle-btn ${ui.origem==='todas'?'active':''}" data-origem="todas" data-val="sim">Todas</button>
+          <button class="toggle-btn ${ui.origem==='garantia'?'active':''}" data-origem="garantia" data-val="sim">Garantia</button>
+          <button class="toggle-btn ${ui.origem==='sac'?'active':''}" data-origem="sac" data-val="sim">SAC (problema)</button>
+        </div>
+      </div>` : ''}
     <div id="gConteudo"></div>
   `;
   main.querySelectorAll('.tab-btn[data-aba]').forEach(b => { b.onclick = () => { ui.aba = b.dataset.aba; redesenhar(); }; });
+  main.querySelectorAll('[data-origem]').forEach(b => { b.onclick = () => { ui.origem = b.dataset.origem; redesenhar(); }; });
   if(mostraMes){
     main.querySelector('#gMesAnt').onclick = () => { ui.mes = gSomarMes(ui.mes, -1); redesenhar(); };
     main.querySelector('#gMesProx').onclick = () => { ui.mes = gSomarMes(ui.mes, 1); redesenhar(); };
@@ -9091,7 +9163,7 @@ async function renderGarantiaModulo(main, rerender){
   const somaValor = gR2(lista.reduce((s,g) => s + calcularGarantia(g).valorFinal, 0));
   conteudo.innerHTML = `
     <p style="text-align:center; color:var(--ink-soft); font-size:13.5px; margin-bottom:16px;">
-      ${lista.length} garantia(s)${lista.length ? ` · ${fmtMoney(somaValor)}` : ''}
+      ${lista.length} ${ui.origem==='sac' ? 'SAC(s)' : 'garantia(s)'}${lista.length ? ` · ${fmtMoney(somaValor)}${ui.origem==='sac' ? ' de crédito por problema' : ''}` : ''}
     </p>
     ${lista.length === 0 ? `<div class="empty-state">Nenhuma garantia aqui.</div>` : `
       <div class="client-list">${lista.map(g => cardGarantiaHTML(g)).join('')}</div>
@@ -9105,23 +9177,29 @@ async function renderGarantiaModulo(main, rerender){
 function cardGarantiaHTML(g){
   const calc = calcularGarantia(g);
   const st = GARANTIA_STATUS[g.status] || {label:g.status, cls:'info'};
-  const mostrarFormula = STATE.session.tipo === 'garantia' || g.status === 'aguardando_mercadoria' || g.status === 'conferida';
+  const sac = gEhSac(g);
+  const preDecisao = gSacPreDecisao(g);
+  const mostrarFormula = !preDecisao && (gConferente() || g.status === 'aguardando_mercadoria' || g.status === 'conferida');
   return `
-    <div class="client-row status-${g.excluida ? 'danger' : st.cls}" data-garantia="${g.numero}" style="cursor:pointer;">
-      <div style="font-family:'Space Grotesk'; font-weight:700; font-size:18px; min-width:62px; color:var(--primary);">Nº ${g.numero}</div>
+    <div class="client-row status-${g.excluida ? 'danger' : st.cls} ${sac ? 'g-sac' : ''}" data-garantia="${g.numero}" style="cursor:pointer;">
+      <div style="font-family:'Space Grotesk'; font-weight:700; font-size:18px; min-width:62px; color:${sac ? '#7B4FC9' : 'var(--primary)'};">${sac ? '<span class="sac-badge">SAC</span><br>' : ''}Nº ${g.numero}</div>
       <div class="client-info">
         <div class="client-name">${gEsc(g.clienteNome || 'Cliente')} <span class="client-num">Nº ${gEsc(g.clienteCodigo)}</span></div>
         <div class="client-meta">
           <span>${gEsc(g.uf || '—')}</span>
           <span>Vendedor: ${gEsc(g.vendedorNome || '—')}</span>
           <span>Lançada em ${fmtDataHora(g.criadoEm)}</span>
-          ${g.clienteEnvia ? '<span>📦 Cliente envia de volta</span>' : '<span>Sem envio de mercadoria</span>'}
-          <span>${g.nfDevolucao ? 'Com NF de devolução' : 'Sem NF de devolução'}</span>
+          ${sac ? (g.numeroOrcamento ? `<span>Pedido ${gEsc(g.numeroOrcamento)}</span>` : '') : ''}
+          ${preDecisao ? `<span>${(g.itens||[]).length} item(ns) reclamado(s)</span>` : sac ? `
+            ${g.clienteEnvia ? '<span>📦 Mercadoria pedida de volta</span>' : '<span>Sem retorno de mercadoria</span>'}
+            <span>${g.nfDevolucao ? 'Crédito integral (valor cheio)' : 'Crédito com abatimento de impostos'}</span>` : `
+            ${g.clienteEnvia ? '<span>📦 Cliente envia de volta</span>' : '<span>Sem envio de mercadoria</span>'}
+            <span>${g.nfDevolucao ? 'Com NF de devolução' : 'Sem NF de devolução'}</span>`}
         </div>
         ${mostrarFormula ? `<div class="client-meta" style="margin-top:5px; color:var(--ink);">${formulaGarantiaHTML(g, calc)}</div>` : ''}
       </div>
       <span class="status-badge status-${g.excluida ? 'danger' : st.cls}">${g.excluida ? 'Excluída' : st.label}</span>
-      <div style="font-family:'Space Grotesk'; font-weight:700; font-size:17px; white-space:nowrap;">${fmtMoney(calc.valorFinal)}</div>
+      <div style="font-family:'Space Grotesk'; font-weight:700; font-size:17px; white-space:nowrap;">${fmtMoney(preDecisao ? calc.total : calc.valorFinal)}</div>
     </div>
   `;
 }
@@ -9417,7 +9495,11 @@ async function abrirDetalheGarantia(numero, aoMudar){
   const g = JSON.parse(JSON.stringify(original)); // cópia de trabalho (a conferência mexe aqui antes de salvar)
   const s = STATE.session;
   const ehGerente = s.tipo === 'gerente';
-  const podeConferir = (s.tipo === 'garantia' || ehGerente) && !g.excluida;
+  const podeConferir = (gConferente(s.tipo) || ehGerente) && !g.excluida;
+  const sac = gEhSac(g);
+  const preDecisao = gSacPreDecisao(g);
+  // Rascunho da decisão do gerente no SAC (pedir de volta / crédito integral / valor financeiro).
+  const dec = {pedirVolta: null, integral: null, valorFinanceiro: null};
 
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
@@ -9448,29 +9530,39 @@ async function abrirDetalheGarantia(numero, aoMudar){
     const emConferencia = podeConferir && g.status === 'aguardando_mercadoria';
     const mostrarConferencia = g.clienteEnvia && ['aguardando_mercadoria','conferida','concluida'].includes(g.status);
     const todosMarcados = (g.itens||[]).every(i => i.conferencia && (i.conferencia.veio === false || (i.conferencia.veio === true && i.conferencia.destino)));
-    const linkCliente = s.tipo !== 'garantia';
+    const linkCliente = !gConferente(s.tipo);
 
     backdrop.innerHTML = `
       <div class="modal" style="max-width:860px; max-height:88vh; overflow-y:auto;">
         <div style="display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap; margin-bottom:6px;">
-          <h3 style="margin-bottom:0; flex:1;">Garantia nº ${g.numero}</h3>
+          <h3 style="margin-bottom:0; flex:1;">${sac ? '<span class="sac-badge">SAC</span> SAC' : 'Garantia'} nº ${g.numero}</h3>
           <span class="status-badge status-${g.excluida?'danger':st.cls}">${g.excluida ? 'Excluída' : st.label}</span>
         </div>
         <p style="font-size:13px; color:var(--ink-soft); line-height:1.6; margin-bottom:12px;">
           <b ${linkCliente ? `class="client-name-link" id="gLinkCliente"` : ''} style="color:var(--ink);">${gEsc(g.clienteNome)} <span class="client-num">Nº ${gEsc(g.clienteCodigo)}</span></b>
           · ${gEsc(g.municipio||'')}${g.uf ? '/'+gEsc(g.uf) : ''}${g.cnpj ? ' · CNPJ '+gEsc(g.cnpj) : ''}<br>
-          Vendedor: <b>${gEsc(g.vendedorNome||'—')}</b>${g.numeroOrcamento ? ` · Orçamento nº <b>${gEsc(g.numeroOrcamento)}</b>` : ''}${g.consultor ? ` · Consultor: ${gEsc(g.consultor)}` : ''}<br>
+          Vendedor: <b>${gEsc(g.vendedorNome||'—')}</b>${g.numeroOrcamento ? ` · ${sac ? 'Pedido' : 'Orçamento'} nº <b>${gEsc(g.numeroOrcamento)}</b>` : ''}${g.consultor ? ` · Consultor: ${gEsc(g.consultor)}` : ''}<br>
           Lançada por ${gEsc(g.criadoPor ? g.criadoPor.nome : '—')} em ${fmtDataHora(g.criadoEm)}
         </p>
 
         <div class="form-row" style="gap:8px; margin-bottom:14px;">
+          ${preDecisao ? '' : sac ? `
+          <span class="status-badge status-${g.nfDevolucao?'ok':'warn'}">${g.nfDevolucao ? 'Crédito integral (valor cheio)' : 'Crédito com abatimento de impostos'}</span>
+          <span class="status-badge status-info">${g.clienteEnvia ? '📦 Mercadoria pedida de volta' : 'Sem retorno de mercadoria'}</span>` : `
           <span class="status-badge status-${g.nfDevolucao?'ok':'warn'}">${g.nfDevolucao ? 'Com NF de devolução (integral)' : 'Sem NF de devolução'}</span>
-          <span class="status-badge status-info">${g.clienteEnvia ? '📦 Cliente envia a mercadoria de volta' : 'Cliente não envia a mercadoria'}</span>
+          <span class="status-badge status-info">${g.clienteEnvia ? '📦 Cliente envia a mercadoria de volta' : 'Cliente não envia a mercadoria'}</span>`}
           ${g.clienteEnvia ? `<span class="status-badge status-info">Frete: ${g.fretePagoPor === 'tf' ? 'TF Imports'+(g.freteValor!==null && g.freteValor!==undefined ? ' — '+fmtMoney(g.freteValor) : '') : g.fretePagoPor === 'cliente' ? 'Cliente' : 'não informado'}</span>` : ''}
           ${g.valorFinanceiro ? `<span class="status-badge status-info">Valor financeiro: ${fmtMoney(g.valorFinanceiro)}</span>` : ''}
           ${g.pdfPath ? `<button class="ghost-btn" id="gAbrirPdf" style="padding:6px 12px;">📄 Abrir PDF</button>` : ''}
         </div>
         ${g.obs ? `<div class="msg" style="background:var(--bg); margin-bottom:12px;"><b>Observação:</b> ${gEsc(g.obs)}</div>` : ''}
+        ${sac && (g.fotos||[]).length ? `<div style="margin-bottom:12px;"><div class="field-label">Fotos do problema</div><div id="gSacFotos" style="display:flex; flex-wrap:wrap; gap:8px;"><span class="hint">Carregando fotos...</span></div></div>` : ''}
+        ${sac && g.sacParecer ? `
+          <div class="msg" style="background:${g.sacParecer.procede ? 'var(--ok-soft)' : 'var(--danger-soft)'}; margin-bottom:12px;">
+            <b>Retorno do estoque (${gEsc(g.sacParecer.por||'')} em ${fmtDataHora(g.sacParecer.em)}):</b>
+            ${g.sacParecer.procede ? '✓ Procede' : '✗ Não procede'} — ${gEsc(g.sacParecer.texto||'')}
+            ${(g.sacParecer.fotos||[]).length ? `<div id="gSacFotosEstoque" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;"></div>` : ''}
+          </div>` : ''}
         ${g.status === 'recusada' ? `<div class="msg err" style="margin-bottom:12px;">Recusada por ${gEsc(g.recusadoPor||'')} em ${fmtDataHora(g.recusadoEm)}${g.motivoRecusa ? ': '+gEsc(g.motivoRecusa) : ''}</div>` : ''}
 
         <h3 style="font-size:15px; margin:6px 0 8px;">Itens</h3>
@@ -9478,7 +9570,7 @@ async function abrirDetalheGarantia(numero, aoMudar){
         <table class="cred-table">
           <thead><tr>
             <th>Código</th><th>Descrição</th><th style="text-align:right;">Qtd</th><th style="text-align:right;">Unitário</th><th style="text-align:right;">Total</th>
-            <th style="text-align:right;">Na garantia</th>
+            ${preDecisao ? '' : '<th style="text-align:right;">Na garantia</th>'}
             ${mostrarConferencia ? '<th>Chegou?</th><th>Destino</th>' : ''}
           </tr></thead>
           <tbody>
@@ -9512,20 +9604,24 @@ async function abrirDetalheGarantia(numero, aoMudar){
                 <td style="text-align:right; ${riscado}">${i.quantidade}</td>
                 <td style="text-align:right; white-space:nowrap; ${riscado}">${fmtMoney(i.unitario)}</td>
                 <td style="text-align:right; white-space:nowrap; ${riscado}">${fmtMoney(i.total)}</td>
-                <td style="text-align:right; white-space:nowrap; ${riscado}">${naoVeio ? '−'+fmtMoney(valorItemNaGarantia(g, i, calc)) : fmtMoney(valorItemNaGarantia(g, i, calc))}</td>
+                ${preDecisao ? '' : `<td style="text-align:right; white-space:nowrap; ${riscado}">${naoVeio ? '−'+fmtMoney(valorItemNaGarantia(g, i, calc)) : fmtMoney(valorItemNaGarantia(g, i, calc))}</td>`}
                 ${colunasConf}
               </tr>`;
             }).join('')}
           </tbody>
         </table>
         </div>
-        <p class="hint" style="font-size:12px; margin-top:6px;">Total: ${(g.itens||[]).reduce((a,i)=>a+(Number(i.quantidade)||0),0)} peça(s) · ${(g.itens||[]).length} SKU(s). "Na garantia" é a parte de cada item no valor da garantia (proporcional).</p>
+        <p class="hint" style="font-size:12px; margin-top:6px;">Total: ${(g.itens||[]).reduce((a,i)=>a+(Number(i.quantidade)||0),0)} peça(s) · ${(g.itens||[]).length} SKU(s).${preDecisao ? '' : ' "Na garantia" é a parte de cada item no valor da garantia (proporcional).'}</p>
 
+        ${preDecisao ? `
+        <div style="margin-top:12px; font-size:15.5px; padding:12px 14px; background:var(--bg); border-radius:10px;">
+          Valor reclamado: <b>${fmtMoney(calc.total)}</b> <span style="color:var(--ink-soft); font-size:13px;">(o crédito é definido pela gerência)</span>
+        </div>` : `
         <h3 style="font-size:15px; margin:16px 0 8px;">Cálculo</h3>
         ${detalheCalculoHTML(g, calc)}
         <div style="margin-top:10px; font-size:15.5px; padding:12px 14px; background:var(--bg); border-radius:10px;">
           Valor a aplicar: ${formulaGarantiaHTML(g, calc)}
-        </div>
+        </div>`}
 
         <div id="gAcoes" style="margin-top:18px;"></div>
 
@@ -9577,6 +9673,127 @@ async function abrirDetalheGarantia(numero, aoMudar){
         }, `Garantia nº ${g.numero} recusada.`);
       };
     }
+    if(!g.excluida && sac && g.status === 'sac_analise' && (s.tipo === 'estoque' || ehGerente)){
+      if(s.tipo !== 'estoque'){
+        acoes.innerHTML = `<div class="msg" style="background:var(--warn-soft);">Aguardando o retorno do estoque. Depois disso o SAC cai aqui pra você decidir.</div>`;
+      } else {
+        const fotosParecer = [];
+        acoes.innerHTML = `
+          <div class="panel" style="margin-bottom:0; padding:16px 18px;">
+            <h3 style="font-size:15px;">Retorno do estoque</h3>
+            <label class="field-label">A reclamação procede?</label>
+            <div class="toggle-row" id="sacProcede" style="max-width:320px;">
+              <button type="button" class="toggle-btn" data-val="sim">Procede</button>
+              <button type="button" class="toggle-btn" data-val="nao">Não procede</button>
+            </div>
+            <label class="field-label" style="margin-top:12px;">O que o estoque verificou</label>
+            <textarea id="sacParecerTxt" placeholder="Ex: conferido o lote, peça com defeito de fábrica" style="min-height:60px;"></textarea>
+            <label class="field-label" style="margin-top:10px;">Fotos (opcional)</label>
+            <input type="file" id="sacParecerFotos" accept="image/*" multiple>
+            <div id="sacParecerPrev" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;"></div>
+            <div id="sacParecerMsg"></div>
+            <div class="modal-actions">
+              <button class="primary-btn" id="sacEnviarParecer">Enviar retorno pra gerência</button>
+            </div>
+          </div>`;
+        let procede = null;
+        acoes.querySelectorAll('#sacProcede .toggle-btn').forEach(b => {
+          b.onclick = () => { procede = b.dataset.val === 'sim'; acoes.querySelectorAll('#sacProcede .toggle-btn').forEach(x => x.classList.toggle('active', x === b)); };
+        });
+        const prev = acoes.querySelector('#sacParecerPrev');
+        const desenharPrev = () => { prev.innerHTML = fotosParecer.map(f => `<img src="${f.url}" style="width:70px; height:70px; object-fit:cover; border-radius:8px; border:1px solid var(--border);">`).join(''); };
+        acoes.querySelector('#sacParecerFotos').onchange = (e) => {
+          Array.from(e.target.files||[]).slice(0, RECL_MAX_FOTOS - fotosParecer.length).forEach(f => fotosParecer.push({file:f, url:URL.createObjectURL(f)}));
+          e.target.value = ''; desenharPrev();
+        };
+        acoes.querySelector('#sacEnviarParecer').onclick = async () => {
+          const msgP = acoes.querySelector('#sacParecerMsg');
+          const texto = acoes.querySelector('#sacParecerTxt').value.trim();
+          if(procede === null){ msgP.innerHTML = `<div class="msg err">Marque se procede ou não.</div>`; return; }
+          if(!texto){ msgP.innerHTML = `<div class="msg err">Escreva o que o estoque verificou.</div>`; return; }
+          const btn = acoes.querySelector('#sacEnviarParecer');
+          btn.disabled = true;
+          try{
+            const paths = [];
+            for(let i = 0; i < fotosParecer.length; i++){ btn.textContent = `Enviando foto ${i+1} de ${fotosParecer.length}...`; paths.push(await reclEnviarFoto(fotosParecer[i].file)); }
+            btn.textContent = 'Salvando...';
+            await gravar(alvo => {
+              alvo.sacParecer = {procede, texto, fotos: paths, por: s.nome, em: new Date().toISOString()};
+              alvo.status = 'sac_decisao';
+              registrar(alvo, `Retorno do estoque: ${procede ? 'procede' : 'não procede'} — ${texto}`);
+            }, `Retorno do SAC nº ${g.numero} enviado pra gerência.`);
+          }catch(err){ btn.disabled = false; btn.textContent = 'Enviar retorno pra gerência'; msgP.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`; }
+        };
+      }
+    }
+    if(!g.excluida && sac && g.status === 'sac_decisao' && ehGerente){
+      const tg = (nome, valor, sim='Sim', nao='Não') => `<div class="toggle-row" data-dec="${nome}" style="max-width:320px;">
+        <button type="button" class="toggle-btn ${valor===true?'active':''}" data-val="sim">${sim}</button>
+        <button type="button" class="toggle-btn ${valor===false?'active':''}" data-val="nao">${nao}</button></div>`;
+      const simulado = {...g, nfDevolucao: dec.integral === true, valorFinanceiro: dec.valorFinanceiro, clienteEnvia: false};
+      const podePrever = dec.integral === true || (dec.integral === false && dec.valorFinanceiro > 0);
+      acoes.innerHTML = `
+        <div class="panel" style="margin-bottom:0; padding:16px 18px; border-left:4px solid #7B4FC9;">
+          <h3 style="font-size:15px;">Decisão da gerência</h3>
+          <label class="field-label">Pedir a mercadoria de volta?</label>
+          ${tg('volta', dec.pedirVolta)}
+          <p class="hint" style="font-size:12px; margin-top:4px;">Sim → vai pra Garantia em "Aguardando mercadoria". Não → vai direto pra "Aguardando lançamento".</p>
+          <label class="field-label" style="margin-top:12px;">Aplicar o crédito integral (valor cheio)?</label>
+          ${tg('integral', dec.integral)}
+          <div id="sacVfBox" style="margin-top:12px; ${dec.integral===false?'':'display:none;'}">
+            <label class="field-label">Valor financeiro — valor da NF (R$)</label>
+            <input type="text" id="sacVf" value="${gFmtNumInput(dec.valorFinanceiro)}" placeholder="ex: 464,94" style="max-width:220px; padding:9px 12px; border:1px solid var(--border); border-radius:7px; font-size:13.5px;">
+            <p class="hint" style="font-size:12px; margin-top:4px;">Abate IPI, ST, ICMS, PIS e Cofins igual à garantia.</p>
+          </div>
+          <div id="sacPrevia" style="margin-top:12px;">${podePrever ? detalheCalculoHTML(simulado) + `<div style="margin-top:8px; font-size:15px;">Crédito: ${formulaGarantiaHTML(simulado)}</div>` : ''}</div>
+          <textarea id="sacMotivo" placeholder="Motivo (obrigatório só para não gerar crédito)" style="min-height:46px; margin-top:12px;"></textarea>
+          <div id="sacDecMsg"></div>
+          <div class="modal-actions">
+            <button class="ghost-btn" id="sacRecusar" style="color:var(--danger); border-color:var(--danger);">Não gerar crédito</button>
+            <button class="primary-btn" id="sacConfirmar" style="background:var(--ok); border-color:var(--ok);">✓ Confirmar crédito</button>
+          </div>
+        </div>`;
+      acoes.querySelectorAll('[data-dec]').forEach(grupo => {
+        grupo.querySelectorAll('.toggle-btn').forEach(b => {
+          b.onclick = () => {
+            const val = b.dataset.val === 'sim';
+            if(grupo.dataset.dec === 'volta') dec.pedirVolta = val; else { dec.integral = val; if(val) dec.valorFinanceiro = null; }
+            desenhar();
+          };
+        });
+      });
+      const vfInp = acoes.querySelector('#sacVf');
+      if(vfInp) vfInp.onchange = () => { const v = vfInp.value.trim(); dec.valorFinanceiro = v ? gNum(v) : null; desenhar(); };
+      acoes.querySelector('#sacConfirmar').onclick = () => {
+        const msgD = acoes.querySelector('#sacDecMsg');
+        if(vfInp){ const v = vfInp.value.trim(); dec.valorFinanceiro = v ? gNum(v) : null; }
+        if(dec.pedirVolta === null){ msgD.innerHTML = `<div class="msg err">Responda se vai pedir a mercadoria de volta.</div>`; return; }
+        if(dec.integral === null){ msgD.innerHTML = `<div class="msg err">Responda se o crédito é integral.</div>`; return; }
+        if(dec.integral === false && !(dec.valorFinanceiro > 0)){ msgD.innerHTML = `<div class="msg err">Informe o valor financeiro pra abater os impostos.</div>`; return; }
+        gravar(alvo => {
+          const agora = new Date().toISOString();
+          alvo.nfDevolucao = dec.integral;
+          alvo.valorFinanceiro = dec.integral ? null : gR2(dec.valorFinanceiro);
+          alvo.clienteEnvia = dec.pedirVolta;
+          alvo.autorizadoEm = agora; alvo.autorizadoPor = s.nome;
+          alvo.status = dec.pedirVolta ? 'aguardando_mercadoria' : 'conferida';
+          const c = calcularGarantia(alvo);
+          registrar(alvo, `Decisão da gerência: crédito ${dec.integral ? 'integral' : 'com abatimento de impostos'} de ${fmtMoney(c.valorAplicavel)} — ${dec.pedirVolta ? 'mercadoria pedida de volta (aguardando mercadoria)' : 'sem retorno (aguardando lançamento)'}`);
+        }, `SAC nº ${g.numero}: crédito confirmado.`);
+      };
+      acoes.querySelector('#sacRecusar').onclick = () => {
+        const motivo = acoes.querySelector('#sacMotivo').value.trim();
+        if(!motivo){ avisar('Escreva o motivo pra não gerar crédito.'); return; }
+        gravar(alvo => {
+          alvo.status = 'recusada';
+          alvo.recusadoEm = new Date().toISOString(); alvo.recusadoPor = s.nome; alvo.motivoRecusa = motivo;
+          registrar(alvo, 'Sem crédito (recusado): ' + motivo);
+        }, `SAC nº ${g.numero} fechado sem crédito.`);
+      };
+    }
+    if(!g.excluida && sac && g.status === 'sac_decisao' && !ehGerente){
+      acoes.innerHTML = `<div class="msg" style="background:var(--warn-soft);">Estoque já deu o retorno. Aguardando decisão da gerência.</div>`;
+    }
     if(emConferencia){
       acoes.innerHTML = `
         <div class="panel" style="margin-bottom:0; padding:16px 18px;">
@@ -9619,7 +9836,7 @@ async function abrirDetalheGarantia(numero, aoMudar){
             <input type="checkbox" id="gChkLancada" style="width:20px; height:20px;"> Essa garantia já foi lançada no sistema
           </label>
           <div class="modal-actions">
-            ${g.clienteEnvia && (ehGerente || s.tipo === 'garantia') ? `<button class="ghost-btn" id="gReabrirConf">Reabrir conferência</button>` : ''}
+            ${g.clienteEnvia && (ehGerente || gConferente(s.tipo)) ? `<button class="ghost-btn" id="gReabrirConf">Reabrir conferência</button>` : ''}
             <button class="primary-btn" id="gConfirmarLancada" disabled style="opacity:.5;">Confirmar e concluir</button>
           </div>
         </div>`;
@@ -9645,6 +9862,17 @@ async function abrirDetalheGarantia(numero, aoMudar){
     }
 
     backdrop.querySelector('#gFechar').onclick = () => fechar(false);
+    const mostrarFotos = (paths, alvoId) => {
+      const box = backdrop.querySelector('#'+alvoId);
+      if(!box || !(paths||[]).length) return;
+      reclUrlsFotos(paths).then(urls => {
+        const el = backdrop.querySelector('#'+alvoId); if(!el) return;
+        el.innerHTML = paths.map(p => urls[p]
+          ? `<a href="${urls[p]}" target="_blank" rel="noopener"><img src="${urls[p]}" style="width:96px; height:96px; object-fit:cover; border-radius:8px; border:1px solid var(--border);"></a>`
+          : `<div class="hint">Foto indisponível</div>`).join('');
+      }).catch(err => { const el = backdrop.querySelector('#'+alvoId); if(el) el.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`; });
+    };
+    if(sac){ mostrarFotos(g.fotos, 'gSacFotos'); if(g.sacParecer) mostrarFotos(g.sacParecer.fotos, 'gSacFotosEstoque'); }
     const pdfBtn = backdrop.querySelector('#gAbrirPdf');
     if(pdfBtn) pdfBtn.onclick = () => abrirPdfGarantia(g.pdfPath);
     const link = backdrop.querySelector('#gLinkCliente');
@@ -9675,7 +9903,7 @@ function renderRelatorioGarantias(el, garantias, redesenhar){
   ui.relBusca = ui.relBusca || '';
 
   // Base conforme o filtro: só concluídas, ou todas (menos recusadas/excluídas).
-  const base = garantias.filter(g => ui.relFiltro === 'concluidas' ? g.status === 'concluida' : g.status !== 'recusada');
+  const base = garantias.filter(g => !gSacPreDecisao(g)).filter(g => ui.relFiltro === 'concluidas' ? g.status === 'concluida' : g.status !== 'recusada');
   const doMes = base.filter(g => mesDaGarantia(g) === ui.mes);
 
   const porCliente = new Map();
@@ -9748,6 +9976,10 @@ function renderRelatorioGarantias(el, garantias, redesenhar){
       ${card('sku', skusOrd.length, 'SKUs distintos devolvidos')}
       ${card('volume', pecasMes, 'Peças devolvidas (volume)')}
     </div>
+    <p style="text-align:center; font-size:13px; color:var(--ink-soft); margin:-4px 0 14px;">
+      No mês: Garantia <b>${fmtMoney(gR2(doMes.filter(g => !gEhSac(g)).reduce((a,g) => a + calcularGarantia(g).valorFinal, 0)))}</b>
+      · <span style="color:#7B4FC9;">SAC (crédito por problema) <b>${fmtMoney(gR2(doMes.filter(gEhSac).reduce((a,g) => a + calcularGarantia(g).valorFinal, 0)))}</b></span>
+    </p>
     <div class="panel">
       ${detalheHTML}
       ${dadosExcel.length ? `<button class="ghost-btn" id="gRelExcel" style="margin-top:12px;">⬇️ Baixar em Excel</button>` : ''}
@@ -9870,6 +10102,324 @@ async function renderGarantiaShell(){
   app.innerHTML = `<div class="shell">${sidebarHTML(items)}<div class="main" id="main"></div></div>`;
   bindSidebar(renderGarantiaShell);
   await renderGarantiaModulo(document.getElementById('main'), renderGarantiaShell);
+}
+
+// =====================================================================================
+// ---------------- SAC (Estoque › SAC) ----------------
+// Vendedor abre o SAC (cliente, pedido, produto(s), quantidade reclamada, valor, observação,
+// fotos — ou sobe o PDF do pedido pra preencher sozinho) → "Aguardando análise do estoque" →
+// usuário Estoque dá o retorno → "Aguardando decisão da gerência" → gerente decide:
+//   • pedir de volta? Sim → Garantia "Aguardando mercadoria"; Não → "Aguardando lançamento"
+//   • crédito integral? Sim → valor cheio; Não → informa valor financeiro e abate impostos
+//   • ou não gera crédito (recusado).
+// O SAC é guardado junto com as garantias (origem:'sac'), mesma numeração e mesmo histórico,
+// e aparece na Garantia com cor roxa. Fotos usam o mesmo espaço privado das reclamações.
+// =====================================================================================
+function abasSacDaSessao(){
+  const t = (STATE.session||{}).tipo;
+  if(t === 'estoque') return [
+    {id:'analise', label:'Aguardando análise'},
+    {id:'decisao', label:'Aguardando decisão'},
+    {id:'encaminhados', label:'Encaminhados'},
+    {id:'recusados', label:'Sem crédito'},
+  ];
+  return [
+    {id:'novo', label:'+ Novo SAC'},
+    {id:'analise', label:'Em análise do estoque'},
+    {id:'decisao', label:'Aguardando decisão'},
+    {id:'encaminhados', label:'Encaminhados'},
+    {id:'recusados', label:'Sem crédito'},
+  ];
+}
+function sacNaAba(g, aba){
+  if(aba === 'analise') return g.status === 'sac_analise';
+  if(aba === 'decisao') return g.status === 'sac_decisao';
+  if(aba === 'encaminhados') return ['aguardando_mercadoria','conferida','concluida'].includes(g.status);
+  if(aba === 'recusados') return g.status === 'recusada';
+  return false;
+}
+async function renderSacModulo(main){
+  STATE.sacUI = STATE.sacUI || {};
+  const ui = STATE.sacUI;
+  const abas = abasSacDaSessao();
+  const t = STATE.session.tipo;
+  if(!ui.aba || !abas.some(a => a.id === ui.aba)) ui.aba = t === 'estoque' ? 'analise' : (t === 'gerente' ? 'decisao' : 'novo');
+  main.innerHTML = `<div class="loading" style="min-height:200px">Carregando SAC…</div>`;
+  let todas;
+  try{ todas = await listarGarantias(); }
+  catch(err){ main.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`; return; }
+  const sacs = todas.filter(g => gEhSac(g) && !g.excluida && garantiaVisivelParaSessao(g));
+  const redesenhar = () => renderSacModulo(main);
+  const n = (aba) => sacs.filter(g => sacNaAba(g, aba)).length;
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Estoque › SAC</div><h2>SAC — problema com produto</h2></div>
+    <div class="tabs" style="flex-wrap:wrap;">
+      ${abas.map(a => {
+        const c = (a.id === 'analise' || a.id === 'decisao') ? n(a.id) : 0;
+        return `<button class="tab-btn ${ui.aba===a.id?'active':''}" data-aba="${a.id}">${a.label}${c ? ` <span class="status-badge status-warn" style="margin-left:4px; padding:2px 7px;">${c}</span>` : ''}</button>`;
+      }).join('')}
+    </div>
+    <div id="sacConteudo"></div>
+  `;
+  main.querySelectorAll('.tab-btn[data-aba]').forEach(b => { b.onclick = () => { ui.aba = b.dataset.aba; redesenhar(); }; });
+  const conteudo = main.querySelector('#sacConteudo');
+  if(ui.aba === 'novo'){ await renderNovoSac(conteudo, () => { ui.aba = 'analise'; redesenhar(); }); return; }
+  const lista = sacs.filter(g => sacNaAba(g, ui.aba)).sort((a,b) => b.numero - a.numero);
+  const soma = gR2(lista.reduce((a,g) => a + (gSacPreDecisao(g) ? calcularGarantia(g).total : calcularGarantia(g).valorFinal), 0));
+  conteudo.innerHTML = `
+    <p style="text-align:center; color:var(--ink-soft); font-size:13.5px; margin-bottom:16px;">
+      ${lista.length} SAC(s)${lista.length ? ` · ${fmtMoney(soma)}${gSacPreDecisao(lista[0]) ? ' reclamado' : ''}` : ''}
+    </p>
+    ${lista.length === 0 ? `<div class="empty-state">Nenhum SAC aqui.</div>` : `<div class="client-list">${lista.map(g => cardGarantiaHTML(g)).join('')}</div>`}
+  `;
+  conteudo.querySelectorAll('[data-garantia]').forEach(el => {
+    el.onclick = () => abrirDetalheGarantia(Number(el.dataset.garantia), redesenhar);
+  });
+}
+
+async function renderNovoSac(el, aoConcluir){
+  const poolInativos = await getInativos();
+  function buscarCliente(codigo){
+    const cod = Number(codigo);
+    if(!cod) return null;
+    const noRoster = STATE.roster.find(c => c.codigo === cod);
+    if(noRoster) return {...noRoster};
+    const inativo = poolInativos.find(c => c.codigo === cod);
+    return inativo ? {...inativo, vendedorCodigo: null} : null;
+  }
+  const d = {clienteCodigo:'', clienteNome:'', cnpj:'', municipio:'', uf:'', pedido:'', valorIpi:0, valorSt:0, obs:'', itens:[{codigo:'', descricao:'', quantidade:0, unitario:0, total:0}]};
+  let pdfLido = null; // guarda IPI/ST e soma dos itens do PDF pra ratear proporcional
+  let arquivoPdf = null;
+  const fotos = [];
+  const estilo = 'width:100%; padding:9px 12px; border:1px solid var(--border); border-radius:7px; font-size:13.5px;';
+
+  el.innerHTML = `
+    <div class="panel" style="border-left:4px solid #7B4FC9;">
+      <h3>PDF do pedido (opcional)</h3>
+      <p class="hint">Suba o PDF do pedido pra preencher sozinho. Depois deixe só o(s) produto(s) com problema e ajuste a quantidade reclamada.</p>
+      <input type="file" id="sPdf" accept="application/pdf,.pdf">
+      <div id="sMsgPdf"></div>
+    </div>
+    <div id="sForm"></div>
+  `;
+  const form = el.querySelector('#sForm');
+  const somaItens = () => gR2(d.itens.reduce((a,i) => a + (Number(i.total)||0), 0));
+  function ratearImpostos(){
+    if(!pdfLido || !(pdfLido.somaItens > 0)) return;
+    const f = somaItens() / pdfLido.somaItens;
+    d.valorIpi = gR2(pdfLido.ipi * f); d.valorSt = gR2(pdfLido.st * f);
+    const a = form.querySelector('#sIpi'), b = form.querySelector('#sSt');
+    if(a) a.value = gFmtNumInput(d.valorIpi); if(b) b.value = gFmtNumInput(d.valorSt);
+  }
+  function desenharTotal(){
+    const box = form.querySelector('#sTotal');
+    if(box) box.innerHTML = `Valor reclamado: <b>${fmtMoney(somaItens())}</b>`;
+  }
+  function desenharItens(){
+    const box = form.querySelector('#sItens');
+    box.innerHTML = `
+      <table class="cred-table">
+        <thead><tr><th>Código</th><th>Descrição</th><th style="width:90px;">Qtd reclamada</th><th style="width:110px;">Valor unit.</th><th style="width:120px;">Total</th><th></th></tr></thead>
+        <tbody>
+          ${d.itens.map((i, idx) => `
+            <tr>
+              <td><input data-i="${idx}" data-f="codigo" value="${gEsc(i.codigo)}"></td>
+              <td><input data-i="${idx}" data-f="descricao" value="${gEsc(i.descricao)}"></td>
+              <td><input data-i="${idx}" data-f="quantidade" value="${gFmtNumInput(i.quantidade)}"></td>
+              <td><input data-i="${idx}" data-f="unitario" value="${gFmtNumInput(i.unitario)}"></td>
+              <td><input data-i="${idx}" data-f="total" value="${gFmtNumInput(i.total)}"></td>
+              <td><button type="button" class="ghost-btn" data-remover="${idx}" style="padding:5px 9px; color:var(--danger);">✕</button></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+      <button type="button" class="ghost-btn" id="sAddItem" style="margin-top:8px;">+ Adicionar produto</button>
+    `;
+    box.querySelectorAll('input[data-i]').forEach(inp => {
+      inp.oninput = () => {
+        const item = d.itens[Number(inp.dataset.i)];
+        const f = inp.dataset.f;
+        item[f] = (f === 'codigo' || f === 'descricao') ? inp.value : gNum(inp.value);
+        if((f === 'quantidade' || f === 'unitario') && item.quantidade && item.unitario){
+          item.total = gR2(item.quantidade * item.unitario);
+          const tot = box.querySelector(`input[data-i="${inp.dataset.i}"][data-f="total"]`);
+          if(tot) tot.value = gFmtNumInput(item.total);
+        }
+        ratearImpostos(); desenharTotal();
+      };
+    });
+    box.querySelectorAll('[data-remover]').forEach(b => { b.onclick = () => { d.itens.splice(Number(b.dataset.remover), 1); desenharItens(); ratearImpostos(); desenharTotal(); }; });
+    box.querySelector('#sAddItem').onclick = () => { d.itens.push({codigo:'', descricao:'', quantidade:0, unitario:0, total:0}); desenharItens(); };
+  }
+  function desenharPreviews(){
+    const box = form.querySelector('#sPrev');
+    box.innerHTML = fotos.map((f,i) => `
+      <div style="position:relative;">
+        <img src="${f.url}" style="width:84px; height:84px; object-fit:cover; border-radius:8px; border:1px solid var(--border);">
+        <button data-rm="${i}" title="Remover" style="position:absolute; top:-6px; right:-6px; width:22px; height:22px; border-radius:50%; border:none; background:var(--danger); color:#fff; cursor:pointer; font-size:13px; line-height:22px; padding:0;">×</button>
+      </div>`).join('');
+    box.querySelectorAll('[data-rm]').forEach(b => { b.onclick = () => { const i = Number(b.dataset.rm); URL.revokeObjectURL(fotos[i].url); fotos.splice(i,1); desenharPreviews(); }; });
+  }
+  function desenharClienteInfo(){
+    const box = form.querySelector('#sCliInfo');
+    if(!d.clienteCodigo){ box.innerHTML = ''; return; }
+    const c = buscarCliente(d.clienteCodigo);
+    if(!c){ box.innerHTML = `<div class="msg err">Cliente Nº ${gEsc(d.clienteCodigo)} não encontrado na base (dá pra abrir mesmo assim).</div>`; return; }
+    const v = c.vendedorCodigo ? STATE.vendors.find(x => x.codigo === c.vendedorCodigo) : null;
+    box.innerHTML = `<div class="msg ok">Cliente na base: <b>${gEsc(c.nome)}</b> · ${gEsc(c.municipio||'')}${c.uf?'/'+gEsc(c.uf):''} · ${v ? 'Vendedor: '+gEsc(v.nome) : 'Sem vendedor (inativos)'}</div>`;
+  }
+  function desenharForm(){
+    form.innerHTML = `
+      <div class="panel">
+        <h3>Cliente e pedido</h3>
+        <div class="form-row">
+          <div style="flex:1; min-width:130px;"><label class="field-label">Nº do cliente</label><input type="text" id="sCliCod" value="${gEsc(d.clienteCodigo)}" style="${estilo}"></div>
+          <div style="flex:3; min-width:220px;"><label class="field-label">Nome do cliente</label><input type="text" id="sCliNome" value="${gEsc(d.clienteNome)}" style="${estilo}"></div>
+          <div style="flex:0 0 80px;"><label class="field-label">UF</label><input type="text" id="sUf" maxlength="2" value="${gEsc(d.uf)}" style="${estilo} text-transform:uppercase;"></div>
+          <div style="flex:1; min-width:130px;"><label class="field-label">Nº do pedido</label><input type="text" id="sPedido" value="${gEsc(d.pedido)}" style="${estilo}"></div>
+        </div>
+        <div id="sCliInfo" style="margin-bottom:6px;"></div>
+      </div>
+      <div class="panel">
+        <h3>Produto(s) com problema</h3>
+        <div id="sItens" style="overflow-x:auto;"></div>
+        <div class="form-row" style="margin-top:12px;">
+          <div style="flex:1; min-width:150px;"><label class="field-label">IPI dos itens (R$)</label><input type="text" id="sIpi" value="${gFmtNumInput(d.valorIpi)}" style="${estilo}"></div>
+          <div style="flex:1; min-width:150px;"><label class="field-label">ICMS ST dos itens (R$)</label><input type="text" id="sSt" value="${gFmtNumInput(d.valorSt)}" style="${estilo}"></div>
+        </div>
+        <p class="hint" style="font-size:12px;">IPI/ST só são usados se a gerência não der crédito integral. Com PDF, o sistema calcula proporcional aos itens reclamados.</p>
+        <div id="sTotal" style="margin-top:10px; font-size:15px;"></div>
+      </div>
+      <div class="panel">
+        <h3>Observação e fotos</h3>
+        <label class="field-label">Observação — qual o problema?</label>
+        <textarea id="sObs" class="import-area" style="min-height:70px;">${gEsc(d.obs)}</textarea>
+        <label class="field-label" style="margin-top:10px;">Fotos (até ${RECL_MAX_FOTOS})</label>
+        <input type="file" id="sFotos" accept="image/*" multiple>
+        <div id="sPrev" style="display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 4px;"></div>
+        <div id="sMsg"></div>
+        <button class="primary-btn" id="sLancar" style="margin-top:14px; width:100%; background:#7B4FC9; border-color:#7B4FC9;">Abrir SAC</button>
+      </div>
+    `;
+    desenharItens(); desenharClienteInfo(); desenharPreviews(); desenharTotal();
+    const q = (x) => form.querySelector(x);
+    q('#sCliCod').oninput = () => {
+      d.clienteCodigo = q('#sCliCod').value.trim();
+      const c = buscarCliente(d.clienteCodigo);
+      if(c){
+        if(!q('#sCliNome').value.trim()){ d.clienteNome = c.nome; q('#sCliNome').value = c.nome; }
+        if(!q('#sUf').value.trim() && c.uf){ d.uf = c.uf.toUpperCase(); q('#sUf').value = d.uf; }
+      }
+      desenharClienteInfo();
+    };
+    q('#sCliNome').oninput = () => { d.clienteNome = q('#sCliNome').value; };
+    q('#sUf').oninput = () => { d.uf = q('#sUf').value.trim().toUpperCase(); };
+    q('#sPedido').oninput = () => { d.pedido = q('#sPedido').value.trim(); };
+    q('#sIpi').oninput = () => { d.valorIpi = gNum(q('#sIpi').value); pdfLido = null; };
+    q('#sSt').oninput = () => { d.valorSt = gNum(q('#sSt').value); pdfLido = null; };
+    q('#sObs').oninput = () => { d.obs = q('#sObs').value; };
+    q('#sFotos').onchange = (e) => {
+      const novos = Array.from(e.target.files||[]).filter(f => /^image\//.test(f.type) || /\.(jpe?g|png|webp|heic|heif)$/i.test(f.name));
+      const cabem = RECL_MAX_FOTOS - fotos.length;
+      novos.slice(0, cabem).forEach(f => fotos.push({file:f, url: URL.createObjectURL(f)}));
+      if(novos.length > cabem) q('#sMsg').innerHTML = `<div class="msg err">Máximo de ${RECL_MAX_FOTOS} fotos.</div>`;
+      e.target.value = ''; desenharPreviews();
+    };
+    q('#sLancar').onclick = lancar;
+  }
+  async function lancar(){
+    const msg = form.querySelector('#sMsg');
+    const btn = form.querySelector('#sLancar');
+    const erro = (t) => { msg.innerHTML = `<div class="msg err">${t}</div>`; };
+    d.itens = d.itens.filter(i => String(i.codigo||'').trim() || i.quantidade || i.total);
+    if(!d.clienteCodigo) return erro('Informe o número do cliente.');
+    if(!d.pedido) return erro('Informe o número do pedido.');
+    if(!d.itens.length){ d.itens.push({codigo:'', descricao:'', quantidade:0, unitario:0, total:0}); desenharItens(); return erro('Informe pelo menos um produto.'); }
+    if(d.itens.some(i => !String(i.codigo||'').trim() || !(i.quantidade > 0))) return erro('Todo produto precisa de código e quantidade reclamada.');
+    if(d.itens.some(i => !(i.total > 0))) return erro('Informe o valor de cada produto.');
+    if(d.uf.length !== 2) return erro('Informe a UF do cliente (2 letras).');
+    if(!d.obs.trim()) return erro('Escreva na observação qual é o problema.');
+    btn.disabled = true;
+    try{
+      const paths = [];
+      for(let i = 0; i < fotos.length; i++){ btn.textContent = `Enviando foto ${i+1} de ${fotos.length}...`; paths.push(await reclEnviarFoto(fotos[i].file)); }
+      let pdfPath = null;
+      if(arquivoPdf){ btn.textContent = 'Enviando PDF...'; pdfPath = await enviarPdfGarantia(arquivoPdf); }
+      btn.textContent = 'Gerando número...';
+      const {numero} = await garantiaApi({acao:'proximo-numero'});
+      const cli = buscarCliente(d.clienteCodigo);
+      const s = STATE.session;
+      const vendedorCodigo = s.tipo === 'vendedor' ? s.codigo : (cli && cli.vendedorCodigo ? cli.vendedorCodigo : null);
+      const vend = vendedorCodigo ? STATE.vendors.find(v => v.codigo === vendedorCodigo) : null;
+      const agora = new Date().toISOString();
+      const g = {
+        numero, origem: 'sac',
+        criadoEm: agora, criadoPor: gQuem(),
+        vendedorCodigo, vendedorNome: vend ? vend.nome : (s.tipo === 'vendedor' ? s.nome : ''),
+        clienteCodigo: Number(d.clienteCodigo) || d.clienteCodigo,
+        clienteNome: d.clienteNome || (cli ? cli.nome : ''),
+        cnpj: d.cnpj || (cli ? (cli.cnpj||'') : ''),
+        municipio: d.municipio || (cli ? (cli.municipio||'') : ''),
+        uf: d.uf,
+        numeroOrcamento: d.pedido,
+        valorTotal: somaItens(), valorIpi: gR2(d.valorIpi), valorSt: gR2(d.valorSt),
+        valorFinanceiro: null, nfDevolucao: null, clienteEnvia: null,
+        fretePagoPor: null, freteValor: null,
+        obs: d.obs.trim(), fotos: paths,
+        itens: d.itens.map(i => ({codigo: String(i.codigo).trim(), descricao: String(i.descricao||'').trim(), quantidade: Number(i.quantidade)||0, unitario: gR2(i.unitario), total: gR2(i.total), conferencia: {veio:null, destino:null}})),
+        pdfPath, pdfNome: arquivoPdf ? arquivoPdf.name : null,
+        status: 'sac_analise', excluida: false,
+        historico: [{em: agora, por: s.nome, acao: 'SAC aberto — aguardando análise do estoque'}],
+        versao: 0,
+      };
+      btn.textContent = 'Salvando...';
+      await salvarGarantia(g);
+      fotos.forEach(f => URL.revokeObjectURL(f.url));
+      await avisar(`SAC <b>nº ${numero}</b> aberto (${fmtMoney(g.valorTotal)} reclamado). Agora aguarda a análise do estoque.`);
+      aoConcluir();
+    }catch(err){
+      btn.disabled = false; btn.textContent = 'Abrir SAC';
+      erro(gEsc(err.message));
+    }
+  }
+  el.querySelector('#sPdf').onchange = async () => {
+    const file = el.querySelector('#sPdf').files[0];
+    const msg = el.querySelector('#sMsgPdf');
+    if(!file) return;
+    if(file.size > 20*1024*1024){ msg.innerHTML = `<div class="msg err">PDF muito grande (máx. 20 MB).</div>`; return; }
+    arquivoPdf = file;
+    msg.innerHTML = `<div class="hint" style="margin-top:10px;">Lendo o PDF... (pode levar alguns segundos)</div>`;
+    try{
+      const lido = await extrairGarantiaDoPdf(file);
+      d.clienteCodigo = lido.clienteCodigo || d.clienteCodigo;
+      d.clienteNome = lido.clienteNome || d.clienteNome;
+      d.cnpj = lido.cnpj || ''; d.municipio = lido.municipio || '';
+      d.uf = lido.uf || d.uf;
+      d.pedido = lido.numeroOrcamento || d.pedido;
+      if(lido.itens && lido.itens.length) d.itens = lido.itens.map(i => ({...i}));
+      const soma = gR2((lido.itens||[]).reduce((a,i) => a + (Number(i.total)||0), 0));
+      pdfLido = {ipi: lido.valorIpi||0, st: lido.valorSt||0, somaItens: soma};
+      d.valorIpi = gR2(lido.valorIpi||0); d.valorSt = gR2(lido.valorSt||0);
+      const c = buscarCliente(d.clienteCodigo);
+      if(!d.clienteNome && c) d.clienteNome = c.nome;
+      if(!d.uf && c && c.uf) d.uf = c.uf.toUpperCase();
+      msg.innerHTML = `<div class="msg ok">PDF lido: ${d.itens.length} item(ns). Remova os que não têm problema e ajuste a quantidade reclamada.</div>`;
+    }catch(err){
+      msg.innerHTML = `<div class="msg err">${gEsc(err.message)} Preencha à mão abaixo — o PDF continua anexado.</div>`;
+    }
+    desenharForm();
+  };
+  desenharForm();
+}
+
+// Usuário Estoque: vê o módulo Estoque inteiro (Garantia + SAC).
+async function renderEstoqueShell(){
+  const items = [{group:'estoque', label:'Estoque', children:[ {page:'garantia', label:'Garantia'}, {page:'sac', label:'SAC'} ]}];
+  if(!STATE.route || !['garantia','sac'].includes(STATE.route.page)) STATE.route = {page:'sac'};
+  app.innerHTML = `<div class="shell">${sidebarHTML(items)}<div class="main" id="main"></div></div>`;
+  bindSidebar(renderEstoqueShell);
+  const main = document.getElementById('main');
+  if(STATE.route.page === 'sac') await renderSacModulo(main);
+  else await renderGarantiaModulo(main, renderEstoqueShell);
 }
 
 // ---------- Bloco "Compras x devoluções" no detalhe do cliente ----------

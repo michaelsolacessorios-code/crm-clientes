@@ -133,6 +133,16 @@
   .meta-big .num-money{font-family:'Space Grotesk'; font-size:32px; font-weight:600; line-height:1.1;}
   .meta-big .num-money-meta{font-family:'Space Grotesk'; font-size:20px; font-weight:700; color:var(--ink-soft); margin-top:4px;}
   .meta-big .label{font-size:14px;}
+  .meta-card-titulo{font-size:12.5px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--ink-soft); margin-bottom:6px;}
+  .meta-card-meta{font-family:'Inter', -apple-system, sans-serif; font-size:40px; font-weight:800; letter-spacing:-1.2px; font-variant-numeric:tabular-nums; line-height:1.05; color:var(--ink); word-break:break-word;}
+  .meta-card-meta.dinheiro{font-size:28px; letter-spacing:-0.8px; white-space:nowrap;}
+  .meta-row{display:grid !important; grid-template-columns:repeat(auto-fit, minmax(230px,1fr)) !important; gap:16px;}
+  .meta-row .stat-card{max-width:none !important; width:auto !important;}
+  .meta-card-alc{white-space:nowrap;}
+  .meta-card-un{font-size:14px; font-weight:600; letter-spacing:0; color:var(--ink-soft);}
+  .meta-card-alc{font-size:15px; color:var(--ink-soft); margin:10px 0 8px;}
+  .meta-card-alc b{color:var(--ink); font-size:16px;}
+  .meta-card-pct{font-weight:800; margin-left:4px;}
   #comprasConteudo > .page-header, #cfgConteudo > .page-header{display:none;}
   .page-header .eyebrow{font-size:13.5px; color:var(--ink-soft); margin-bottom:5px; font-weight:600;}
   .page-header h2{font-family:'Space Grotesk'; font-size:29px; font-weight:600; letter-spacing:-0.3px;}
@@ -5357,36 +5367,18 @@ function renderVendorDashboard(main){
     </div>
     ${!s.mesEhAtual ? `<p class="hint" style="margin-bottom:16px;">Vendo dados de um mês passado — só os números retrospectivos aparecem aqui. Volte pro mês atual pra ver agenda, dicas e clientes com potencial.</p>` : ''}
 
+    <div class="progress-row meta-row">
+      ${metaCardHTML('Meta de contato', s.totalClientes, 'clientes', s.contatadosMes, s.pctMeta)}
+      ${metaCardHTML('Meta de vendas', fmtMoney(s.metaVendas), '', fmtMoney(s.valorVendas), s.pctMetaVendas, true)}
+      ${(() => { const pm = vendorObj.metaPositivacao||0; const alvo = pm ? Math.ceil(s.totalClientes*pm/100) : s.totalClientes; return metaCardHTML('Meta de positivação', alvo, pm ? `clientes (${pm}%)` : 'clientes', s.positivados, alvo ? Math.min(100, Math.round(s.positivados/alvo*100)) : 0); })()}
+      ${vendorObj.metaSkus ? metaCardHTML('Meta de SKUs distintos', vendorObj.metaSkus, 'SKUs', s.totalSkus, Math.round(s.totalSkus/vendorObj.metaSkus*100)) : metaCardHTML('SKUs distintos vendidos', s.totalSkus, 'SKUs', '—', 0)}
+      ${vendorObj.metaVolume ? metaCardHTML('Meta de volume', vendorObj.metaVolume.toLocaleString('pt-BR'), 'un.', s.totalUnidades.toLocaleString('pt-BR'), Math.round(s.totalUnidades/vendorObj.metaVolume*100)) : metaCardHTML('Volume vendido', s.totalUnidades.toLocaleString('pt-BR'), 'un.', '—', 0)}
+      ${s.mesEhAtual ? metaCardHTML('Contatos de hoje', s.hojeTotal, 'na agenda', s.hojeFeitos, s.hojeTotal ? Math.round(s.hojeFeitos/s.hojeTotal*100) : 0) : ''}
+    </div>
+
     <div class="progress-row">
-      <div class="stat-card">
-        <div class="num display">${s.contatadosMes}/${s.totalClientes}</div>
-        <div class="label">Clientes contatados no mês</div>
-        <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${s.pctMeta}%; background:${s.pctMeta>=100?'var(--ok)':'var(--accent)'}"></div></div>
-      </div>
-      <div class="stat-card ok">
-        <div class="num display" style="display:flex; align-items:baseline; gap:6px; flex-wrap:wrap; font-size:22px;">
-          <span>${fmtMoney(s.valorVendas)}</span>
-          <span style="font-size:0.55em; color:var(--ink-faint); font-weight:700;">/ ${fmtMoney(s.metaVendas)}</span>
-        </div>
-        <div class="label">Vendido no mês (${s.pctMetaVendas}% da meta)</div>
-        <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${s.pctMetaVendas}%; background:${s.pctMetaVendas>=100?'var(--ok)':'var(--accent)'}"></div></div>
-      </div>
       ${promocaoCardHTML(STATE.session.codigo, s.mesChave)}
       ${containersChegadosCardsHTML(s.mesChave, STATE.session.codigo)}
-      ${s.mesEhAtual ? `
-      <div class="stat-card accent">
-        <div class="num display">${s.hojeFeitos}/${s.hojeTotal}</div>
-        <div class="label">Contatados hoje</div>
-      </div>
-      ` : ''}
-      <div class="stat-card">
-        <div class="num display" style="display:flex; align-items:baseline; gap:5px; flex-wrap:wrap; font-size:20px;">
-          <span>${s.pctPositivacao}%</span>
-          ${vendorObj.metaPositivacao ? `<span style="font-size:0.6em; color:var(--ink-faint); font-weight:700;">/ ${vendorObj.metaPositivacao}%</span>` : ''}
-        </div>
-        <div class="label">Positivação (${s.positivados}/${s.totalClientes})</div>
-        <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${s.pctPositivacao}%; background:var(--ok)"></div></div>
-      </div>
       <div class="stat-card accent">
         <div class="num display">${lstats.captados}</div>
         <div class="label">Leads captados</div>
@@ -5402,22 +5394,6 @@ function renderVendorDashboard(main){
       <div class="stat-card" style="border-color:#111;">
         <div class="num display" style="color:#111;">${fmtMoney(inadStats.total)}</div>
         <div class="label">Total em inadimplência da sua carteira</div>
-      </div>
-      <div class="stat-card accent">
-        <div class="num display" style="display:flex; align-items:baseline; gap:5px; flex-wrap:wrap; font-size:22px;">
-          <span>${s.totalSkus}</span>
-          ${vendorObj.metaSkus ? `<span style="font-size:0.55em; color:var(--ink-faint); font-weight:700;">/ ${vendorObj.metaSkus}</span>` : ''}
-        </div>
-        <div class="label">SKUs distintos vendidos</div>
-        ${vendorObj.metaSkus ? `<div class="progress-bar-track"><div class="progress-bar-fill" style="width:${Math.min(100,Math.round(s.totalSkus/vendorObj.metaSkus*100))}%; background:var(--accent)"></div></div>` : ''}
-      </div>
-      <div class="stat-card ok">
-        <div class="num display" style="display:flex; align-items:baseline; gap:5px; flex-wrap:wrap; font-size:22px;">
-          <span>${s.totalUnidades}</span>
-          ${vendorObj.metaVolume ? `<span style="font-size:0.55em; color:var(--ink-faint); font-weight:700;">/ ${vendorObj.metaVolume}</span>` : ''}
-        </div>
-        <div class="label">📦 Volume vendido (unidades)</div>
-        ${vendorObj.metaVolume ? `<div class="progress-bar-track"><div class="progress-bar-fill" style="width:${Math.min(100,Math.round(s.totalUnidades/vendorObj.metaVolume*100))}%; background:var(--ok)"></div></div>` : ''}
       </div>
     </div>
 
@@ -7080,6 +7056,17 @@ function renderManagerMetas(main){
   };
 }
 
+// Card de meta: a META em número grande, o ALCANÇADO menor embaixo, com barra de progresso.
+function metaCardHTML(titulo, meta, unidade, alcancado, pct, dinheiro){
+  pct = Math.max(0, Math.min(100, pct||0));
+  const cor = pct>=100 ? 'var(--ok)' : 'var(--accent)';
+  return `<div class="stat-card meta-card">
+    <div class="meta-card-titulo">${titulo}</div>
+    <div class="meta-card-meta${dinheiro?' dinheiro':''}">${meta}${unidade?` <span class="meta-card-un">${unidade}</span>`:''}</div>
+    <div class="meta-card-alc">Alcançado: <b>${alcancado}</b> <span class="meta-card-pct" style="color:${cor}">${pct}%</span></div>
+    <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${pct}%; background:${cor}"></div></div>
+  </div>`;
+}
 function vendorStats(codigo){
   const clientes = clientsForVendor(codigo);
   const contatos = STATE.contatosCache[codigo] || {};
@@ -7286,11 +7273,11 @@ function renderManagerVendorDetail(main){
     const contatos = STATE.contatosCache[codigo] || {};
     const m = vendorMonthStats(codigo);
     document.getElementById('vendorSummary').innerHTML = `
-      <div class="progress-row">
-        <div class="stat-card"><div class="num display">${m.pctMeta}%</div><div class="label">Meta de contato (${m.contatadosMes}/${m.totalClientes})</div></div>
-        <div class="stat-card ok"><div class="num display">${fmtMoney(m.valorVendas)}</div><div class="label">Vendido de ${fmtMoney(m.metaVendas)} de meta (${m.pctMetaVendas}%)</div></div>
-        <div class="stat-card accent"><div class="num display">${m.hojeFeitos}/${m.hojeTotal}</div><div class="label">Contatados hoje</div></div>
-        <div class="stat-card"><div class="num display">${m.pctPositivacao}%</div><div class="label">Positivação (${m.positivados}/${m.totalClientes})</div></div>
+      <div class="progress-row meta-row">
+        ${metaCardHTML('Meta de contato', m.totalClientes, 'clientes', m.contatadosMes, m.pctMeta)}
+        ${metaCardHTML('Meta de vendas', fmtMoney(m.metaVendas), '', fmtMoney(m.valorVendas), m.pctMetaVendas, true)}
+        ${m.mesEhAtual ? metaCardHTML('Contatos de hoje', m.hojeTotal, 'na agenda', m.hojeFeitos, m.hojeTotal ? Math.round(m.hojeFeitos/m.hojeTotal*100) : 0) : ''}
+        ${(() => { const pm = (m.metasMes && m.metasMes.positivacao) || 0; const alvo = pm ? Math.ceil(m.totalClientes*pm/100) : m.totalClientes; return metaCardHTML('Meta de positivação', alvo, pm ? `clientes (${pm}%)` : 'clientes', m.positivados, alvo ? Math.min(100, Math.round(m.positivados/alvo*100)) : 0); })()}
       </div>
     `;
     const q = document.getElementById('busca').value.trim().toLowerCase();

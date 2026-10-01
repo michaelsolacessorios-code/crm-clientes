@@ -2501,6 +2501,7 @@ async function renderElaboracaoMetas(main){
       btn.onclick = async () => {
         const v = STATE.vendors.find(v=>v.codigo===Number(btn.dataset.codigo));
         v.metaMes = Number(btn.dataset.valor);
+        registrarMetasDoMes(v);
         await safeSet('crm:vendors', STATE.vendors);
         document.getElementById('msgSugestao').innerHTML = `<div class="msg ok">Meta de ${v.nome} atualizada para ${fmtMoney(v.metaMes)}.</div>`;
         drawMetasVendas();
@@ -3917,6 +3918,31 @@ function creditoLineByCodigo(codigo){
 }
 
 // Aggregates all contact + sale activity for a vendor in the current calendar month.
+// Metas do vendedor NAQUELE mês. Mês atual = metas vigentes do cadastro.
+// Mês passado = foto salva no próprio mês (metasPorMes); se não houver, usa a meta R$
+// registrada em Elaboração de Metas (metaInformada). SKU/volume/positivação sem registro ficam em branco.
+function metasDoVendedorNoMes(v, mesChave){
+  mesChave = mesChave || STATE.mesSelecionado || currentMonthKey();
+  if(!v) return {valor:0, skus:0, volume:0, positivacao:0};
+  if(mesChave === currentMonthKey()){
+    return {valor:v.metaMes||0, skus:v.metaSkus||0, volume:v.metaVolume||0, positivacao:v.metaPositivacao||0};
+  }
+  const foto = (v.metasPorMes||{})[mesChave];
+  const informada = ((STATE.metasHistorico||{})[mesChave]?.metaInformada||{})[String(v.codigo)];
+  if(foto){
+    return {
+      valor: (typeof informada === 'number') ? informada : (foto.valor||0),
+      skus: foto.skus||0, volume: foto.volume||0, positivacao: foto.positivacao||0,
+    };
+  }
+  return {valor: (typeof informada === 'number') ? informada : 0, skus:0, volume:0, positivacao:0};
+}
+// Guarda a foto das metas do mês atual no vendedor (chamado sempre que as metas são salvas).
+function registrarMetasDoMes(v){
+  if(!v) return;
+  v.metasPorMes = v.metasPorMes || {};
+  v.metasPorMes[currentMonthKey()] = {valor:v.metaMes||0, skus:v.metaSkus||0, volume:v.metaVolume||0, positivacao:v.metaPositivacao||0};
+}
 function vendorMonthStats(vendedorCodigo, mesChave){
   mesChave = mesChave || STATE.mesSelecionado || currentMonthKey();
   const mesEhAtual = mesChave === currentMonthKey();
@@ -3976,7 +4002,8 @@ function vendorMonthStats(vendedorCodigo, mesChave){
   // adiantado fora do dia programado — reflete o trabalho real feito, não só a agenda fechada.
   const hojeFeitos = mesEhAtual ? clientes.filter(c => contatos[c.codigo]?.ultimoContato === todayStr()).length : 0;
   const vendor = STATE.vendors.find(v=>v.codigo===vendedorCodigo);
-  const metaVendas = vendor ? (vendor.metaMes || 0) : 0;
+  const metasMes = metasDoVendedorNoMes(vendor, mesChave);
+  const metaVendas = metasMes.valor;
   // clientes com limite de crédito disponível que ainda não compraram este mês (oportunidade de upsell)
   const naoPositivadosComCredito = mesEhAtual ? clientes
     .filter(c => !clientesPositivados.has(c.codigo) && c.limiteCredito !== null && c.limiteCredito !== undefined)
@@ -3995,7 +4022,7 @@ function vendorMonthStats(vendedorCodigo, mesChave){
     contatadosMes,
     pctMeta: clientes.length ? Math.round(contatadosMes/clientes.length*100) : 0,
     numVendas, valorVendas,
-    metaVendas, pctMetaVendas: metaVendas ? Math.min(100, Math.round(valorVendas/metaVendas*100)) : 0,
+    metasMes, metaVendas, pctMetaVendas: metaVendas ? Math.min(100, Math.round(valorVendas/metaVendas*100)) : 0,
     positivados: clientesPositivados.size,
     pctPositivacao: clientes.length ? Math.round(clientesPositivados.size/clientes.length*100) : 0,
     hojeTotal: hojeList.length, hojeFeitos,
@@ -5295,7 +5322,8 @@ function renderVendorDashboard(main){
   const inadStats = vendorInadimplenciaStats(STATE.session.codigo);
   const [anoSel, mesSel] = s.mesChave.split('-').map(Number);
   const mesNome = new Date(anoSel, mesSel-1, 1).toLocaleDateString('pt-BR', {month:'long', year:'numeric'});
-  const vendorObj = STATE.vendors.find(v=>v.codigo===STATE.session.codigo);
+  const vendorAtualObj = STATE.vendors.find(v=>v.codigo===STATE.session.codigo);
+  const vendorObj = {...vendorAtualObj, metaMes: s.metasMes.valor, metaSkus: s.metasMes.skus, metaVolume: s.metasMes.volume, metaPositivacao: s.metasMes.positivacao};
   const foto = vendorPhotoSrc(vendorObj);
   main.innerHTML = `
     <div class="page-header" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
@@ -7003,6 +7031,7 @@ function renderManagerMetas(main){
       v.metaSkus = Number(document.querySelector(`.metaSkuInput[data-codigo="${codigo}"]`).value) || 0;
       v.metaVolume = Number(document.querySelector(`.metaVolumeInput[data-codigo="${codigo}"]`).value) || 0;
       v.metaPositivacao = Number(document.querySelector(`.metaPositivacaoInput[data-codigo="${codigo}"]`).value) || 0;
+      registrarMetasDoMes(v);
       await safeSet('crm:vendors', STATE.vendors);
       document.getElementById('msgMeta').innerHTML = `<div class="msg ok">Metas de ${v.nome} atualizadas — a meta de valores de cada cliente se ajusta automaticamente, com base no limite de crédito dele.</div>`;
     };
@@ -7022,6 +7051,7 @@ function renderManagerMetas(main){
       if(sku !== '') v.metaSkus = Number(sku);
       if(volume !== '') v.metaVolume = Number(volume);
       if(positivacao !== '') v.metaPositivacao = Number(positivacao);
+      registrarMetasDoMes(v);
     });
     await safeSet('crm:vendors', STATE.vendors);
     msg.innerHTML = `<div class="msg ok">Metas aplicadas a todos os vendedores${valor !== '' ? ' — a meta de valores de cada cliente se ajusta automaticamente pelo limite de crédito' : ''}.</div>`;
@@ -7073,7 +7103,7 @@ function renderManagerOverview(main){
     const inad = vendorInadimplenciaStats(v.codigo);
     totalAtrasados += s.atrasados; totalHojeFeitos += s.hojeFeitos; totalHoje += s.hojeTotal;
     totalVendas += m.numVendas; totalValorVendas += m.valorVendas; totalPositivados += m.positivados;
-    totalContatadosMes += m.contatadosMes; totalMetaVendas += (v.metaMes||0); totalDevedores += inad.qtd;
+    totalContatadosMes += m.contatadosMes; totalMetaVendas += (m.metaVendas||0); totalDevedores += inad.qtd;
     totalValorDevido += inad.total;
   });
   const naoCadastrados = STATE.config.inadimplenciaNaoCadastrados || {qtd:0, total:0};

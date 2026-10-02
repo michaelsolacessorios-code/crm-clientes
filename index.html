@@ -580,7 +580,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-10-02-03';
+const APP_VERSION = '2026-10-02-04';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -2008,6 +2008,7 @@ function reclTipo(){ return (STATE.session||{}).tipo; }
 function comprasTemAbasEstoque(){ return ['gerente','compras'].includes(reclTipo()); }
 function reclPodeVerHistorico(){ return ['gerente','compras','garantia'].includes(reclTipo()); }
 function reclPodeMudarStatus(){ return ['gerente','compras'].includes(reclTipo()); }
+function reclPodeReabrir(){ return reclTipo() === 'gerente'; }
 function reclFechada(r){ return r.status === 'resolvida' || r.status === 'nao_procede'; }
 function reclNumeroFmt(n){ return '#' + String(n).padStart(6,'0'); }
 
@@ -2197,7 +2198,11 @@ function reclCardHTML(r){
     <div data-recl="${r.numero}" style="cursor:pointer; background:${st.soft}; border:1px solid var(--border); border-left:5px solid ${st.cor}; border-radius:var(--radius); padding:14px 16px;">
       <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between;">
         <div style="font-weight:600; font-size:14.5px;">${reclNumeroFmt(r.numero)} · ${gEsc(r.codigo)} — ${gEsc(r.descricao)}</div>
-        <span class="status-badge status-${st.cls}">${st.label}</span>
+        <span style="display:flex; gap:6px; align-items:center;">
+          ${(r.fechamentos||[]).length ? `<span class="status-badge status-warn">🔁 Reaberta${r.fechamentos.length>1?' '+r.fechamentos.length+'x':''}</span>` : ''}
+          ${(()=>{ const n=(r.historico||[]).filter(h=>h.texto).length; return n ? `<span class="status-badge status-info">💬 ${n}</span>` : ''; })()}
+          <span class="status-badge status-${st.cls}">${st.label}</span>
+        </span>
       </div>
       <div class="hint" style="margin-top:6px;">
         Aberta por <b>${gEsc((r.criadoPor||{}).nome||'—')}</b> em ${fmtDataHora(r.criadoEm)} ·
@@ -2293,6 +2298,8 @@ function renderReclHistorico(corpo, todas, redesenhar){
       'Reclamado na China em': r.reclamadoEm ? fmtDataHora(r.reclamadoEm) : '',
       'Solução': r.solucao || '',
       'Fechada em': r.fechadoEm ? fmtDataHora(r.fechadoEm) : '',
+      'Reaberta (vezes)': (r.fechamentos||[]).length,
+      'Argumentos': (r.historico||[]).filter(h => h.texto).map(h => `${fmtDataHora(h.em)} ${(h.por||{}).nome||''}: ${h.texto}`).join(' | '),
     }));
     const ws = XLSX.utils.json_to_sheet(dados);
     const wb = XLSX.utils.book_new();
@@ -2437,6 +2444,8 @@ const RECL_ACAO_TEXTO = {
   reclamado: 'Reclamação feita ao fornecedor (China)',
   resolvida: 'Marcada como resolvida',
   nao_procede: 'Marcada como não procede',
+  reaberta: '🔁 Reaberta com contra-argumento',
+  comentario: '💬 Argumento',
 };
 
 function abrirDetalheReclamacao(r, aoMudar){
@@ -2472,7 +2481,19 @@ function abrirDetalheReclamacao(r, aoMudar){
 
       <div class="field-label">Andamento</div>
       <div style="font-size:13px; margin-bottom:14px;">
-        ${(r.historico||[]).map(h => `<div style="padding:3px 0;">• ${fmtDataHora(h.em)} — ${RECL_ACAO_TEXTO[h.acao]||gEsc(h.acao)} <span class="hint">(${gEsc((h.por||{}).nome||'—')})</span></div>`).join('')}
+        ${(r.historico||[]).map(h => `<div style="padding:3px 0;">• ${fmtDataHora(h.em)} — ${RECL_ACAO_TEXTO[h.acao]||gEsc(h.acao)} <span class="hint">(${gEsc((h.por||{}).nome||'—')})</span>
+          ${h.texto ? `<div style="white-space:pre-wrap; margin:4px 0 2px 12px; padding:8px 10px; border-radius:8px; background:${h.acao==='reaberta'?'var(--warn-soft)':'var(--info-soft)'}; border-left:3px solid ${h.acao==='reaberta'?'var(--warn)':'var(--info)'};">${gEsc(h.texto)}</div>` : ''}
+          ${h.solucaoAnterior ? `<div class="hint" style="margin:2px 0 0 12px;">Fechamento anterior (${gEsc(h.statusAnterior==='nao_procede'?'Não procede':'Resolvida')}): ${gEsc(h.solucaoAnterior)}</div>` : ''}
+        </div>`).join('')}
+      </div>
+
+      <div style="border-top:1px solid var(--border); padding-top:14px; margin-bottom:14px;">
+        <label class="field-label">${(reclFechada(r) && reclPodeReabrir()) ? 'Contra-argumento / novo argumento' : 'Adicionar argumento'}</label>
+        <textarea id="rdArgumento" placeholder="Escreva seu argumento, contestação ou informação nova..."></textarea>
+        <div style="display:flex; flex-wrap:wrap; gap:8px;">
+          <button class="ghost-btn" id="rdEnviarArg">💬 Enviar argumento</button>
+          ${(reclFechada(r) && reclPodeReabrir()) ? `<button class="primary-btn" id="rdReabrir" style="background:var(--warn); border-color:var(--warn);">🔁 Reabrir com esse contra-argumento</button>` : ''}
+        </div>
       </div>
 
       ${podeMudar ? `
@@ -2528,6 +2549,39 @@ function abrirDetalheReclamacao(r, aoMudar){
       msg.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`;
     }
   }
+  async function registrarArgumento(reabrir){
+    const msg = $('rdMsg');
+    const texto = ($('rdArgumento').value || '').trim();
+    if(!texto){ msg.innerHTML = `<div class="msg err">Escreva o ${reabrir?'contra-argumento':'argumento'} primeiro.</div>`; return; }
+    if(reabrir && !(await confirmarAcao('Reabrir essa reclamação? Ela volta pra lista de abertas e o fechamento anterior fica guardado no andamento.'))) return;
+    backdrop.querySelectorAll('button').forEach(b => b.disabled = true);
+    try{
+      const agora = new Date().toISOString();
+      const quem = gQuem();
+      let nova;
+      if(reabrir){
+        const fechamento = {status: r.status, solucao: r.solucao || '', fechadoEm: r.fechadoEm || null, fechadoPor: r.fechadoPor || null, reabertoEm: agora, reabertoPor: quem};
+        nova = {...r,
+          status: r.reclamadoEm ? 'reclamado' : 'pendente',
+          solucao: '', fechadoEm: null, fechadoPor: null,
+          reabertaEm: agora, reabertaPor: quem,
+          fechamentos: [...(r.fechamentos||[]), fechamento],
+          historico: [...(r.historico||[]), {em: agora, por: quem, acao: 'reaberta', texto, statusAnterior: r.status, solucaoAnterior: r.solucao || ''}],
+        };
+      } else {
+        nova = {...r, historico: [...(r.historico||[]), {em: agora, por: quem, acao: 'comentario', texto}]};
+      }
+      await salvarReclamacao(nova);
+      fechar();
+      if(aoMudar) aoMudar();
+    }catch(err){
+      backdrop.querySelectorAll('button').forEach(b => b.disabled = false);
+      msg.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`;
+    }
+  }
+  $('rdEnviarArg').onclick = () => registrarArgumento(false);
+  if($('rdReabrir')) $('rdReabrir').onclick = () => registrarArgumento(true);
+
   if(podeMudar){
     if($('rdReclamado')) $('rdReclamado').onclick = () => mudarStatus('reclamado', false);
     $('rdResolvida').onclick = () => mudarStatus('resolvida', true);

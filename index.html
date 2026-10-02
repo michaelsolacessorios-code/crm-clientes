@@ -580,7 +580,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-10-02-02';
+const APP_VERSION = '2026-10-02-03';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -1588,39 +1588,71 @@ async function ratearItemPrevisao(containerId, itemId){
 
 // Exporta um ou todos os containers em previsão pra Excel: aba de itens + aba de intenções
 // (com vendedor que lançou, cliente, quantidade atual, original e quem editou).
-function exportarPrevisaoExcel(containers){
+function exportarPrevisaoExcel(containers, somenteVendedorCodigo){
   if(typeof XLSX === 'undefined'){ alert('Biblioteca de planilha não carregou. Recarregue a página.'); return; }
-  const linhasItens = [], linhasIntencoes = [];
+  const doVendedor = somenteVendedorCodigo !== undefined && somenteVendedorCodigo !== null;
+  // Uma linha por intenção, já com os dados do item (item + reserva na mesma linha).
+  const linhas = [];
   containers.forEach(cont => {
     cont.itens.forEach(item => {
       const r = resumoItemPrevisao(item);
-      linhasItens.push({
+      const intencoes = (item.intencoes||[]).filter(i => !doVendedor || i.vendedorCodigo === somenteVendedorCodigo);
+      const baseItem = {
         'Container': cont.nome,
         'Previsão de chegada': cont.previsaoChegada ? fmtDatePt(cont.previsaoChegada) : '',
         'Código': item.codigo, 'Descrição': item.descricao,
-        'Qtd chegando': item.quantidade, 'Reservado': r.reservado,
-        'Livre': r.livre, 'Excedente': Math.max(0, r.reservado - item.quantidade), '% vendido': r.pct,
-      });
-      (item.intencoes||[]).forEach(i => {
+        'Qtd chegando': item.quantidade,
+      };
+      if(!doVendedor){ baseItem['Reservado total'] = r.reservado; baseItem['Livre'] = r.livre; }
+      if(!intencoes.length){
+        if(!doVendedor) linhas.push(Object.assign({}, baseItem, {'Nº vendedor':'', 'Vendedor':'(sem reserva)', 'Nº cliente':'', 'Cliente':'', 'Qtd reservada':0}));
+        return;
+      }
+      intencoes.forEach(i => {
         const ult = (i.historico||[]).slice(-1)[0];
-        linhasIntencoes.push({
-          'Container': cont.nome, 'Código': item.codigo, 'Descrição': item.descricao,
-          'Nº vendedor': i.vendedorCodigo, 'Vendedor (lançou)': i.vendedorNome,
+        const linha = Object.assign({}, baseItem, {
+          'Nº vendedor': i.vendedorCodigo, 'Vendedor': i.vendedorNome,
           'Nº cliente': i.clienteCodigo, 'Cliente': i.clienteNome,
-          'Qtd atual': i.quantidade,
+          'Qtd reservada': i.quantidade,
           'Qtd original': i.quantidadeOriginal !== undefined ? i.quantidadeOriginal : i.quantidade,
           'Data lançamento': i.data ? fmtDatePt(i.data) : '',
-          'Última edição por': ult ? ult.por : '',
-          'Motivo edição': ult ? ult.motivo : '',
         });
+        if(!doVendedor){ linha['Última edição por'] = ult ? ult.por : ''; linha['Motivo edição'] = ult ? ult.motivo : ''; }
+        linhas.push(linha);
       });
     });
   });
+  const ordenar = (x,y) => ((x['Vendedor']==='(sem reserva)')-(y['Vendedor']==='(sem reserva)')) || String(x['Vendedor']).localeCompare(String(y['Vendedor'])) || String(x['Container']).localeCompare(String(y['Container'])) || String(x['Código']).localeCompare(String(y['Código']));
+  linhas.sort(ordenar);
+  const totalLinha = (arr) => ({'Container':'TOTAL', 'Qtd reservada': arr.reduce((s,l) => s + (Number(l['Qtd reservada'])||0), 0)});
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhasItens), 'Itens');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhasIntencoes.length ? linhasIntencoes : [{'Container':'Sem intenções registradas'}]), 'Intenções');
-  const nomeArq = containers.length === 1 ? `previsao_${containers[0].nome}_${todayStr()}.xlsx` : `previsao_containers_${todayStr()}.xlsx`;
-  XLSX.writeFile(wb, nomeArq);
+  const nomeAba = (n, usados) => {
+    let base = String(n||'Sem nome').replace(/[\[\]:*?\/\\]/g,' ').slice(0,28).trim() || 'Aba';
+    let nome = base, k = 2;
+    while(usados.has(nome.toLowerCase())) nome = base.slice(0,26)+' '+(k++);
+    usados.add(nome.toLowerCase());
+    return nome;
+  };
+  const usados = new Set();
+  if(doVendedor){
+    if(!linhas.length){ alert('Você ainda não tem reservas nesses containers.'); return; }
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([...linhas, totalLinha(linhas)]), nomeAba('Minhas reservas', usados));
+  } else {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas.length ? linhas : [{'Container':'Sem itens'}]), nomeAba('Geral', usados));
+    // Resumo: total reservado por vendedor
+    const porVend = {};
+    linhas.forEach(l => { if(l['Vendedor'] === '(sem reserva)') return; porVend[l['Vendedor']] = (porVend[l['Vendedor']]||0) + (Number(l['Qtd reservada'])||0); });
+    const resumo = Object.entries(porVend).sort((a,b) => b[1]-a[1]).map(([v,q]) => ({'Vendedor': v, 'Qtd reservada': q}));
+    if(resumo.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumo), nomeAba('Resumo por vendedor', usados));
+    // Uma aba por vendedor
+    Object.keys(porVend).sort().forEach(v => {
+      const doV = linhas.filter(l => l['Vendedor'] === v);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([...doV, totalLinha(doV)]), nomeAba(v, usados));
+    });
+  }
+  const sufixo = containers.length === 1 ? containers[0].nome : 'containers';
+  const quem = doVendedor ? '_' + String(STATE.session.nome||somenteVendedorCodigo).replace(/\s+/g,'_') : '';
+  XLSX.writeFile(wb, `previsao_${sufixo}${quem}_${todayStr()}.xlsx`);
 }
 
 // Registra a intenção de venda de um vendedor pra um item de um container específico.
@@ -2816,10 +2848,11 @@ async function renderPrevisaoCompras(main){
     const pendentes = (STATE.previsoes||[]).filter(c => c.status !== 'chegou');
     if(pendentes.length === 0){ box.innerHTML = `<div class="empty-state">Nenhum container em previsão no momento.</div>`; return; }
     const podeEditarIntencao = (i) => i.vendedorCodigo===STATE.session.codigo || STATE.session.tipo==='gerente' || STATE.session.tipo==='compras';
-    box.innerHTML = (podeSubir ? `
+    const ehVendedor = STATE.session.tipo === 'vendedor';
+    box.innerHTML = `
       <div class="form-row" style="justify-content:flex-end; margin-bottom:8px;">
-        <button class="ghost-btn" id="btnExportarTodosContainers">📊 Exportar todos os containers (Excel)</button>
-      </div>` : '') + pendentes.slice().reverse().map(cont => {
+        <button class="ghost-btn" id="btnExportarTodosContainers">📊 ${ehVendedor ? 'Exportar minhas reservas (Excel)' : 'Exportar todos os containers (Excel)'}</button>
+      </div>` + pendentes.slice().reverse().map(cont => {
       const resumoCont = resumoContainerPrevisao(cont);
       return `
       <div class="panel">
@@ -2916,12 +2949,12 @@ async function renderPrevisaoCompras(main){
       };
     });
     const btnTodos = document.getElementById('btnExportarTodosContainers');
-    if(btnTodos) btnTodos.onclick = () => exportarPrevisaoExcel(pendentes);
+    if(btnTodos) btnTodos.onclick = () => ehVendedor ? exportarPrevisaoExcel(pendentes, STATE.session.codigo) : exportarPrevisaoExcel(pendentes);
     box.querySelectorAll('.btnExportarContainer').forEach(btn => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const cont = STATE.previsoes.find(c=>c.id===btn.dataset.id);
-        if(cont) exportarPrevisaoExcel([cont]);
+        if(cont) ehVendedor ? exportarPrevisaoExcel([cont], STATE.session.codigo) : exportarPrevisaoExcel([cont]);
       };
     });
     box.querySelectorAll('.inputQtdIntencao').forEach(inp => {

@@ -580,7 +580,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-09-25-01';
+const APP_VERSION = '2026-10-02-01';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -1535,8 +1535,97 @@ function containersChegadosCardsHTML(mesChave, vendedorCodigo){
   }).join('');
 }
 
+// Lê a previsão FRESCA do banco antes de qualquer alteração — evita que uma tela aberta
+// há muito tempo sobrescreva intenções que outro vendedor registrou nesse meio tempo.
+async function recarregarPrevisoesFrescas(){
+  const fresh = await safeGetCritico('crm:previsoes');
+  if(Array.isArray(fresh)) STATE.previsoes = fresh;
+}
+
+// Edita a quantidade de uma intenção (ex: rateio manual). Guarda a quantidade original
+// e o histórico de quem alterou — nada é apagado.
+async function editarQuantidadeIntencao(containerId, itemId, intencaoId, novaQtd, motivo){
+  await recarregarPrevisoesFrescas();
+  const container = STATE.previsoes.find(c => c.id === containerId);
+  if(!container) return false;
+  const item = container.itens.find(i => i.id === itemId);
+  if(!item) return false;
+  const it = (item.intencoes||[]).find(i => i.id === intencaoId);
+  if(!it) return false;
+  if(it.quantidadeOriginal === undefined) it.quantidadeOriginal = it.quantidade;
+  it.historico = it.historico || [];
+  it.historico.push({de: it.quantidade, para: novaQtd, por: STATE.session.nome, porCodigo: STATE.session.codigo || null, em: new Date().toISOString(), motivo: motivo || 'edição manual'});
+  it.quantidade = novaQtd;
+  return await safeSet('crm:previsoes', STATE.previsoes);
+}
+
+// Rateio proporcional: quando as intenções somam mais do que chega, distribui a quantidade
+// do item proporcionalmente ao que cada vendedor pediu (método do maior resto, soma exata).
+async function ratearItemPrevisao(containerId, itemId){
+  await recarregarPrevisoesFrescas();
+  const container = STATE.previsoes.find(c => c.id === containerId);
+  if(!container) return false;
+  const item = container.itens.find(i => i.id === itemId);
+  if(!item || !(item.intencoes||[]).length) return false;
+  const total = item.intencoes.reduce((s,i) => s + i.quantidade, 0);
+  if(total <= item.quantidade) return false;
+  const base = item.intencoes.map(i => {
+    const exato = i.quantidade * item.quantidade / total;
+    return {i, piso: Math.floor(exato), resto: exato - Math.floor(exato)};
+  });
+  let sobra = item.quantidade - base.reduce((s,b) => s + b.piso, 0);
+  base.slice().sort((a,b) => b.resto - a.resto).forEach(b => { if(sobra > 0){ b.piso++; sobra--; } });
+  const agora = new Date().toISOString();
+  base.forEach(b => {
+    if(b.piso === b.i.quantidade) return;
+    if(b.i.quantidadeOriginal === undefined) b.i.quantidadeOriginal = b.i.quantidade;
+    b.i.historico = b.i.historico || [];
+    b.i.historico.push({de: b.i.quantidade, para: b.piso, por: STATE.session.nome, porCodigo: STATE.session.codigo || null, em: agora, motivo: 'rateio proporcional'});
+    b.i.quantidade = b.piso;
+  });
+  return await safeSet('crm:previsoes', STATE.previsoes);
+}
+
+// Exporta um ou todos os containers em previsão pra Excel: aba de itens + aba de intenções
+// (com vendedor que lançou, cliente, quantidade atual, original e quem editou).
+function exportarPrevisaoExcel(containers){
+  if(typeof XLSX === 'undefined'){ alert('Biblioteca de planilha não carregou. Recarregue a página.'); return; }
+  const linhasItens = [], linhasIntencoes = [];
+  containers.forEach(cont => {
+    cont.itens.forEach(item => {
+      const r = resumoItemPrevisao(item);
+      linhasItens.push({
+        'Container': cont.nome,
+        'Previsão de chegada': cont.previsaoChegada ? fmtDatePt(cont.previsaoChegada) : '',
+        'Código': item.codigo, 'Descrição': item.descricao,
+        'Qtd chegando': item.quantidade, 'Reservado': r.reservado,
+        'Livre': r.livre, 'Excedente': Math.max(0, r.reservado - item.quantidade), '% vendido': r.pct,
+      });
+      (item.intencoes||[]).forEach(i => {
+        const ult = (i.historico||[]).slice(-1)[0];
+        linhasIntencoes.push({
+          'Container': cont.nome, 'Código': item.codigo, 'Descrição': item.descricao,
+          'Nº vendedor': i.vendedorCodigo, 'Vendedor (lançou)': i.vendedorNome,
+          'Nº cliente': i.clienteCodigo, 'Cliente': i.clienteNome,
+          'Qtd atual': i.quantidade,
+          'Qtd original': i.quantidadeOriginal !== undefined ? i.quantidadeOriginal : i.quantidade,
+          'Data lançamento': i.data ? fmtDatePt(i.data) : '',
+          'Última edição por': ult ? ult.por : '',
+          'Motivo edição': ult ? ult.motivo : '',
+        });
+      });
+    });
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhasItens), 'Itens');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhasIntencoes.length ? linhasIntencoes : [{'Container':'Sem intenções registradas'}]), 'Intenções');
+  const nomeArq = containers.length === 1 ? `previsao_${containers[0].nome}_${todayStr()}.xlsx` : `previsao_containers_${todayStr()}.xlsx`;
+  XLSX.writeFile(wb, nomeArq);
+}
+
 // Registra a intenção de venda de um vendedor pra um item de um container específico.
 async function registrarIntencaoVenda(containerId, itemId, clienteCodigo, quantidade){
+  await recarregarPrevisoesFrescas();
   const container = STATE.previsoes.find(c => c.id === containerId);
   if(!container) return;
   const item = container.itens.find(i => i.id === itemId);
@@ -1557,6 +1646,7 @@ async function registrarIntencaoVenda(containerId, itemId, clienteCodigo, quanti
 // Remove uma intenção de venda já registrada (só quem registrou ou o gerente deveria mexer
 // nisso — a tela já só mostra o botão de excluir pra quem pode).
 async function excluirIntencaoVenda(containerId, itemId, intencaoId){
+  await recarregarPrevisoesFrescas();
   const container = STATE.previsoes.find(c => c.id === containerId);
   if(!container) return;
   const item = container.itens.find(i => i.id === itemId);
@@ -2724,7 +2814,11 @@ async function renderPrevisaoCompras(main){
     const box = document.getElementById('listaContainers');
     const pendentes = (STATE.previsoes||[]).filter(c => c.status !== 'chegou');
     if(pendentes.length === 0){ box.innerHTML = `<div class="empty-state">Nenhum container em previsão no momento.</div>`; return; }
-    box.innerHTML = pendentes.slice().reverse().map(cont => {
+    const podeEditarIntencao = (i) => i.vendedorCodigo===STATE.session.codigo || STATE.session.tipo==='gerente' || STATE.session.tipo==='compras';
+    box.innerHTML = (podeSubir ? `
+      <div class="form-row" style="justify-content:flex-end; margin-bottom:8px;">
+        <button class="ghost-btn" id="btnExportarTodosContainers">📊 Exportar todos os containers (Excel)</button>
+      </div>` : '') + pendentes.slice().reverse().map(cont => {
       const resumoCont = resumoContainerPrevisao(cont);
       return `
       <div class="panel">
@@ -2746,6 +2840,7 @@ async function renderPrevisaoCompras(main){
         ${podeSubir ? `
           <div class="form-row" style="margin-top:6px;">
             <button class="primary-btn btnDarEntrada" data-id="${cont.id}">📥 Dar entrada (chegou no estoque)</button>
+            <button class="ghost-btn btnExportarContainer" data-id="${cont.id}">📊 Exportar Excel</button>
             <button class="ghost-btn btnRemoverContainer" data-id="${cont.id}" style="color:var(--danger); border-color:var(--danger);">🗑️ Remover container</button>
           </div>
         ` : ''}
@@ -2756,16 +2851,22 @@ async function renderPrevisaoCompras(main){
               <div class="client-row" style="flex-wrap:wrap; align-items:flex-start;">
                 <div class="client-info">
                   <div class="client-name">${item.codigo} — ${item.descricao}</div>
-                  <div class="client-meta">Chegando: <b>${item.quantidade}</b> · Reservado: <b>${r.reservado}</b> · Livre: <b style="color:${r.livre>0?'var(--ok)':'var(--danger)'};">${r.livre}</b> · <b style="color:var(--accent);">${r.pct}% vendido</b></div>
-                  <div class="progress-bar-track" style="margin-top:4px; max-width:220px;"><div class="progress-bar-fill" style="width:${r.pct}%; background:${r.pct>=100?'var(--ok)':'var(--accent)'};"></div></div>
+                  <div class="client-meta">Chegando: <b>${item.quantidade}</b> · Reservado: <b>${r.reservado}</b> · Livre: <b style="color:${r.livre>0?'var(--ok)':'var(--danger)'};">${r.livre}</b> · <b style="color:var(--accent);">${r.pct}% vendido</b>${r.reservado>item.quantidade ? ` · <b style="color:var(--danger);">⚠️ excedeu ${r.reservado-item.quantidade} un.</b>` : ''}</div>
+                  <div class="progress-bar-track" style="margin-top:4px; max-width:220px;"><div class="progress-bar-fill" style="width:${Math.min(100,r.pct)}%; background:${r.pct>=100?'var(--ok)':'var(--accent)'};"></div></div>
+                  ${(podeSubir && r.reservado>item.quantidade) ? `<button class="ghost-btn btnRatearItem" data-container="${cont.id}" data-item="${item.id}" style="margin-top:6px; padding:3px 10px; font-size:12px; color:var(--danger); border-color:var(--danger);">⚖️ Ratear ${item.quantidade} un. proporcional</button>` : ''}
                   ${item.intencoes.length ? `
                     <div style="margin-top:6px; display:flex; flex-direction:column; gap:3px;">
-                      ${item.intencoes.map(i => `
-                        <div class="hint" style="margin:0; display:flex; justify-content:space-between; gap:8px;">
-                          <span><b>${i.quantidade}</b> un. — ${i.vendedorNome} → ${i.clienteNome} (Nº ${i.clienteCodigo})</span>
-                          ${(i.vendedorCodigo===STATE.session.codigo || STATE.session.tipo==='gerente' || STATE.session.tipo==='compras') ? `<button class="ghost-btn btnExcluirIntencao" data-container="${cont.id}" data-item="${item.id}" data-intencao="${i.id}" style="padding:2px 8px; font-size:11px;">excluir</button>` : ''}
+                      ${item.intencoes.map(i => {
+                        const ult = (i.historico||[]).slice(-1)[0];
+                        return `
+                        <div class="hint" style="margin:0; display:flex; justify-content:space-between; gap:8px; align-items:center;">
+                          <span><b>${i.quantidade}</b> un.${(i.quantidadeOriginal!==undefined && i.quantidadeOriginal!==i.quantidade) ? ` <span style="text-decoration:line-through;">${i.quantidadeOriginal}</span>` : ''} — <b>Lançado por ${i.vendedorNome}${i.vendedorCodigo ? ` (Nº ${i.vendedorCodigo})` : ''}</b>${i.data ? ` em ${fmtDatePt(i.data)}` : ''} → ${i.clienteNome} (Nº ${i.clienteCodigo})${ult ? ` <span style="color:var(--accent);">· ✏️ ${ult.motivo} por ${ult.por}</span>` : ''}</span>
+                          ${podeEditarIntencao(i) ? `<span style="display:flex; gap:4px; flex-shrink:0;">
+                            <button class="ghost-btn btnEditarIntencao" data-container="${cont.id}" data-item="${item.id}" data-intencao="${i.id}" style="padding:2px 8px; font-size:11px;">editar qtd</button>
+                            <button class="ghost-btn btnExcluirIntencao" data-container="${cont.id}" data-item="${item.id}" data-intencao="${i.id}" style="padding:2px 8px; font-size:11px;">excluir</button>
+                          </span>` : ''}
                         </div>
-                      `).join('')}
+                      `;}).join('')}
                     </div>
                   ` : ''}
                 </div>
@@ -2799,9 +2900,34 @@ async function renderPrevisaoCompras(main){
         drawContainers();
       };
     });
+    const btnTodos = document.getElementById('btnExportarTodosContainers');
+    if(btnTodos) btnTodos.onclick = () => exportarPrevisaoExcel(pendentes);
+    box.querySelectorAll('.btnExportarContainer').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const cont = STATE.previsoes.find(c=>c.id===btn.dataset.id);
+        if(cont) exportarPrevisaoExcel([cont]);
+      };
+    });
+    box.querySelectorAll('.btnEditarIntencao').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        abrirModalEditarIntencao(btn.dataset.container, btn.dataset.item, btn.dataset.intencao, drawContainers);
+      };
+    });
+    box.querySelectorAll('.btnRatearItem').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        if(!(await confirmarAcao('Ratear a quantidade que chega proporcionalmente entre os vendedores que reservaram esse item? A quantidade original de cada um fica guardada no histórico.'))) return;
+        const ok = await ratearItemPrevisao(btn.dataset.container, btn.dataset.item);
+        if(!ok) alert('Não foi possível ratear (o item pode já estar dentro da quantidade ou houve falha ao salvar).');
+        drawContainers();
+      };
+    });
     box.querySelectorAll('.btnDarEntrada').forEach(btn => {
       btn.onclick = async (e) => {
         e.stopPropagation();
+        await recarregarPrevisoesFrescas();
         const cont = STATE.previsoes.find(c=>c.id===btn.dataset.id);
         if(!(await confirmarAcao(`Dar entrada no container ${cont.nome}? Ele sai da previsão e os itens dele passam a contar como "vendas do container" nos dashboards, a partir de agora.`))) return;
         cont.status = 'chegou';
@@ -2848,6 +2974,47 @@ async function renderPrevisaoCompras(main){
       }
     };
   }
+}
+
+// Modal pra editar a quantidade de uma intenção já lançada (rateio manual).
+function abrirModalEditarIntencao(containerId, itemId, intencaoId, aoSalvar){
+  const cont = STATE.previsoes.find(c => c.id === containerId);
+  const item = cont && cont.itens.find(i => i.id === itemId);
+  const it = item && item.intencoes.find(i => i.id === intencaoId);
+  if(!it) return;
+  const r = resumoItemPrevisao(item);
+  const historicoHTML = (it.historico||[]).map(h => `<div class="hint" style="margin:0;">${new Date(h.em).toLocaleString('pt-BR')} — ${h.por}: ${h.de} → ${h.para} (${h.motivo})</div>`).join('');
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal">
+      <h3>Editar quantidade</h3>
+      <p class="hint">${item.codigo} — ${item.descricao}<br>
+        Lançado por <b>${it.vendedorNome}${it.vendedorCodigo ? ` (Nº ${it.vendedorCodigo})` : ''}</b>${it.data ? ` em ${fmtDatePt(it.data)}` : ''} para <b>${it.clienteNome}</b> (Nº ${it.clienteCodigo})<br>
+        Chegando: <b>${item.quantidade}</b> · Reservado total: <b>${r.reservado}</b>${it.quantidadeOriginal!==undefined ? ` · Qtd original desse lançamento: <b>${it.quantidadeOriginal}</b>` : ''}</p>
+      <label class="field-label">Nova quantidade</label>
+      <input type="number" id="novaQtdIntencao" class="login-input" min="1" value="${it.quantidade}">
+      ${historicoHTML ? `<div style="margin-top:8px;"><b style="font-size:12px;">Histórico</b>${historicoHTML}</div>` : ''}
+      <div id="msgEditarIntencao"></div>
+      <div class="modal-actions" style="margin-top:10px;">
+        <button class="ghost-btn" id="cancelarEditarIntencao">Cancelar</button>
+        <button class="primary-btn" id="salvarEditarIntencao">Salvar</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  backdrop.onclick = (e) => { if(e.target===backdrop) backdrop.remove(); };
+  backdrop.querySelector('#cancelarEditarIntencao').onclick = () => backdrop.remove();
+  backdrop.querySelector('#salvarEditarIntencao').onclick = async () => {
+    const nova = Number(backdrop.querySelector('#novaQtdIntencao').value);
+    const msg = backdrop.querySelector('#msgEditarIntencao');
+    if(!nova || nova <= 0 || !Number.isInteger(nova)){ msg.innerHTML = `<div class="msg err">Informe uma quantidade inteira maior que zero. Pra zerar, use "excluir".</div>`; return; }
+    if(nova === it.quantidade){ backdrop.remove(); return; }
+    const ok = await editarQuantidadeIntencao(containerId, itemId, intencaoId, nova, 'edição manual');
+    if(!ok){ msg.innerHTML = `<div class="msg err">Não consegui salvar. Recarregue a página e tente de novo.</div>`; return; }
+    backdrop.remove();
+    if(aoSalvar) aoSalvar();
+  };
 }
 
 // Modal pra vendedor registrar a intenção de venda de um item (quantidade + cliente).

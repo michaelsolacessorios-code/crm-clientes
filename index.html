@@ -580,7 +580,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-10-02-01';
+const APP_VERSION = '2026-10-02-02';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -2810,6 +2810,7 @@ async function renderPrevisaoCompras(main){
     <div id="listaContainers"></div>
   `;
 
+  const containersAbertos = new Set();
   function drawContainers(){
     const box = document.getElementById('listaContainers');
     const pendentes = (STATE.previsoes||[]).filter(c => c.status !== 'chegou');
@@ -2844,12 +2845,15 @@ async function renderPrevisaoCompras(main){
             <button class="ghost-btn btnRemoverContainer" data-id="${cont.id}" style="color:var(--danger); border-color:var(--danger);">🗑️ Remover container</button>
           </div>
         ` : ''}
-        <div class="client-list containerItens" data-id="${cont.id}" style="display:none; margin-top:14px;">
+        <div class="client-list containerItens" data-id="${cont.id}" style="display:${containersAbertos.has(cont.id)?'flex':'none'}; flex-direction:column; margin-top:14px;">
           ${cont.itens.map(item => {
             const r = resumoItemPrevisao(item);
+            const porVendedor = {};
+            (item.intencoes||[]).forEach(i => { const k = i.vendedorNome || ('Nº '+i.vendedorCodigo); porVendedor[k] = (porVendedor[k]||0) + (i.quantidade||0); });
+            const resumoVend = Object.entries(porVendedor).sort((a,b) => b[1]-a[1]);
             return `
-              <div class="client-row" style="flex-wrap:wrap; align-items:flex-start;">
-                <div class="client-info">
+              <div class="client-row" style="flex-wrap:nowrap; align-items:flex-start; gap:16px;">
+                <div class="client-info" style="flex:1; min-width:0;">
                   <div class="client-name">${item.codigo} — ${item.descricao}</div>
                   <div class="client-meta">Chegando: <b>${item.quantidade}</b> · Reservado: <b>${r.reservado}</b> · Livre: <b style="color:${r.livre>0?'var(--ok)':'var(--danger)'};">${r.livre}</b> · <b style="color:var(--accent);">${r.pct}% vendido</b>${r.reservado>item.quantidade ? ` · <b style="color:var(--danger);">⚠️ excedeu ${r.reservado-item.quantidade} un.</b>` : ''}</div>
                   <div class="progress-bar-track" style="margin-top:4px; max-width:220px;"><div class="progress-bar-fill" style="width:${Math.min(100,r.pct)}%; background:${r.pct>=100?'var(--ok)':'var(--accent)'};"></div></div>
@@ -2860,9 +2864,10 @@ async function renderPrevisaoCompras(main){
                         const ult = (i.historico||[]).slice(-1)[0];
                         return `
                         <div class="hint" style="margin:0; display:flex; justify-content:space-between; gap:8px; align-items:center;">
-                          <span><b>${i.quantidade}</b> un.${(i.quantidadeOriginal!==undefined && i.quantidadeOriginal!==i.quantidade) ? ` <span style="text-decoration:line-through;">${i.quantidadeOriginal}</span>` : ''} — <b>Lançado por ${i.vendedorNome}${i.vendedorCodigo ? ` (Nº ${i.vendedorCodigo})` : ''}</b>${i.data ? ` em ${fmtDatePt(i.data)}` : ''} → ${i.clienteNome} (Nº ${i.clienteCodigo})${ult ? ` <span style="color:var(--accent);">· ✏️ ${ult.motivo} por ${ult.por}</span>` : ''}</span>
+                          <span>${podeEditarIntencao(i)
+                            ? `<input type="number" min="0" step="1" class="inputQtdIntencao" data-container="${cont.id}" data-item="${item.id}" data-intencao="${i.id}" data-atual="${i.quantidade}" value="${i.quantidade}" title="${(i.historico||[]).map(h => `${new Date(h.em).toLocaleString('pt-BR')} — ${h.por}: ${h.de} → ${h.para} (${h.motivo})`).join('&#10;') || 'Digite a nova quantidade e tecle Enter'}" style="width:70px; padding:2px 6px; font-weight:700; font-size:14px; border:1px solid var(--accent); border-radius:6px;">`
+                            : `<b>${i.quantidade}</b>`} un.${(i.quantidadeOriginal!==undefined && i.quantidadeOriginal!==i.quantidade) ? ` <span style="text-decoration:line-through;">${i.quantidadeOriginal}</span>` : ''} — <b>Lançado por ${i.vendedorNome}${i.vendedorCodigo ? ` (Nº ${i.vendedorCodigo})` : ''}</b>${i.data ? ` em ${fmtDatePt(i.data)}` : ''} → ${i.clienteNome} (Nº ${i.clienteCodigo})${ult ? ` <span style="color:var(--accent);">· ✏️ ${ult.motivo} por ${ult.por}</span>` : ''}</span>
                           ${podeEditarIntencao(i) ? `<span style="display:flex; gap:4px; flex-shrink:0;">
-                            <button class="ghost-btn btnEditarIntencao" data-container="${cont.id}" data-item="${item.id}" data-intencao="${i.id}" style="padding:2px 8px; font-size:11px;">editar qtd</button>
                             <button class="ghost-btn btnExcluirIntencao" data-container="${cont.id}" data-item="${item.id}" data-intencao="${i.id}" style="padding:2px 8px; font-size:11px;">excluir</button>
                           </span>` : ''}
                         </div>
@@ -2870,7 +2875,15 @@ async function renderPrevisaoCompras(main){
                     </div>
                   ` : ''}
                 </div>
-                ${STATE.session.tipo==='vendedor' ? `<button class="ghost-btn btnNovaIntencao" data-container="${cont.id}" data-item="${item.id}">+ Registrar intenção</button>` : ''}
+                <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end; flex-shrink:0;">
+                  ${resumoVend.length ? `
+                    <div style="min-width:160px; border:1px solid var(--border, #ddd); border-radius:10px; padding:8px 12px; background:var(--surface-2, rgba(0,0,0,0.02));">
+                      <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; opacity:.7; margin-bottom:4px;">Por vendedor</div>
+                      ${resumoVend.map(([nome,q]) => `<div style="display:flex; justify-content:space-between; gap:14px; font-size:14px;"><span>${nome}</span><b>${q}</b></div>`).join('')}
+                      <div style="display:flex; justify-content:space-between; gap:14px; font-size:13px; border-top:1px solid var(--border, #ddd); margin-top:4px; padding-top:4px;"><span>Total</span><b style="color:${r.reservado>item.quantidade?'var(--danger)':'inherit'};">${r.reservado} / ${item.quantidade}</b></div>
+                    </div>` : ''}
+                  ${STATE.session.tipo==='vendedor' ? `<button class="ghost-btn btnNovaIntencao" data-container="${cont.id}" data-item="${item.id}">+ Registrar intenção</button>` : ''}
+                </div>
               </div>
             `;
           }).join('')}
@@ -2882,8 +2895,10 @@ async function renderPrevisaoCompras(main){
     box.querySelectorAll('.containerHeader').forEach(h => {
       h.onclick = () => {
         const painel = box.querySelector(`.containerItens[data-id="${h.dataset.id}"]`);
-        painel.style.display = painel.style.display==='none' ? 'flex' : 'none';
+        const abrir = painel.style.display==='none';
+        painel.style.display = abrir ? 'flex' : 'none';
         painel.style.flexDirection = 'column';
+        if(abrir) containersAbertos.add(h.dataset.id); else containersAbertos.delete(h.dataset.id);
       };
     });
     box.querySelectorAll('.btnNovaIntencao').forEach(btn => {
@@ -2909,10 +2924,18 @@ async function renderPrevisaoCompras(main){
         if(cont) exportarPrevisaoExcel([cont]);
       };
     });
-    box.querySelectorAll('.btnEditarIntencao').forEach(btn => {
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        abrirModalEditarIntencao(btn.dataset.container, btn.dataset.item, btn.dataset.intencao, drawContainers);
+    box.querySelectorAll('.inputQtdIntencao').forEach(inp => {
+      inp.onclick = (e) => e.stopPropagation();
+      inp.onkeydown = (e) => { if(e.key === 'Enter') inp.blur(); if(e.key === 'Escape'){ inp.value = inp.dataset.atual; inp.blur(); } };
+      inp.onchange = async () => {
+        const nova = Number(inp.value);
+        const atual = Number(inp.dataset.atual);
+        if(inp.value === '' || !Number.isInteger(nova) || nova < 0){ inp.value = atual; return; }
+        if(nova === atual) return;
+        inp.disabled = true;
+        const ok = await editarQuantidadeIntencao(inp.dataset.container, inp.dataset.item, inp.dataset.intencao, nova, 'edição manual');
+        if(!ok) alert('Não consegui salvar. Recarregue a página e tente de novo.');
+        drawContainers();
       };
     });
     box.querySelectorAll('.btnRatearItem').forEach(btn => {

@@ -4714,6 +4714,255 @@ function normalizarRotaAntiga(){
   }
 }
 
+
+// ================= CAMPANHA FERRAMENTAS PCI (exclusiva de outubro/2026) =================
+// Vendedor ganha um valor fixo por unidade vendida de cada categoria; lojista ganha cashback
+// (3% a 10%) sobre os itens da campanha. Conta TODOS os pedidos lançados de 01 a 31/10/2026.
+// Valor vendido = quantidade x preço de tabela (PV7; se zerado, PV6). Nada é apagado: a campanha
+// só LÊ os pedidos já gravados e grava um campo extra (skus.campanha) no próprio pedido.
+const CAMPANHA = {
+  id: 'ferramentas-2026-10',
+  mes: '2026-10',
+  nome: 'Campanha Ferramentas PCI',
+  premio: {'Maletas':10, 'Alicates':2, 'Chaves':3, 'Martelos':1, 'Trenas':1, 'Microretífica':1.5, 'Medição':1.5, 'Solda':1},
+  ordemCats: ['Maletas','Alicates','Chaves','Martelos','Trenas','Microretífica','Medição','Solda'],
+  cashbackOpcoes: [10,9,8,7,6,5,4,3],
+  itens: {"TL-PCI-110PCS": ["Maletas", 339.0, "MALETA FERRAMENTAS JOGO SOQUETE CHAVE CATRACA COMBINADA 110 "], "PCI-TOL-111": ["Maletas", 121.9, "KIT MALETA CORTADOR E FLANGEADOR TUBOS COBRE/ALUMINIO/PVC"], "TL-PCI-180PCS": ["Maletas", 729.0, "MALETA FERRAMENTAS JOGO SOQUETE CHAVE CATRACA COMBINADA 180 "], "TL-PCI-57R": ["Maletas", 118.0, "MALETA FERRAMENTAS JOGO SOQUETE CHAVE CATRACA COMBINADA 57 P"], "PCI-TOL-022": ["Maletas", 139.0, "MALETA FERRAMENTAS JOGO SOQUETE CATRACA COMBINADA 22 PECAS C"], "TL-JYS003-6": ["Maletas", 108.5, "MALETA FERRAMENTAS MALETA JOGO CHAVE ALLEN SOQUETE BITS 38 P"], "TL-PCI-1D51R": ["Maletas", 539.0, "MALETA FERRAMENTAS JOGO SOQUETE CHAVE CATRACA COMBINADA ALLE"], "TL-PCI-94R": ["Maletas", 324.0, "MALETA FERRAMENTAS JOGO SOQUETE CHAVE CATRACA COMBINADA 94 P"], "TL-JYS001-1": ["Maletas", 99.0, "MALETA JOGO BROCAS BITS SOQUETES MALETA MADEIRA PAREDE 71 PE"], "TL-PCI-12D1R": ["Maletas", 484.0, "MALETA FERRAMENTAS JOGO SOQUETE CHAVE COMBINADA CATRACA 121 "], "TL-PCI-2D18R": ["Maletas", 599.0, "MALETA FERRAMENTAS JOGO SOQUETE CHAVE COMBINADA CATRACA 218 "], "PCI-TOL-902": ["Alicates", 7.9, "ALICATE DECAPADOR DESCASCADOR COAXIAL"], "PCI-TOL-108": ["Alicates", 59.0, "ALICATE REBITE PROFISSIONAL"], "PCI-TOL-003": ["Alicates", 61.18, "KIT 3 ALICATES  BICO CORTE UNIVERSAL PROFISSIONAL MALETA"], "PCI-TOL-901": ["Alicates", 14.5, "ALICATE DECAPADOR DESCASCADOR UNIVERSAL UTP STP RG6/RG59"], "PCI-TOL-955": ["Alicates", 49.9, "ALICATE PROFISSIONAL GRIMPAR RJ45/RJ11/RJ12 CAT5E/CAT6E/CAT7"], "PCI-TOL-945": ["Alicates", 45.9, "ALICATE PROFISSIONAL GRIMPAR RJ45/RJ11/RJ12 VAZADO"], "PCI-TOL-968": ["Alicates", 25.9, "ALICATE GRIMPAR RJ45/RJ11 C/ CATRACA"], "WRCH-16": ["Chaves", 269.0, "JOGO DE CHAVES COMBINADA C/ CATRACA 16 PÇS CROMO VANADIO"], "WRCH-10": ["Chaves", 155.0, "JOGO DE CHAVES COMBINADA C/ CATRACA 10 PÇS CROMO VANADIO"], "PCI-TOL-006": ["Chaves", 50.24, "KIT 6 CHAVES PHILIPS/FENDA PROFISSIONAL IMANTADA BLISTER"], "PCI-TOL-018": ["Chaves", 63.76, "CHAVE DE GRIFO 18 POLEGADAS PROFISSIONAL"], "PCI-TOL-010": ["Chaves", 27.26, "KIT 10 CHAVES HEXAGONIAIS TORX PROFISSIONAL FURO NO CENTRO"], "PCI-TOL-030": ["Chaves", 53.0, "KIT 30 CHAVES HEXAGONIAIS ALLEN PROFISSIONAL"], "TL-ZX121064-41PCS": ["Chaves", 32.0, "JOGO BITS SOQUETES CHAVE CATRACA FERRAMENTAS 41 PECAS"], "PCI-TOL-666": ["Chaves", 31.26, "KIT 6 CHAVES PHILIPS/FENDA IMANTADA BLISTER"], "PCI-TOL-024": ["Chaves", 74.36, "CHAVE DE GRIFO 24 POLEGADAS PROFISSIONAL"], "PCI-TOL-250": ["Martelos", 15.22, "MARTELO CABO FIBRA PROFISSIONAL 250GR C/SUPORTE P/PREGO IMAN"], "PCI-TOL-500": ["Martelos", 19.76, "MARTELO CABO FIBRA PROFISSIONAL 500GR C/SUPORTE P/PREGO IMAN"], "PCI-TOL-750": ["Martelos", 23.88, "MARTELO CABO FIBRA PROFISSIONAL 750GR C/SUPORTE P/PREGO IMAN"], "PCI-TOL-333": ["Trenas", 9.98, "FITA METRICA EMBORRACHADA PROFISSIONAL 3 METROS"], "PCI-TOL-075": ["Trenas", 19.1, "FITA METRICA EMBORRACHADA PROFISSIONAL 7,5 METROS"], "PCI-TOL-555": ["Trenas", 12.7, "FITA METRICA EMBORRACHADA PROFISSIONAL 5 METROS"], "PCI-TOL-044": ["Microretífica", 40.0, "MICRORETIFICA 12V PCI FERRAMENTAS"], "PCI-TOL-045": ["Microretífica", 15.9, "KIT ABRASIVO PARA MICRO RETIFICA 3MM 14 PONTAS"], "PCI-MUL-266": ["Medição", 36.0, "ALICATE AMPERIMETRO DIGITAL COM ESTOJO"], "YX-360-PRO": ["Medição", 37.0, "MULTIMETRO ANALOGICO PCI-360 10 MEGAS PROFISSIONAL EMBORRACH"], "PCI-MUL-001": ["Medição", 60.4, "TESTADOR DE BARRA DE LED AUTOMATICO"], "PCI-MUL-002": ["Medição", 32.9, "TERMOMETRO DIGITAL INFRA VERMELHO -55 ATÉ 400 C"], "DT-830Y": ["Medição", 14.9, "MULTIMETRO DIGITAL DT830 AMARELO"], "DT-830B": ["Medição", 14.9, "MULTIMETRO DIGITAL DT830 PRETO"], "TS7BKWLCD": ["Medição", 130.0, "MULTIMETRO DIGITAL AUTOMATICO TS7BKWLCD PCI ELETRO ANOTO"], "PCI-INS-002": ["Solda", 7.9, "FITA MALHA DESSOLDADORA 2MM X 3 METROS PCI"], "PCI-INS-015": ["Solda", 7.9, "FITA MALHA DESSOLDADORA 1,5MM X 3 METROS  PCI"], "PCI-INS-025": ["Solda", 7.9, "FITA MALHA DESSOLDADORA 2,5MM X 3 METROS PCI"], "PCI-ACS-999": ["Solda", 80.0, "MINI FERRO DE SOLDA PORTATIL USB COM BATERIA"], "PCI-INS-999": ["Solda", 9.0, "PONTA FERRO DE SOLDA SEM FIO PCI 8W"], "PCI-INS-060": ["Solda", 18.5, "KIT 4 PONTA FERRO DE SOLDA 50/60W PCI"], "PCI-INS-003": ["Solda", 7.9, "FITA MALHA DESSOLDADORA 3MMX 3 METROS  PCI"]},
+};
+function campanhaAtivaNoMenu(){ const mk = currentMonthKey(); return mk >= CAMPANHA.mes && mk <= '2026-11'; }
+function campanhaNormCod(c){ return String(c||'').trim().toUpperCase().replace(/\s+/g,''); }
+// Itens de um pedido que entram na campanha, já com valor e prêmio calculados.
+function campanhaItensDoPedido(itens){
+  const out = [];
+  (itens||[]).forEach(i => {
+    const cod = campanhaNormCod(i.codigo);
+    const ref = CAMPANHA.itens[cod];
+    const qtd = Number(i.quantidade)||0;
+    if(!ref || qtd <= 0) return;
+    const [cat, preco, desc] = ref;
+    out.push({codigo:cod, descricao:desc, cat, qtd, preco, valor: Math.round(qtd*preco*100)/100, premio: Math.round(qtd*(CAMPANHA.premio[cat]||0)*100)/100});
+  });
+  return out;
+}
+// Pergunta o cashback do lojista quando o pedido tem itens da campanha. Devolve o % ou null (cancelou).
+function campanhaPerguntarCashback(itensCamp){
+  return new Promise(resolve => {
+    const valor = itensCamp.reduce((s,i)=>s+i.valor,0);
+    const premio = itensCamp.reduce((s,i)=>s+i.premio,0);
+    const bd = document.createElement('div');
+    bd.className = 'modal-backdrop';
+    bd.style.zIndex = 3000;
+    bd.innerHTML = `
+      <div class="modal" style="max-width:460px;">
+        <h3>🧰 Pedido com itens da ${CAMPANHA.nome}</h3>
+        <p class="hint">Este pedido tem <b>${itensCamp.reduce((s,i)=>s+i.qtd,0)}</b> unidade(s) de ferramentas da campanha — <b>${fmtMoney(valor)}</b> em preço de tabela. Seu prêmio: <b style="color:var(--ok, #1a7f37);">${fmtMoney(premio)}</b>.</p>
+        <div style="max-height:150px; overflow:auto; font-size:12.5px; margin-bottom:10px;">
+          ${itensCamp.map(i=>`<div>${i.qtd}× ${i.codigo} <span style="color:var(--ink-soft)">(${i.cat})</span></div>`).join('')}
+        </div>
+        <label class="field-label">Quanto de cashback o lojista vai ter nesse pedido?</label>
+        <select id="campCashback" class="login-input">
+          <option value="">Escolha...</option>
+          ${CAMPANHA.cashbackOpcoes.map(p=>`<option value="${p}">${p}%</option>`).join('')}
+        </select>
+        <p class="hint" style="margin-top:-6px;">Até 10%; com redução de preço muito grande, pode cair para até 3%.</p>
+        <div id="campCashbackMsg"></div>
+        <div class="modal-actions">
+          <button class="ghost-btn" id="campCancelar">Voltar</button>
+          <button class="primary-btn" id="campConfirmar">Confirmar cashback</button>
+        </div>
+      </div>`;
+    document.body.appendChild(bd);
+    bd.querySelector('#campCancelar').onclick = () => { bd.remove(); resolve(null); };
+    bd.querySelector('#campConfirmar').onclick = () => {
+      const v = Number(bd.querySelector('#campCashback').value);
+      if(!v){ bd.querySelector('#campCashbackMsg').innerHTML = `<div class="msg err">Escolha o % de cashback.</div>`; return; }
+      bd.remove(); resolve(v);
+    };
+  });
+}
+function campanhaMontarRegistro(itensCamp, cashbackPct){
+  const valorItens = Math.round(itensCamp.reduce((s,i)=>s+i.valor,0)*100)/100;
+  const premio = Math.round(itensCamp.reduce((s,i)=>s+i.premio,0)*100)/100;
+  const pct = (cashbackPct===null || cashbackPct===undefined) ? null : Number(cashbackPct);
+  return {id: CAMPANHA.id, cashbackPct: pct, valorItens, premio, cashback: pct===null ? null : Math.round(valorItens*pct)/100, itens: itensCamp};
+}
+// Junta todos os pedidos do mês da campanha de um vendedor (lê do cache já carregado).
+function campanhaPedidosDoVendedor(vendedorCodigo){
+  const contatos = STATE.contatosCache[vendedorCodigo] || {};
+  const nomeMap = new Map((STATE.roster||[]).map(c => [String(c.codigo), c.nome]));
+  const lista = [];
+  Object.entries(contatos).forEach(([codCli, reg]) => {
+    (reg.historico||[]).forEach(h => {
+      if(!h.vendeu || !h.data || h.data.slice(0,7) !== CAMPANHA.mes) return;
+      const itensCamp = campanhaItensDoPedido((h.skus && h.skus.itens) || []);
+      if(!itensCamp.length) return;
+      const salvo = h.skus && h.skus.campanha;
+      const pct = (salvo && salvo.cashbackPct !== null && salvo.cashbackPct !== undefined) ? Number(salvo.cashbackPct) : null;
+      const r = campanhaMontarRegistro(itensCamp, pct);
+      lista.push({...r, entradaId: h.id, vendedorCodigo, clienteCodigo: codCli, clienteNome: nomeMap.get(String(codCli)) || ('Cliente Nº '+codCli),
+        numeroPedido: (h.skus && h.skus.numeroPedido) || '', data: h.data});
+    });
+  });
+  return lista.sort((a,b) => b.data.localeCompare(a.data));
+}
+function campanhaResumo(pedidos){
+  const r = {pedidos: pedidos.length, unidades:0, valor:0, premio:0, cashback:0, pendentes:0, porCat:{}};
+  CAMPANHA.ordemCats.forEach(c => r.porCat[c] = {unidades:0, valor:0, premio:0});
+  pedidos.forEach(p => {
+    r.valor += p.valorItens; r.premio += p.premio;
+    if(p.cashbackPct === null) r.pendentes++; else r.cashback += p.cashback;
+    p.itens.forEach(i => { r.unidades += i.qtd; const pc = r.porCat[i.cat]; if(pc){ pc.unidades += i.qtd; pc.valor += i.valor; pc.premio += i.premio; } });
+  });
+  return r;
+}
+// Grava/ajusta o % de cashback de um pedido já lançado (lê fresco do banco antes de salvar).
+async function campanhaSalvarCashback(vendedorCodigo, clienteCodigo, entradaId, pct){
+  const dados = (await safeGet('crm:contatos:'+vendedorCodigo)) || {};
+  const reg = dados[clienteCodigo];
+  const h = reg && (reg.historico||[]).find(x => x.id === entradaId);
+  if(!h || !h.skus) throw new Error('Pedido não encontrado — recarregue a página e tente de novo.');
+  const itensCamp = campanhaItensDoPedido(h.skus.itens || []);
+  h.skus.campanha = campanhaMontarRegistro(itensCamp, pct);
+  STATE.contatosCache[vendedorCodigo] = dados;
+  await safeSet('crm:contatos:'+vendedorCodigo, dados);
+}
+function campanhaKpiCard(label, valor, sub, metric){
+  return `<div class="stat-card ${metric?'campKpi':''}" ${metric?`data-metric="${metric}" style="cursor:pointer;" title="Clique para ver o ranking por vendedor"`:''}>
+    <div class="num display" style="font-size:22px;">${valor}</div>
+    <div class="label">${label}</div>
+    ${sub ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:6px;">${sub}</div>` : ''}
+  </div>`;
+}
+function campanhaTabelaCategorias(r){
+  return `<table class="cred-table" style="width:100%;">
+    <thead><tr><th>Categoria</th><th style="text-align:right;">Ganho/un.</th><th style="text-align:right;">Unidades</th><th style="text-align:right;">Vendido</th><th style="text-align:right;">Prêmio</th></tr></thead>
+    <tbody>${CAMPANHA.ordemCats.map(c => `<tr><td>${c}</td><td style="text-align:right;">${fmtMoney(CAMPANHA.premio[c])}</td><td style="text-align:right;">${r.porCat[c].unidades.toLocaleString('pt-BR')}</td><td style="text-align:right;">${fmtMoney(r.porCat[c].valor)}</td><td style="text-align:right;"><b>${fmtMoney(r.porCat[c].premio)}</b></td></tr>`).join('')}
+    <tr><td><b>Total</b></td><td></td><td style="text-align:right;"><b>${r.unidades.toLocaleString('pt-BR')}</b></td><td style="text-align:right;"><b>${fmtMoney(r.valor)}</b></td><td style="text-align:right;"><b>${fmtMoney(r.premio)}</b></td></tr></tbody></table>`;
+}
+function campanhaTabelaPedidos(pedidos, mostrarVendedor){
+  if(!pedidos.length) return `<p class="hint">Nenhum pedido com itens da campanha ainda.</p>`;
+  return `<table class="cred-table" style="width:100%;">
+    <thead><tr><th>Data</th><th>Pedido</th><th>Cliente</th>${mostrarVendedor?'<th>Vendedor</th>':''}<th style="text-align:right;">Un.</th><th style="text-align:right;">Vendido</th><th style="text-align:right;">Prêmio</th><th style="text-align:right;">Cashback</th></tr></thead>
+    <tbody>${pedidos.map(p => `<tr>
+      <td>${fmtDatePt(p.data)}</td><td>${p.numeroPedido||'—'}</td><td>${p.clienteNome}</td>${mostrarVendedor?`<td>${vendorNome(p.vendedorCodigo)}</td>`:''}
+      <td style="text-align:right;">${p.itens.reduce((s,i)=>s+i.qtd,0)}</td><td style="text-align:right;">${fmtMoney(p.valorItens)}</td><td style="text-align:right;">${fmtMoney(p.premio)}</td>
+      <td style="text-align:right;">${p.cashbackPct===null ? '' : `${p.cashbackPct}% · ${fmtMoney(p.cashback)} `}<button class="ghost-btn campEditCb" style="padding:3px 8px; font-size:11.5px;" data-v="${p.vendedorCodigo}" data-c="${p.clienteCodigo}" data-e="${p.entradaId}">${p.cashbackPct===null?'⚠️ Informar':'Alterar'}</button></td>
+    </tr>`).join('')}</tbody></table>`;
+}
+function campanhaBindEditCashback(root, rerender){
+  root.querySelectorAll('.campEditCb').forEach(b => b.onclick = async () => {
+    const vc = Number(b.dataset.v); const cc = b.dataset.c; const id = b.dataset.e;
+    const reg = (STATE.contatosCache[vc]||{})[cc]; const h = reg && (reg.historico||[]).find(x=>x.id===id);
+    const itensCamp = campanhaItensDoPedido((h && h.skus && h.skus.itens) || []);
+    const pct = await campanhaPerguntarCashback(itensCamp);
+    if(pct === null) return;
+    b.disabled = true; b.textContent = 'Salvando...';
+    try{ await campanhaSalvarCashback(vc, cc, id, pct); rerender(); }
+    catch(err){ alert(err.message); b.disabled = false; }
+  });
+}
+// Card que aparece no Dashboard do vendedor.
+function campanhaCardVendedorHTML(vendedorCodigo){
+  if(!campanhaAtivaNoMenu()) return '';
+  const r = campanhaResumo(campanhaPedidosDoVendedor(vendedorCodigo));
+  return `<div class="stat-card accent" id="cardCampanhaDash" style="cursor:pointer;" title="Abrir a Campanha" onclick="STATE.route={page:'campanha'}; renderVendorShell();">
+    <div class="eyebrow" style="font-size:11px;">🧰 Campanha Ferramentas · out/2026</div>
+    <div class="num display" style="font-size:20px;">${fmtMoney(r.premio)}</div>
+    <div class="label">Você ganhou</div>
+    <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:8px; font-size:12.5px; color:var(--ink-soft);">
+      <span>Vendido <b style="color:var(--ink);">${fmtMoney(r.valor)}</b></span>
+      <span>Cashback <b style="color:var(--ink);">${fmtMoney(r.cashback)}</b></span>
+    </div>
+  </div>`;
+}
+// Tela "Campanha" do vendedor.
+async function renderCampanhaVendedor(main){
+  const vc = STATE.session.codigo;
+  await getContatos(vc);
+  const pedidos = campanhaPedidosDoVendedor(vc);
+  const r = campanhaResumo(pedidos);
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Campanha · 01 a 31/10/2026</div><h2>🧰 ${CAMPANHA.nome}</h2></div>
+    <p class="hint">Cada unidade vendida das ferramentas da campanha gera um prêmio pra você, conforme a categoria. O lojista ganha cashback de até 10% (pode cair para até 3% com redução de preço muito grande). Valor vendido = quantidade × preço de tabela.</p>
+    <div class="progress-row">
+      ${campanhaKpiCard('Vendido em itens da campanha', fmtMoney(r.valor), `${r.unidades.toLocaleString('pt-BR')} unidade(s) · ${r.pedidos} pedido(s)`)}
+      ${campanhaKpiCard('Você ganhou (premiação)', fmtMoney(r.premio), '')}
+      ${campanhaKpiCard('Cashback dado aos lojistas', fmtMoney(r.cashback), r.pendentes ? `⚠️ ${r.pendentes} pedido(s) sem cashback informado` : '')}
+    </div>
+    <div class="panel"><h3 style="margin-bottom:10px;">Por categoria</h3>${campanhaTabelaCategorias(r)}</div>
+    <div class="panel"><h3 style="margin-bottom:10px;">Seus pedidos com itens da campanha</h3><div id="campPedidosV">${campanhaTabelaPedidos(pedidos, false)}</div></div>
+  `;
+  campanhaBindEditCashback(main, () => renderCampanhaVendedor(main));
+}
+// Tela "Campanha" do gerente.
+async function renderCampanhaGerente(main){
+  main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
+  await Promise.all(STATE.vendors.map(v => getContatos(v.codigo)));
+  const porVend = STATE.vendors.map(v => {
+    const ped = campanhaPedidosDoVendedor(v.codigo);
+    return {v, pedidos: ped, r: campanhaResumo(ped)};
+  }).filter(x => x.r.pedidos > 0 || !vendedorOcultoNoMes(x.v, CAMPANHA.mes));
+  const todos = porVend.flatMap(x => x.pedidos).sort((a,b) => b.data.localeCompare(a.data));
+  const R = campanhaResumo(todos);
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Campanha · 01 a 31/10/2026</div><h2>🧰 ${CAMPANHA.nome}</h2></div>
+    <p class="hint">Todos os pedidos lançados em outubro/2026 com ferramentas da campanha. Valor vendido = quantidade × preço de tabela. Clique nos cartões para ver o ranking por vendedor.</p>
+    <div class="progress-row">
+      ${campanhaKpiCard('Total vendido (itens da campanha)', fmtMoney(R.valor), `${R.unidades.toLocaleString('pt-BR')} unidade(s) · ${R.pedidos} pedido(s)`, 'valor')}
+      ${campanhaKpiCard('Cashback dado aos lojistas', fmtMoney(R.cashback), R.pendentes ? `⚠️ ${R.pendentes} pedido(s) sem cashback informado` : '', 'cashback')}
+      ${campanhaKpiCard('Premiação a pagar aos vendedores', fmtMoney(R.premio), '', 'premio')}
+      ${campanhaKpiCard('Unidades vendidas', R.unidades.toLocaleString('pt-BR'), '', 'unidades')}
+    </div>
+    <div class="panel"><h3 style="margin-bottom:10px;">Por vendedor <span class="hint" style="font-weight:400;">(clique no vendedor para detalhar)</span></h3>
+      <table class="cred-table" style="width:100%;">
+        <thead><tr><th>Vendedor</th><th style="text-align:right;">Pedidos</th><th style="text-align:right;">Unidades</th><th style="text-align:right;">Vendido</th><th style="text-align:right;">Prêmio a pagar</th><th style="text-align:right;">Cashback</th></tr></thead>
+        <tbody>${porVend.slice().sort((a,b)=>b.r.valor-a.r.valor).map(x => `<tr class="campLinhaVend" data-v="${x.v.codigo}" style="cursor:pointer;">
+          <td><b>${x.v.nome}</b> <span style="color:var(--ink-soft)">Nº ${vendorNumero(x.v)}</span></td><td style="text-align:right;">${x.r.pedidos}</td><td style="text-align:right;">${x.r.unidades.toLocaleString('pt-BR')}</td>
+          <td style="text-align:right;">${fmtMoney(x.r.valor)}</td><td style="text-align:right;"><b>${fmtMoney(x.r.premio)}</b></td><td style="text-align:right;">${fmtMoney(x.r.cashback)}${x.r.pendentes?` <span title="pedidos sem cashback informado">⚠️${x.r.pendentes}</span>`:''}</td></tr>`).join('')}
+          <tr><td><b>Total</b></td><td style="text-align:right;"><b>${R.pedidos}</b></td><td style="text-align:right;"><b>${R.unidades.toLocaleString('pt-BR')}</b></td><td style="text-align:right;"><b>${fmtMoney(R.valor)}</b></td><td style="text-align:right;"><b>${fmtMoney(R.premio)}</b></td><td style="text-align:right;"><b>${fmtMoney(R.cashback)}</b></td></tr>
+        </tbody></table></div>
+    <div class="panel"><h3 style="margin-bottom:10px;">Por categoria (equipe)</h3>${campanhaTabelaCategorias(R)}</div>
+    <div class="panel"><h3 style="margin-bottom:10px;">Todos os pedidos da campanha</h3>${campanhaTabelaPedidos(todos, true)}</div>
+  `;
+  campanhaBindEditCashback(main, () => renderCampanhaGerente(main));
+  const nomes = {valor:'Vendido', cashback:'Cashback dado', premio:'Premiação', unidades:'Unidades vendidas'};
+  main.querySelectorAll('.campKpi').forEach(card => card.onclick = () => {
+    const m = card.dataset.metric;
+    const val = x => m==='unidades' ? x.r.unidades : x.r[m];
+    const fmt = v => m==='unidades' ? v.toLocaleString('pt-BR')+' un.' : fmtMoney(v);
+    const ord = porVend.slice().sort((a,b)=>val(b)-val(a));
+    const max = Math.max(1, ...ord.map(val));
+    campanhaModal(`Ranking — ${nomes[m]}`, `
+      ${ord.map((x,i) => `<div style="margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; font-size:13px;"><span>${i===0?'🥇 ':i===ord.length-1&&ord.length>1?'🔻 ':''}<b>${x.v.nome}</b></span><span><b>${fmt(val(x))}</b></span></div>
+        <div style="height:8px; background:var(--line, #eee); border-radius:4px; margin-top:4px;"><div style="height:8px; width:${Math.round(val(x)/max*100)}%; background:var(--primary); border-radius:4px;"></div></div>
+      </div>`).join('')}
+      ${ord.length>1 ? `<p class="hint">Mais: <b>${ord[0].v.nome}</b> (${fmt(val(ord[0]))}) · Menos: <b>${ord[ord.length-1].v.nome}</b> (${fmt(val(ord[ord.length-1]))})</p>` : ''}`);
+  });
+  main.querySelectorAll('.campLinhaVend').forEach(tr => tr.onclick = () => {
+    const x = porVend.find(p => String(p.v.codigo) === tr.dataset.v);
+    if(!x) return;
+    campanhaModal(`${x.v.nome} — campanha`, `
+      <div class="progress-row">
+        ${campanhaKpiCard('Vendido', fmtMoney(x.r.valor), `${x.r.unidades} un. · ${x.r.pedidos} pedido(s)`)}
+        ${campanhaKpiCard('Prêmio a pagar', fmtMoney(x.r.premio), '')}
+        ${campanhaKpiCard('Cashback dado', fmtMoney(x.r.cashback), x.r.pendentes?`⚠️ ${x.r.pendentes} sem cashback informado`:'')}
+      </div>
+      <h4 style="margin:10px 0 6px;">Por categoria</h4>${campanhaTabelaCategorias(x.r)}
+      <h4 style="margin:14px 0 6px;">Pedidos</h4>${campanhaTabelaPedidos(x.pedidos, false)}`, () => renderCampanhaGerente(main));
+  });
+}
+function campanhaModal(titulo, html, rerender){
+  const bd = document.createElement('div');
+  bd.className = 'modal-backdrop';
+  bd.innerHTML = `<div class="modal" style="max-width:860px; max-height:88vh; overflow-y:auto;"><h3>${titulo}</h3>${html}<div class="modal-actions"><button class="ghost-btn" id="campFechar">Fechar</button></div></div>`;
+  document.body.appendChild(bd);
+  bd.onclick = (e) => { if(e.target===bd) bd.remove(); };
+  bd.querySelector('#campFechar').onclick = () => bd.remove();
+  if(rerender) campanhaBindEditCashback(bd, () => { bd.remove(); rerender(); });
+}
+// ================= FIM CAMPANHA =================
+
 // ---------------- VENDOR VIEW ----------------
 async function renderVendorShell(){
   normalizarRotaAntiga();
@@ -4730,6 +4979,7 @@ async function renderVendorShell(){
     {page:'historico', label:'Histórico'},
     {page:'assistente', label:'🤖 Assistente IA'},
   ];
+  if(campanhaAtivaNoMenu()) items.splice(1, 0, {page:'campanha', label:'🧰 Campanha'});
   app.innerHTML = `<div class="shell">${sidebarHTML(items)}<div class="main" id="main"></div></div>`;
   bindSidebar(renderVendorShell);
   const main = document.getElementById('main');
@@ -4743,6 +4993,7 @@ async function renderVendorShell(){
   else if(STATE.route.page==='leads') renderVendorLeads(main);
   else if(STATE.route.page==='inativos') await renderVendorInativos(main);
   else if(STATE.route.page==='assistente') renderVendorAssistenteIA(main);
+  else if(STATE.route.page==='campanha') await renderCampanhaVendedor(main);
   else if(STATE.route.page==='garantia') await renderGarantiaModulo(main, renderVendorShell);
   else if(STATE.route.page==='sac') await renderSacModulo(main);
   else if(STATE.route.page==='compras-estoque') await renderComprasModulo(main, renderVendorShell);
@@ -5741,6 +5992,7 @@ function renderVendorDashboard(main){
     </div>
 
     <div class="progress-row">
+      ${campanhaCardVendedorHTML(STATE.session.codigo)}
       ${promocaoCardHTML(STATE.session.codigo, s.mesChave)}
       ${containersChegadosCardsHTML(s.mesChave, STATE.session.codigo)}
       <div class="stat-card accent">
@@ -6614,10 +6866,20 @@ function abrirSubirPedidoModal(codigo){
       const itensValidos = itens.filter(i => i.quantidade > 0);
       const qtdSkus = itensValidos.length;
       const qtdUnidades = itensValidos.reduce((soma,i) => soma + i.quantidade, 0);
+      const skusInfoFinal = {itens: itensValidos, qtdSkus, qtdUnidades, numeroPedido, uf};
+      // Campanha Ferramentas (out/2026): se o pedido tem itens da campanha, pergunta o cashback do lojista.
+      if(todayStr().slice(0,7) === CAMPANHA.mes){
+        const itensCamp = campanhaItensDoPedido(itensValidos);
+        if(itensCamp.length){
+          const pct = await campanhaPerguntarCashback(itensCamp);
+          if(pct === null) return;
+          skusInfoFinal.campanha = campanhaMontarRegistro(itensCamp, pct);
+        }
+      }
       const btnConf = step.querySelector('#btnConfirmarPedido');
       btnConf.disabled = true; btnConf.textContent = 'Salvando...';
       const obs = numeroPedido ? `Pedido nº ${numeroPedido} enviado via PDF` : 'Pedido enviado via PDF';
-      await marcarContato(c.vendedorCodigo, codigo, obs, true, valor, null, {itens: itensValidos, qtdSkus, qtdUnidades, numeroPedido, uf});
+      await marcarContato(c.vendedorCodigo, codigo, obs, true, valor, null, skusInfoFinal);
       backdrop.remove();
       renderVendorShell();
     };
@@ -7216,6 +7478,7 @@ async function renderManagerShell(){
     {group:'estoque', label:'Estoque', children:[ {page:'garantia', label:'Garantia'}, {page:'sac', label:'SAC'} ]},
     {page:'credenciais', label:'Configurações'},
   ];
+  if(campanhaAtivaNoMenu()) items.splice(1, 0, {page:'campanha', label:'🧰 Campanha'});
   app.innerHTML = `<div class="shell">${sidebarHTML(items)}<div class="main" id="main"></div></div>`;
   bindSidebar(renderManagerShell);
   const main = document.getElementById('main');
@@ -7226,6 +7489,7 @@ async function renderManagerShell(){
   else if(STATE.route.page==='inativos') await renderManagerInativos(main);
   else if(STATE.route.page==='pedidos-equipe') await renderManagerPedidos(main);
   else if(STATE.route.page==='elaboracao-metas') await renderElaboracaoMetas(main);
+  else if(STATE.route.page==='campanha') await renderCampanhaGerente(main);
   else if(STATE.route.page==='financeira') await renderFinanceiroBody(main, () => renderManagerShell());
   else if(STATE.route.page==='compras-estoque') await renderComprasModulo(main, renderManagerShell);
   else if(STATE.route.page==='garantia') await renderGarantiaModulo(main, renderManagerShell);

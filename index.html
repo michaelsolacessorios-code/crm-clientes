@@ -4800,17 +4800,22 @@ function campanhaPedidosDoVendedor(vendedorCodigo){
       const pct = (salvo && salvo.cashbackPct !== null && salvo.cashbackPct !== undefined) ? Number(salvo.cashbackPct) : null;
       const r = campanhaMontarRegistro(itensCamp, pct);
       lista.push({...r, entradaId: h.id, vendedorCodigo, clienteCodigo: codCli, clienteNome: nomeMap.get(String(codCli)) || ('Cliente Nº '+codCli),
-        numeroPedido: (h.skus && h.skus.numeroPedido) || '', data: h.data});
+        numeroPedido: (h.skus && h.skus.numeroPedido) || '', uf: (h.skus && h.skus.uf) || '', data: h.data,
+        garantiaNumero: (salvo && salvo.garantiaNumero) || null});
     });
   });
   return lista.sort((a,b) => b.data.localeCompare(a.data));
 }
 function campanhaResumo(pedidos){
-  const r = {pedidos: pedidos.length, unidades:0, valor:0, premio:0, cashback:0, pendentes:0, porCat:{}};
+  const r = {pedidos: pedidos.length, unidades:0, valor:0, premio:0, cashback:0, pendentes:0, cashbackLancado:0, porCat:{}};
   CAMPANHA.ordemCats.forEach(c => r.porCat[c] = {unidades:0, valor:0, premio:0});
   pedidos.forEach(p => {
     r.valor += p.valorItens; r.premio += p.premio;
-    if(p.cashbackPct === null) r.pendentes++; else r.cashback += p.cashback;
+    if(p.cashbackPct === null) r.pendentes++; else {
+      r.cashback += p.cashback;
+      const g = p.garantiaNumero && (STATE.garantias||[]).find(x => x.numero === p.garantiaNumero);
+      if(g && g.status === 'concluida' && !g.excluida) r.cashbackLancado += p.cashback;
+    }
     p.itens.forEach(i => { r.unidades += i.qtd; const pc = r.porCat[i.cat]; if(pc){ pc.unidades += i.qtd; pc.valor += i.valor; pc.premio += i.premio; } });
   });
   return r;
@@ -4822,7 +4827,12 @@ async function campanhaSalvarCashback(vendedorCodigo, clienteCodigo, entradaId, 
   const h = reg && (reg.historico||[]).find(x => x.id === entradaId);
   if(!h || !h.skus) throw new Error('Pedido não encontrado — recarregue a página e tente de novo.');
   const itensCamp = campanhaItensDoPedido(h.skus.itens || []);
-  h.skus.campanha = campanhaMontarRegistro(itensCamp, pct);
+  const anterior = h.skus.campanha || {};
+  const reg2 = campanhaMontarRegistro(itensCamp, pct === undefined ? anterior.cashbackPct : pct);
+  if(reg2.cashbackPct !== null){
+    reg2.garantiaNumero = await campanhaGarantiaParaRegistro({vendedorCodigo, clienteCodigo, numeroPedido: h.skus.numeroPedido||'', uf: h.skus.uf||'', entradaId, reg: reg2}, anterior.garantiaNumero || null);
+  }
+  h.skus.campanha = reg2;
   STATE.contatosCache[vendedorCodigo] = dados;
   await safeSet('crm:contatos:'+vendedorCodigo, dados);
 }
@@ -4842,14 +4852,20 @@ function campanhaTabelaCategorias(r){
 function campanhaTabelaPedidos(pedidos, mostrarVendedor){
   if(!pedidos.length) return `<p class="hint">Nenhum pedido com itens da campanha ainda.</p>`;
   return `<table class="cred-table" style="width:100%;">
-    <thead><tr><th>Data</th><th>Pedido</th><th>Cliente</th>${mostrarVendedor?'<th>Vendedor</th>':''}<th style="text-align:right;">Un.</th><th style="text-align:right;">Vendido</th><th style="text-align:right;">Prêmio</th><th style="text-align:right;">Cashback</th></tr></thead>
+    <thead><tr><th>Data</th><th>Pedido</th><th>Cliente</th>${mostrarVendedor?'<th>Vendedor</th>':''}<th style="text-align:right;">Un.</th><th style="text-align:right;">Vendido</th><th style="text-align:right;">Prêmio</th><th style="text-align:right;">Cashback</th><th>Garantia</th></tr></thead>
     <tbody>${pedidos.map(p => `<tr>
       <td>${fmtDatePt(p.data)}</td><td>${p.numeroPedido||'—'}</td><td>${p.clienteNome}</td>${mostrarVendedor?`<td>${vendorNome(p.vendedorCodigo)}</td>`:''}
       <td style="text-align:right;">${p.itens.reduce((s,i)=>s+i.qtd,0)}</td><td style="text-align:right;">${fmtMoney(p.valorItens)}</td><td style="text-align:right;">${fmtMoney(p.premio)}</td>
       <td style="text-align:right;">${p.cashbackPct===null ? '' : `${p.cashbackPct}% · ${fmtMoney(p.cashback)} `}<button class="ghost-btn campEditCb" style="padding:3px 8px; font-size:11.5px;" data-v="${p.vendedorCodigo}" data-c="${p.clienteCodigo}" data-e="${p.entradaId}">${p.cashbackPct===null?'⚠️ Informar':'Alterar'}</button></td>
+      <td>${campanhaStatusGarantiaHTML(p)}</td>
     </tr>`).join('')}</tbody></table>`;
 }
 function campanhaBindEditCashback(root, rerender){
+  root.querySelectorAll('.campEnviarGar').forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = 'Enviando...';
+    try{ await campanhaSalvarCashback(Number(b.dataset.v), b.dataset.c, b.dataset.e, undefined); rerender(); }
+    catch(err){ alert(err.message); b.disabled = false; b.textContent = 'Enviar p/ Garantia'; }
+  });
   root.querySelectorAll('.campEditCb').forEach(b => b.onclick = async () => {
     const vc = Number(b.dataset.v); const cc = b.dataset.c; const id = b.dataset.e;
     const reg = (STATE.contatosCache[vc]||{})[cc]; const h = reg && (reg.historico||[]).find(x=>x.id===id);
@@ -4879,6 +4895,7 @@ function campanhaCardVendedorHTML(vendedorCodigo){
 async function renderCampanhaVendedor(main){
   const vc = STATE.session.codigo;
   await getContatos(vc);
+  try{ await listarGarantias(); }catch(e){}
   const pedidos = campanhaPedidosDoVendedor(vc);
   const r = campanhaResumo(pedidos);
   main.innerHTML = `
@@ -4887,7 +4904,7 @@ async function renderCampanhaVendedor(main){
     <div class="progress-row">
       ${campanhaKpiCard('Vendido em itens da campanha', fmtMoney(r.valor), `${r.unidades.toLocaleString('pt-BR')} unidade(s) · ${r.pedidos} pedido(s)`)}
       ${campanhaKpiCard('Você ganhou (premiação)', fmtMoney(r.premio), '')}
-      ${campanhaKpiCard('Cashback dado aos lojistas', fmtMoney(r.cashback), r.pendentes ? `⚠️ ${r.pendentes} pedido(s) sem cashback informado` : '')}
+      ${campanhaKpiCard('Cashback dado aos lojistas', fmtMoney(r.cashback), `${fmtMoney(r.cashbackLancado)} já lançado na Garantia${r.pendentes ? ` · ⚠️ ${r.pendentes} sem cashback informado` : ''}`)}
     </div>
     <div class="panel"><h3 style="margin-bottom:10px;">Por categoria</h3>${campanhaTabelaCategorias(r)}</div>
     <div class="panel"><h3 style="margin-bottom:10px;">Seus pedidos com itens da campanha</h3><div id="campPedidosV">${campanhaTabelaPedidos(pedidos, false)}</div></div>
@@ -4898,6 +4915,7 @@ async function renderCampanhaVendedor(main){
 async function renderCampanhaGerente(main){
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
   await Promise.all(STATE.vendors.map(v => getContatos(v.codigo)));
+  try{ await listarGarantias(); }catch(e){}
   const porVend = STATE.vendors.map(v => {
     const ped = campanhaPedidosDoVendedor(v.codigo);
     return {v, pedidos: ped, r: campanhaResumo(ped)};
@@ -4906,10 +4924,10 @@ async function renderCampanhaGerente(main){
   const R = campanhaResumo(todos);
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Campanha · 01 a 31/10/2026</div><h2>🧰 ${CAMPANHA.nome}</h2></div>
-    <p class="hint">Todos os pedidos lançados em outubro/2026 com ferramentas da campanha. Valor vendido = quantidade × preço de tabela. Clique nos cartões para ver o ranking por vendedor.</p>
+    <p class="hint">Todos os pedidos lançados em outubro/2026 com ferramentas da campanha. Valor vendido = quantidade × preço de tabela. Clique nos cartões para ver o ranking por vendedor. O cashback de cada pedido vai sozinho para a <b>Garantia</b> (Aguardando autorização) — você autoriza lá, ele passa para "Aguardando lançamento" e, quando o pessoal lança no sistema, fica Concluído.</p>
     <div class="progress-row">
       ${campanhaKpiCard('Total vendido (itens da campanha)', fmtMoney(R.valor), `${R.unidades.toLocaleString('pt-BR')} unidade(s) · ${R.pedidos} pedido(s)`, 'valor')}
-      ${campanhaKpiCard('Cashback dado aos lojistas', fmtMoney(R.cashback), R.pendentes ? `⚠️ ${R.pendentes} pedido(s) sem cashback informado` : '', 'cashback')}
+      ${campanhaKpiCard('Cashback dado aos lojistas', fmtMoney(R.cashback), `${fmtMoney(R.cashbackLancado)} já lançado (concluído na Garantia)${R.pendentes ? ` · ⚠️ ${R.pendentes} sem cashback informado` : ''}`, 'cashback')}
       ${campanhaKpiCard('Premiação a pagar aos vendedores', fmtMoney(R.premio), '', 'premio')}
       ${campanhaKpiCard('Unidades vendidas', R.unidades.toLocaleString('pt-BR'), '', 'unidades')}
     </div>
@@ -4960,6 +4978,75 @@ function campanhaModal(titulo, html, rerender){
   bd.onclick = (e) => { if(e.target===bd) bd.remove(); };
   bd.querySelector('#campFechar').onclick = () => bd.remove();
   if(rerender) campanhaBindEditCashback(bd, () => { bd.remove(); rerender(); });
+}
+
+// ---- Cashback → Garantia: cada cashback vira uma "garantia" de crédito integral, sem envio de mercadoria.
+// Cai em "Aguardando autorização"; o gerente autoriza na Garantia → "Aguardando lançamento";
+// o pessoal da Garantia lança no sistema → "Concluída". Nada é apagado.
+function campanhaTextoCashback(pct, valorItens, numeroPedido){
+  return `Cashback ${pct}% campanha ferramentas — pedido ${numeroPedido||'s/ nº'}`;
+}
+async function campanhaCriarGarantiaCashback(info){
+  const {vendedorCodigo, clienteCodigo, numeroPedido, entradaId, reg} = info;
+  const {numero} = await garantiaApi({acao:'proximo-numero'});
+  const cli = (STATE.roster||[]).find(c => String(c.codigo) === String(clienteCodigo)) || {};
+  const vend = STATE.vendors.find(v => v.codigo === vendedorCodigo);
+  const agora = new Date().toISOString();
+  const cb = gR2(reg.cashback);
+  const g = {
+    numero, criadoEm: agora, criadoPor: gQuem(),
+    vendedorCodigo, vendedorNome: vend ? vend.nome : '',
+    clienteCodigo: Number(clienteCodigo) || clienteCodigo, clienteNome: cli.nome || ('Cliente Nº '+clienteCodigo),
+    cnpj: cli.cnpj || '', municipio: cli.municipio || '', uf: (info.uf || cli.uf || '').toUpperCase(),
+    numeroOrcamento: numeroPedido || '', consultor: '',
+    valorTotal: cb, valorIpi: 0, valorSt: 0, valorFinanceiro: null,
+    nfDevolucao: true, clienteEnvia: false, fretePagoPor: null, freteValor: null,
+    obs: `💰 Cashback da ${CAMPANHA.nome} (out/2026): ${reg.cashbackPct}% sobre ${fmtMoney(reg.valorItens)} em ferramentas do pedido ${numeroPedido||'s/ nº'}. Crédito integral para o lojista.`,
+    itens: [{codigo:'CASHBACK-CAMPANHA', descricao: campanhaTextoCashback(reg.cashbackPct, reg.valorItens, numeroPedido), quantidade:1, unitario: cb, total: cb, conferencia:{veio:null, destino:null}}],
+    pdfPath: null, pdfNome: null,
+    status: 'pendente', excluida: false,
+    origem: 'campanha-cashback',
+    campanha: {id: CAMPANHA.id, numeroPedido: numeroPedido||'', entradaId, vendedorCodigo, clienteCodigo, cashbackPct: reg.cashbackPct, valorItens: reg.valorItens},
+    historico: [{em: agora, por: (STATE.session||{}).nome || '', acao: `Cashback da campanha gerado automaticamente (${reg.cashbackPct}% = ${fmtMoney(cb)}) — aguardando autorização`}],
+    versao: 0,
+  };
+  await salvarGarantia(g);
+  return numero;
+}
+// Se já existe garantia do cashback e ela ainda aguarda autorização, ajusta o valor.
+// Se já foi autorizada/concluída, não mexe (avisa). Devolve o número da garantia válida.
+async function campanhaAtualizarGarantiaCashback(numeroGar, info){
+  const lista = await listarGarantias();
+  const g = lista.find(x => x.numero === numeroGar);
+  if(!g || g.excluida || g.status === 'recusada') return campanhaCriarGarantiaCashback(info);
+  if(g.status !== 'pendente'){
+    avisar(`O cashback desse pedido já está na Garantia nº ${numeroGar} com status "${(GARANTIA_STATUS[g.status]||{}).label||g.status}". O valor de lá não foi alterado — se precisar, ajuste direto na Garantia.`);
+    return numeroGar;
+  }
+  const reg = info.reg; const cb = gR2(reg.cashback); const agora = new Date().toISOString();
+  const alvo = JSON.parse(JSON.stringify(g));
+  alvo.valorTotal = cb;
+  alvo.itens = [{codigo:'CASHBACK-CAMPANHA', descricao: campanhaTextoCashback(reg.cashbackPct, reg.valorItens, info.numeroPedido), quantidade:1, unitario: cb, total: cb, conferencia:{veio:null, destino:null}}];
+  alvo.campanha = Object.assign({}, alvo.campanha||{}, {cashbackPct: reg.cashbackPct, valorItens: reg.valorItens});
+  alvo.obs = `💰 Cashback da ${CAMPANHA.nome} (out/2026): ${reg.cashbackPct}% sobre ${fmtMoney(reg.valorItens)} em ferramentas do pedido ${info.numeroPedido||'s/ nº'}. Crédito integral para o lojista.`;
+  alvo.historico = (alvo.historico||[]).concat([{em: agora, por: (STATE.session||{}).nome || '', acao: `Cashback ajustado para ${reg.cashbackPct}% = ${fmtMoney(cb)}`}]);
+  await salvarGarantia(alvo);
+  return numeroGar;
+}
+async function campanhaGarantiaParaRegistro(info, numeroExistente){
+  try{
+    return numeroExistente ? await campanhaAtualizarGarantiaCashback(numeroExistente, info) : await campanhaCriarGarantiaCashback(info);
+  }catch(err){
+    avisar('O pedido foi salvo, mas não consegui mandar o cashback para a Garantia agora (' + gEsc(err.message) + '). Use o botão "Enviar p/ Garantia" na aba Campanha.');
+    return numeroExistente || null;
+  }
+}
+function campanhaStatusGarantiaHTML(p){
+  if(p.cashbackPct === null) return '';
+  if(!p.garantiaNumero) return `<button class="ghost-btn campEnviarGar" style="padding:3px 8px; font-size:11.5px;" data-v="${p.vendedorCodigo}" data-c="${p.clienteCodigo}" data-e="${p.entradaId}">Enviar p/ Garantia</button>`;
+  const g = (STATE.garantias||[]).find(x => x.numero === p.garantiaNumero);
+  const st = g ? (g.excluida ? {label:'Excluída', cls:'danger'} : (GARANTIA_STATUS[g.status] || {label:g.status, cls:'info'})) : {label:'—', cls:'info'};
+  return `<span class="status-badge status-${st.cls}" style="font-size:11px;">Nº ${p.garantiaNumero} · ${st.label}</span>`;
 }
 // ================= FIM CAMPANHA =================
 
@@ -6867,6 +6954,7 @@ function abrirSubirPedidoModal(codigo){
       const qtdSkus = itensValidos.length;
       const qtdUnidades = itensValidos.reduce((soma,i) => soma + i.quantidade, 0);
       const skusInfoFinal = {itens: itensValidos, qtdSkus, qtdUnidades, numeroPedido, uf};
+      let campanhaParaGarantia = false;
       // Campanha Ferramentas (out/2026): se o pedido tem itens da campanha, pergunta o cashback do lojista.
       if(todayStr().slice(0,7) === CAMPANHA.mes){
         const itensCamp = campanhaItensDoPedido(itensValidos);
@@ -6874,10 +6962,16 @@ function abrirSubirPedidoModal(codigo){
           const pct = await campanhaPerguntarCashback(itensCamp);
           if(pct === null) return;
           skusInfoFinal.campanha = campanhaMontarRegistro(itensCamp, pct);
+          campanhaParaGarantia = true;
         }
       }
       const btnConf = step.querySelector('#btnConfirmarPedido');
       btnConf.disabled = true; btnConf.textContent = 'Salvando...';
+      if(campanhaParaGarantia){
+        btnConf.textContent = 'Mandando cashback p/ Garantia...';
+        skusInfoFinal.campanha.garantiaNumero = await campanhaGarantiaParaRegistro({vendedorCodigo: c.vendedorCodigo, clienteCodigo: codigo, numeroPedido, uf, entradaId: null, reg: skusInfoFinal.campanha}, null);
+        btnConf.textContent = 'Salvando...';
+      }
       const obs = numeroPedido ? `Pedido nº ${numeroPedido} enviado via PDF` : 'Pedido enviado via PDF';
       await marcarContato(c.vendedorCodigo, codigo, obs, true, valor, null, skusInfoFinal);
       backdrop.remove();
@@ -9751,14 +9845,15 @@ function cardGarantiaHTML(g){
   const mostrarFormula = !preDecisao && (gConferente() || g.status === 'aguardando_mercadoria' || g.status === 'conferida');
   return `
     <div class="client-row status-${g.excluida ? 'danger' : st.cls} ${sac ? 'g-sac' : ''}" data-garantia="${g.numero}" style="cursor:pointer;">
-      <div style="font-family:'Space Grotesk'; font-weight:700; font-size:18px; min-width:62px; color:${sac ? '#7B4FC9' : 'var(--primary)'};">${sac ? '<span class="sac-badge">SAC</span><br>' : ''}Nº ${g.numero}</div>
+      <div style="font-family:'Space Grotesk'; font-weight:700; font-size:18px; min-width:62px; color:${sac ? '#7B4FC9' : 'var(--primary)'};">${sac ? '<span class="sac-badge">SAC</span><br>' : ''}${g.origem === 'campanha-cashback' ? '<span class="sac-badge" style="background:#1a7f37;">💰 CASHBACK</span><br>' : ''}Nº ${g.numero}</div>
       <div class="client-info">
         <div class="client-name">${gEsc(g.clienteNome || 'Cliente')} <span class="client-num">Nº ${gEsc(g.clienteCodigo)}</span></div>
         <div class="client-meta">
           <span>${gEsc(g.uf || '—')}</span>
           <span>Vendedor: ${gEsc(g.vendedorNome || '—')}</span>
           <span>Lançada em ${fmtDataHora(g.criadoEm)}</span>
-          ${sac ? (g.numeroOrcamento ? `<span>Pedido ${gEsc(g.numeroOrcamento)}</span>` : '') : ''}
+          ${(sac || g.origem === 'campanha-cashback') ? (g.numeroOrcamento ? `<span>Pedido ${gEsc(g.numeroOrcamento)}</span>` : '') : ''}
+          ${g.origem === 'campanha-cashback' ? `<span>💰 Cashback campanha ferramentas ${g.campanha && g.campanha.cashbackPct ? g.campanha.cashbackPct+'%' : ''} · ${fmtMoney(g.valorTotal)}</span>` : ''}
           ${preDecisao ? `<span>${(g.itens||[]).length} item(ns) reclamado(s)</span>` : sac ? `
             ${g.clienteEnvia ? '<span>📦 Mercadoria pedida de volta</span>' : '<span>Sem retorno de mercadoria</span>'}
             <span>${g.nfDevolucao ? 'Crédito integral (valor cheio)' : 'Crédito com abatimento de impostos'}</span>` : `
@@ -10104,7 +10199,7 @@ async function abrirDetalheGarantia(numero, aoMudar){
     backdrop.innerHTML = `
       <div class="modal" style="max-width:860px; max-height:88vh; overflow-y:auto;">
         <div style="display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap; margin-bottom:6px;">
-          <h3 style="margin-bottom:0; flex:1;">${sac ? '<span class="sac-badge">SAC</span> SAC' : 'Garantia'} nº ${g.numero}</h3>
+          <h3 style="margin-bottom:0; flex:1;">${sac ? '<span class="sac-badge">SAC</span> SAC' : g.origem === 'campanha-cashback' ? '💰 Cashback da campanha — Garantia' : 'Garantia'} nº ${g.numero}</h3>
           <span class="status-badge status-${g.excluida?'danger':st.cls}">${g.excluida ? 'Excluída' : st.label}</span>
         </div>
         <p style="font-size:13px; color:var(--ink-soft); line-height:1.6; margin-bottom:12px;">

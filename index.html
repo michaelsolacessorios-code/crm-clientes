@@ -4896,7 +4896,8 @@ async function renderCampanhaVendedor(main){
   const vc = STATE.session.codigo;
   await getContatos(vc);
   try{ await listarGarantias(); }catch(e){}
-  const pedidos = campanhaPedidosDoVendedor(vc);
+  let pedidos = campanhaPedidosDoVendedor(vc);
+  if(await campanhaEnviarPendentesParaGarantia(pedidos)){ try{ await listarGarantias(); }catch(e){} pedidos = campanhaPedidosDoVendedor(vc); }
   const r = campanhaResumo(pedidos);
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Campanha · 01 a 31/10/2026</div><h2>🧰 ${CAMPANHA.nome}</h2></div>
@@ -4916,6 +4917,7 @@ async function renderCampanhaGerente(main){
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
   await Promise.all(STATE.vendors.map(v => getContatos(v.codigo)));
   try{ await listarGarantias(); }catch(e){}
+  if(await campanhaEnviarPendentesParaGarantia(STATE.vendors.flatMap(v => campanhaPedidosDoVendedor(v.codigo)))){ try{ await listarGarantias(); }catch(e){} }
   const porVend = STATE.vendors.map(v => {
     const ped = campanhaPedidosDoVendedor(v.codigo);
     return {v, pedidos: ped, r: campanhaResumo(ped)};
@@ -4988,6 +4990,14 @@ function campanhaTextoCashback(pct, valorItens, numeroPedido){
 }
 async function campanhaCriarGarantiaCashback(info){
   const {vendedorCodigo, clienteCodigo, numeroPedido, entradaId, reg} = info;
+  // Evita duplicar: se já existe garantia de cashback desse mesmo pedido, reaproveita.
+  try{
+    const lista = await listarGarantias();
+    const ja = lista.find(x => x.origem === 'campanha-cashback' && !x.excluida && x.status !== 'recusada' && x.campanha &&
+      String(x.campanha.clienteCodigo) === String(clienteCodigo) &&
+      ((entradaId && x.campanha.entradaId === entradaId) || (numeroPedido && String(x.campanha.numeroPedido) === String(numeroPedido))));
+    if(ja) return ja.numero;
+  }catch(e){}
   const {numero} = await garantiaApi({acao:'proximo-numero'});
   const cli = (STATE.roster||[]).find(c => String(c.codigo) === String(clienteCodigo)) || {};
   const vend = STATE.vendors.find(v => v.codigo === vendedorCodigo);
@@ -5040,6 +5050,33 @@ async function campanhaGarantiaParaRegistro(info, numeroExistente){
     avisar('O pedido foi salvo, mas não consegui mandar o cashback para a Garantia agora (' + gEsc(err.message) + '). Use o botão "Enviar p/ Garantia" na aba Campanha.');
     return numeroExistente || null;
   }
+}
+// Quando o % é editado/aprovado na Garantia, atualiza o pedido pra campanha bater com a Garantia.
+async function campanhaSincronizarPctDoPedido(g, pct){
+  const c = g && g.campanha; if(!c || !c.vendedorCodigo) return;
+  const dados = (await safeGet('crm:contatos:'+c.vendedorCodigo)) || {};
+  let achou = false;
+  Object.values(dados).forEach(reg => (reg.historico||[]).forEach(h => {
+    const camp = h.skus && h.skus.campanha;
+    if(!camp) return;
+    if(camp.garantiaNumero === g.numero || (c.entradaId && h.id === c.entradaId)){
+      const novo = campanhaMontarRegistro(campanhaItensDoPedido(h.skus.itens||[]), pct);
+      novo.garantiaNumero = g.numero;
+      h.skus.campanha = novo; achou = true;
+    }
+  }));
+  if(!achou) return;
+  STATE.contatosCache[c.vendedorCodigo] = dados;
+  await safeSet('crm:contatos:'+c.vendedorCodigo, dados);
+}
+// Pedidos que já têm % de cashback mas ainda não foram pra Garantia: manda automaticamente.
+async function campanhaEnviarPendentesParaGarantia(pedidos){
+  let enviados = 0;
+  for(const p of pedidos){
+    if(p.cashbackPct === null || p.garantiaNumero) continue;
+    try{ await campanhaSalvarCashback(p.vendedorCodigo, p.clienteCodigo, p.entradaId, undefined); enviados++; }catch(e){ console.warn('campanha → garantia', e); }
+  }
+  return enviados;
 }
 function campanhaStatusGarantiaHTML(p){
   if(p.cashbackPct === null) return '';
@@ -10310,14 +10347,32 @@ async function abrirDetalheGarantia(numero, aoMudar){
         <div class="panel" style="margin-bottom:0; padding:16px 18px;">
           <h3 style="font-size:15px;">Autorização</h3>
           <p class="hint" style="margin-bottom:10px;">${g.clienteEnvia ? 'Autorizando, a garantia vai para o pessoal da Garantia aguardar a mercadoria chegar e conferir.' : 'Cliente não envia a mercadoria: autorizando, a garantia vai direto para "Aguardando lançamento" — o pessoal da Garantia lança no sistema e aí ela fica concluída.'}</p>
+          ${g.origem === 'campanha-cashback' && g.campanha ? `
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+              <label class="field-label" style="margin:0;">% de cashback:</label>
+              <select id="gCashbackPct" class="filter-select" style="max-width:110px;">
+                ${CAMPANHA.cashbackOpcoes.map(p => `<option value="${p}" ${Number(g.campanha.cashbackPct)===p?'selected':''}>${p}%</option>`).join('')}
+              </select>
+              <span class="hint" style="margin:0;">sobre ${fmtMoney(g.campanha.valorItens||0)} em ferramentas → <b id="gCashbackValor">${fmtMoney(g.valorTotal)}</b></span>
+            </div>` : ''}
           <textarea id="gMotivo" placeholder="Motivo (obrigatório só para recusar)" style="min-height:50px;"></textarea>
           <div class="modal-actions">
             <button class="ghost-btn" id="gRecusar" style="color:var(--danger); border-color:var(--danger);">Recusar</button>
             <button class="primary-btn" id="gAutorizar" style="background:var(--ok); border-color:var(--ok);">✓ Autorizar</button>
           </div>
         </div>`;
-      acoes.querySelector('#gAutorizar').onclick = () => gravar(alvo => {
+      const selPct = acoes.querySelector('#gCashbackPct');
+      if(selPct) selPct.onchange = () => { acoes.querySelector('#gCashbackValor').textContent = fmtMoney(gR2((g.campanha.valorItens||0) * Number(selPct.value) / 100)); };
+      acoes.querySelector('#gAutorizar').onclick = async () => { const pctNovo = selPct ? Number(selPct.value) : null; await gravar(alvo => {
         const agora = new Date().toISOString();
+        if(pctNovo !== null && alvo.campanha){
+          const cb = gR2((alvo.campanha.valorItens||0) * pctNovo / 100);
+          if(pctNovo !== Number(alvo.campanha.cashbackPct)) registrar(alvo, `Cashback alterado de ${alvo.campanha.cashbackPct}% para ${pctNovo}% (${fmtMoney(cb)})`);
+          alvo.campanha.cashbackPct = pctNovo;
+          alvo.valorTotal = cb;
+          alvo.itens = [{codigo:'CASHBACK-CAMPANHA', descricao: campanhaTextoCashback(pctNovo, alvo.campanha.valorItens, alvo.campanha.numeroPedido), quantidade:1, unitario: cb, total: cb, conferencia:{veio:null, destino:null}}];
+          alvo.obs = `💰 Cashback da ${CAMPANHA.nome} (out/2026): ${pctNovo}% sobre ${fmtMoney(alvo.campanha.valorItens||0)} em ferramentas do pedido ${alvo.campanha.numeroPedido||'s/ nº'}. Crédito integral para o lojista.`;
+        }
         alvo.autorizadoEm = agora; alvo.autorizadoPor = s.nome;
         if(alvo.clienteEnvia){
           alvo.status = 'aguardando_mercadoria';
@@ -10327,6 +10382,11 @@ async function abrirDetalheGarantia(numero, aoMudar){
           registrar(alvo, 'Autorizada — aguardando lançamento no sistema (sem envio de mercadoria)');
         }
       }, `Garantia nº ${g.numero} autorizada.`);
+        if(pctNovo !== null){
+          const salva = (STATE.garantias||[]).find(x => x.numero === g.numero);
+          if(salva && salva.status === 'conferida'){ try{ await campanhaSincronizarPctDoPedido(salva, pctNovo); }catch(e){ console.warn('sincronizar cashback', e); } }
+        }
+      };
       acoes.querySelector('#gRecusar').onclick = () => {
         const motivo = acoes.querySelector('#gMotivo').value.trim();
         if(!motivo){ avisar('Escreva o motivo da recusa.'); return; }

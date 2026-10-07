@@ -616,6 +616,28 @@
   .pl-busca-item{font-size:14.5px; min-width:0;}
   @media (max-width: 760px){ .pl-busca-linha{grid-template-columns:1fr;} }
 
+  /* ---------- RELATÓRIOS DO VENDEDOR ---------- */
+  .pl-periodo{display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:-4px 0 16px; font-size:13.5px; color:var(--ink-soft);}
+  .pl-ufs{display:flex; flex-direction:column; gap:4px;}
+  .pl-uf{display:flex; flex-direction:column; gap:5px; width:100%; text-align:left; background:none; border:1px solid transparent; border-radius:8px; padding:8px 10px; cursor:pointer; font:inherit; color:inherit;}
+  .pl-uf:hover, .pl-uf.aberta{border-color:var(--border); background:var(--bg);}
+  .pl-uf-top{display:flex; justify-content:space-between; align-items:baseline; gap:10px; font-size:14.5px;}
+  .pl-uf-top span{font-size:12.5px; color:var(--ink-soft); white-space:nowrap;}
+  .pl-uf-top i{font-style:normal; color:var(--primary); margin-left:4px;}
+  .pl-uf .progress-bar-track{display:block; margin-top:0;}
+  .pl-uf-lista{margin:2px 0 8px 10px; border-left:2px solid var(--accent); padding-left:6px;}
+  .pl-uf-lista td:first-child, .pl-uf-lista th:first-child{text-align:left;}
+  .pl-rel-grid{display:grid; grid-template-columns:repeat(auto-fit, minmax(380px, 1fr)); gap:16px; align-items:start; margin-bottom:22px;}
+  .pl-rel-grid .panel{margin-bottom:0;}
+  .pl-rel-h{display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px;}
+  .pl-rel-h h3{margin-bottom:0;}
+  .pl-rel-h span{display:flex; gap:6px;}
+  .pl-rel-tab td, .pl-rel-tab th{padding:7px 8px; font-size:13px;}
+  .pl-rel-tab td:nth-child(2), .pl-rel-tab th:nth-child(2), .pl-rel-tab td:nth-child(3), .pl-rel-tab th:nth-child(3){text-align:left;}
+  .pl-rel-tab td:nth-child(3){white-space:normal;}
+  .main table.pl-rel-tab, .main .pl-uf-lista table{display:table;}
+  @media (max-width: 620px){ .pl-rel-grid{grid-template-columns:1fr;} }
+
   /* ---------- CELULAR ---------- */
   .menu-toggle, .mobile-page, .menu-overlay, .drawer-head{display:none;}
   @media (max-width: 760px){
@@ -6799,63 +6821,165 @@ function renderVendorDashboard(main){
 }
 
 // ---------------- RELATÓRIOS (vendedor) ----------------
-// Tela nova com os blocos que saíram do Dashboard, exatamente como eram antes.
-function renderVendorRelatorios(main){
-  const s = vendorMonthStats(STATE.session.codigo);
-  const [anoSel] = s.mesChave.split('-').map(Number);
+// Período: mês do seletor do topo, últimos 12 meses ou o ano.
+// - Itens e clientes: usam o fechamento mensal importado (planilhas de pedidos/itens); o mês ainda
+//   não importado usa os pedidos registrados no CRM (clientes com valor; itens só com quantidade).
+// - Estados: somam os pedidos registrados no CRM; clicar num estado mostra os clientes dele.
+// Só lê dados; não grava nada.
+function relMesesDoPeriodo(periodo, mesChave){
+  const [ano, mes] = mesChave.split('-').map(Number);
+  const chave = (a, m) => `${a}-${String(m).padStart(2,'0')}`;
+  if(periodo === 'ano') return Array.from({length:12}, (_,i) => chave(ano, i+1));
+  if(periodo === '12m') return Array.from({length:12}, (_,i) => { const d = new Date(ano, mes-1-i, 1); return chave(d.getFullYear(), d.getMonth()+1); }).reverse();
+  return [mesChave];
+}
+
+async function renderVendorRelatorios(main){
+  const slotMes = document.getElementById('topoMes'); if(slotMes) slotMes.replaceChildren();
+  const vc = STATE.session.codigo, vcStr = String(vc);
+  const mesChave = STATE.mesSelecionado || currentMonthKey();
+  const [anoSel, mesSelN] = mesChave.split('-').map(Number);
+  STATE.relUI = STATE.relUI || {periodo:'mes', itensPor:'valor', ufAberta:null};
+  const ui = STATE.relUI;
+  const meses = relMesesDoPeriodo(ui.periodo, mesChave);
+  const mesesSet = new Set(meses);
+  const nomeMes = (k) => { const [a,m] = k.split('-').map(Number); const t = new Date(a, m-1, 1).toLocaleDateString('pt-BR', {month:'long', year:'numeric'}); return t.charAt(0).toUpperCase()+t.slice(1); };
+  const rotuloPeriodo = ui.periodo === 'mes' ? nomeMes(mesChave) : ui.periodo === '12m' ? `${nomeMes(meses[0])} a ${nomeMes(meses[11])}` : `Ano ${anoSel}`;
+
+  let todosClientes = STATE.roster;
+  try{ todosClientes = [...STATE.roster, ...(await getInativos())]; }catch(e){}
+  const porCodigo = new Map(todosClientes.map(c => [Number(c.codigo), c]));
+  const nomeCliente = (cod) => { const c = porCodigo.get(Number(cod)); return c ? c.nome : ''; };
+
+  // Pedidos registrados no CRM dentro do período (base dos estados e do mês em andamento).
+  const contatos = STATE.contatosCache[vc] || {};
+  const crmClientes = new Map(), crmItens = new Map(), porUf = {};
+  let totalUf = 0;
+  Object.entries(contatos).forEach(([cod, reg]) => {
+    (reg.historico||[]).forEach(h => {
+      if(!h.vendeu || !h.data || !mesesSet.has(h.data.slice(0,7))) return;
+      const codigo = Number(cod);
+      const cad = porCodigo.get(codigo);
+      const ufPed = (h.skus && h.skus.uf) ? String(h.skus.uf).trim().toUpperCase() : '';
+      const ufCad = cad ? String(cad.uf||'').trim().toUpperCase() : '';
+      const uf = UFS_VALIDAS.has(ufPed || ufCad) ? (ufPed || ufCad) : 'SEM UF';
+      const v = h.valor || 0;
+      if(!porUf[uf]) porUf[uf] = {valor:0, clientes:new Map()};
+      porUf[uf].valor += v; totalUf += v;
+      const cu = porUf[uf].clientes.get(codigo) || {codigo, valor:0, pedidos:0};
+      cu.valor += v; cu.pedidos += 1; porUf[uf].clientes.set(codigo, cu);
+      const cc = crmClientes.get(codigo) || {codigo, valor:0, qtdPedidos:0};
+      cc.valor += v; cc.qtdPedidos += 1; crmClientes.set(codigo, cc);
+      ((h.skus && h.skus.itens) || []).forEach(i => {
+        const sc = String(i.codigo||'').trim().toUpperCase(); if(!sc || sc==='—' || sc==='?') return;
+        const it = crmItens.get(sc) || {codigo:sc, descricao:i.descricao||'', quantidade:0, valor:null};
+        it.quantidade += (i.quantidade||0); crmItens.set(sc, it);
+      });
+    });
+  });
+
+  // Fechamento mensal importado: soma os meses do período que já foram importados.
+  const somarImportado = (fonte, campoQtd) => {
+    const mapa = new Map(); const mesesCom = [];
+    const anual = ui.periodo === 'ano' ? ((fonte[String(anoSel)]||{})[vcStr]) : null;
+    if(anual && anual.length){
+      anual.forEach(x => mapa.set(String(x.codigo), {...x}));
+      return {lista:[...mapa.values()], mesesCom:['ano']};
+    }
+    meses.forEach(m => {
+      const lista = (fonte[m]||{})[vcStr];
+      if(!lista || !lista.length) return;
+      mesesCom.push(m);
+      lista.forEach(x => {
+        const k = String(x.codigo);
+        const at = mapa.get(k) || {codigo:x.codigo, descricao:x.descricao, valor:0, [campoQtd]:0};
+        at.valor += (x.valor||0); at[campoQtd] += (x[campoQtd]||0);
+        if(!at.descricao && x.descricao) at.descricao = x.descricao;
+        mapa.set(k, at);
+      });
+    });
+    return {lista:[...mapa.values()], mesesCom};
+  };
+  const impItens = somarImportado(STATE.metasTopProdutos||{}, 'quantidade');
+  const impCli = somarImportado(STATE.metasTopClientes||{}, 'qtdPedidos');
+  const mesAtualSemFechamento = meses.includes(currentMonthKey()) && !impItens.mesesCom.includes(currentMonthKey());
+
+  let itens, itensFonte, itensTemValor;
+  if(impItens.lista.length){
+    itens = impItens.lista; itensTemValor = true;
+    itensFonte = impItens.mesesCom[0] === 'ano' ? 'fechamento do ano importado' : `fechamento mensal importado (${impItens.mesesCom.length} ${impItens.mesesCom.length===1?'mês':'meses'})` + (mesAtualSemFechamento ? ' · o mês atual entra quando for fechado' : '');
+  } else {
+    itens = [...crmItens.values()]; itensTemValor = false;
+    itensFonte = 'pedidos registrados no CRM (só quantidade; o valor por item vem com o fechamento do mês)';
+  }
+  const ordemItens = (itensTemValor && ui.itensPor === 'valor') ? 'valor' : 'quantidade';
+  itens = itens.sort((a,b) => (b[ordemItens]||0) - (a[ordemItens]||0));
+
+  let clientes, cliFonte;
+  if(impCli.lista.length){
+    clientes = impCli.lista; cliFonte = impCli.mesesCom[0] === 'ano' ? 'fechamento do ano importado' : `fechamento mensal importado (${impCli.mesesCom.length} ${impCli.mesesCom.length===1?'mês':'meses'})` + (mesAtualSemFechamento ? ' · o mês atual entra quando for fechado' : '');
+  } else {
+    clientes = [...crmClientes.values()]; cliFonte = 'pedidos registrados no CRM';
+  }
+  clientes = clientes.sort((a,b) => b.valor - a.valor);
+
+  const ufs = Object.entries(porUf).map(([uf, d]) => ({uf, valor:d.valor, pct: totalUf ? Math.round(d.valor/totalUf*100) : 0, clientes:[...d.clientes.values()].sort((a,b) => b.valor - a.valor)})).sort((a,b) => b.valor - a.valor);
+  const chip = (campo, v, l) => `<button type="button" class="pl-chip ${ui[campo]===v?'on':''}" data-campo="${campo}" data-v="${v}">${l}</button>`;
+
   main.innerHTML = `
-    <div class="page-header" style="display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap;">
-      <div><h2>Relatórios</h2></div>
+    <div class="page-header pl-topo">
+      <div><h2>Relatórios</h2><div class="pl-sub">${rotuloPeriodo}</div></div>
       ${mesSeletorHTML('seletorMesRelatorios')}
+    </div>
+    <div class="pl-periodo"><span>Período:</span>
+      ${chip('periodo','mes', 'Mês selecionado')}
+      ${chip('periodo','12m', 'Últimos 12 meses')}
+      ${chip('periodo','ano', `Ano ${anoSel}`)}
+    </div>
+
+    <div class="panel">
+      <h3>Vendas por estado</h3>
+      <p class="hint">Percentual do valor vendido em cada UF no período (pedidos registrados no CRM). Clique num estado para ver os clientes.</p>
+      ${ufs.length ? `<div class="pl-ufs">${ufs.map(d => `
+        <button type="button" class="pl-uf ${ui.ufAberta===d.uf?'aberta':''}" data-uf="${d.uf}" aria-expanded="${ui.ufAberta===d.uf}">
+          <span class="pl-uf-top"><b>${d.pct}% ${d.uf}</b><span>${fmtMoney(d.valor)} · ${d.clientes.length} ${d.clientes.length===1?'cliente':'clientes'} <i>${ui.ufAberta===d.uf?'▾':'▸'}</i></span></span>
+          <span class="progress-bar-track"><span class="progress-bar-fill" style="display:block; width:${d.pct}%; background:var(--accent);"></span></span>
+        </button>
+        ${ui.ufAberta===d.uf ? `<div class="pl-uf-lista"><table class="pl-goals"><thead><tr><th>Cliente</th><th>Pedidos</th><th>Valor</th></tr></thead><tbody>
+          ${d.clientes.map(c => `<tr><td><span class="client-name-link" data-codigo="${c.codigo}">${nomeCliente(c.codigo) || 'Cliente'}</span> <span class="client-num">Nº ${c.codigo}</span></td><td>${c.pedidos}</td><td>${fmtMoney(c.valor)}</td></tr>`).join('')}
+        </tbody></table></div>` : ''}`).join('')}</div>` : `<p class="hint">Nenhuma venda registrada no período.</p>`}
+    </div>
+
+    <div class="pl-rel-grid">
+      <div class="panel">
+        <div class="pl-rel-h"><h3>🏆 Itens que você mais vendeu</h3>
+          ${itensTemValor ? `<span>${chip('itensPor','valor','Por valor')}${chip('itensPor','quantidade','Por quantidade')}</span>` : ''}</div>
+        <p class="hint" style="margin-bottom:8px;">Fonte: ${itensFonte}.</p>
+        ${itens.length ? `<div class="pl-rolagem"><table class="pl-goals pl-rel-tab"><thead><tr><th></th><th>Código</th><th>Descrição</th>${itensTemValor?'<th>Valor</th>':''}<th>Qtd.</th></tr></thead><tbody>
+          ${itens.map((p,i) => `<tr><td class="pl-pos">${i+1}º</td><td>${p.codigo}</td><td>${p.descricao||''}</td>${itensTemValor?`<td>${fmtMoney(p.valor)}</td>`:''}<td>${Number(p.quantidade||0).toLocaleString('pt-BR')}</td></tr>`).join('')}
+        </tbody></table></div>` : `<p class="hint">Sem itens no período ainda.</p>`}
+      </div>
+      <div class="panel">
+        <div class="pl-rel-h"><h3>🏆 Seus maiores clientes</h3></div>
+        <p class="hint" style="margin-bottom:8px;">Fonte: ${cliFonte}.</p>
+        ${clientes.length ? `<div class="pl-rolagem"><table class="pl-goals pl-rel-tab"><thead><tr><th></th><th>Cliente</th><th>Valor</th><th>Pedidos</th></tr></thead><tbody>
+          ${clientes.map((c,i) => `<tr><td class="pl-pos">${i+1}º</td><td><span class="client-name-link" data-codigo="${c.codigo}">${nomeCliente(c.codigo) || 'Cliente'}</span> <span class="client-num">Nº ${c.codigo}</span></td><td>${fmtMoney(c.valor)}</td><td>${c.qtdPedidos||0}</td></tr>`).join('')}
+        </tbody></table></div>` : `<p class="hint">Sem clientes no período ainda.</p>`}
+      </div>
     </div>
 
     <div class="panel">
       <h3>Relatórios de SKU</h3>
-      <p class="hint">Baixa direto em Excel — os SKUs que você já vendeu esse mês, ou os que ainda faltam vender (comparando com o catálogo de produtos).</p>
+      <p class="hint">Baixa direto em Excel — os SKUs que você já vendeu no mês selecionado, ou os que ainda faltam vender (comparando com o catálogo de produtos).</p>
       <div class="form-row">
         <button class="ghost-btn" id="btnBaixarSkusVendidos">⬇️ Baixar SKUs vendidos</button>
         <button class="ghost-btn" id="btnBaixarSkusNaoVendidos">⬇️ Baixar SKUs não vendidos</button>
       </div>
     </div>
 
-    <div class="panel">
-      <h3>Distribuição das vendas por estado</h3>
-      <p class="hint">Percentual do valor vendido este mês em cada UF.</p>
-      ${distribuicaoUfHTML([STATE.session.codigo], s.mesChave)}
-    </div>
-
-    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(360px, 1fr)); gap:16px; align-items:start; margin-bottom:26px;">
-      <div class="panel">
-        <h3>🏆 Seus itens mais vendidos — ${anoSel}</h3>
-        ${(() => {
-          const top = (STATE.metasTopProdutos[String(anoSel)]||{})[String(STATE.session.codigo)] || [];
-          if(top.length===0) return `<p class="hint">Sem detalhe do ano ainda — vai preenchendo conforme os meses forem fechados.</p>`;
-          return `
-            <table class="cred-table" style="table-layout:fixed;">
-              <colgroup><col style="width:110px;"><col><col style="width:90px;"><col style="width:55px;"></colgroup>
-              <thead><tr><th>Código</th><th>Descrição</th><th>Valor</th><th>Qtd.</th></tr></thead>
-              <tbody>${top.map(p=>`<tr><td style="white-space:nowrap; font-size:12px;">${p.codigo}</td><td style="font-size:12px;">${p.descricao}</td><td style="white-space:nowrap;">${fmtMoney(p.valor)}</td><td>${p.quantidade}</td></tr>`).join('')}</tbody>
-            </table>
-          `;
-        })()}
-      </div>
-      <div class="panel">
-        <h3>🏆 Seus maiores clientes — ${anoSel}</h3>
-        ${(() => {
-          const top = (STATE.metasTopClientes[String(anoSel)]||{})[String(STATE.session.codigo)] || [];
-          if(top.length===0) return `<p class="hint">Sem detalhe do ano ainda — vai preenchendo conforme os meses forem fechados.</p>`;
-          return `
-            <table class="cred-table" style="table-layout:fixed;">
-              <colgroup><col style="width:90px;"><col><col style="width:80px;"></colgroup>
-              <thead><tr><th>Cliente Nº</th><th>Valor</th><th>Pedidos</th></tr></thead>
-              <tbody>${top.map(c=>`<tr><td>${c.codigo}</td><td style="white-space:nowrap;">${fmtMoney(c.valor)}</td><td>${c.qtdPedidos}</td></tr>`).join('')}</tbody>
-            </table>
-          `;
-        })()}
-      </div>
-    </div>
-
-    <div class="panel">
+    ${(() => {
+      const s = vendorMonthStats(vc);
+      return `<div class="panel">
       <h3>Atividade do mês</h3>
       ${s.atividade.length===0 ? `<div class="empty-state">Nenhum contato registrado nesse mês.</div>` : `
         <div class="client-list">
@@ -6873,12 +6997,14 @@ function renderVendorRelatorios(main){
           `).join('')}
         </div>
       `}
-    </div>
+    </div>`; })()}
   `;
-  document.getElementById('seletorMesRelatorios').onchange = (e) => {
+  main.querySelector('#seletorMesRelatorios').onchange = (e) => {
     STATE.mesSelecionado = e.target.value;
     renderVendorShell();
   };
+  main.querySelectorAll('.pl-periodo .pl-chip, .pl-rel-h .pl-chip').forEach(b => { b.onclick = () => { ui[b.dataset.campo] = b.dataset.v; renderVendorRelatorios(main); }; });
+  main.querySelectorAll('.pl-uf').forEach(b => { b.onclick = () => { ui.ufAberta = ui.ufAberta === b.dataset.uf ? null : b.dataset.uf; renderVendorRelatorios(main); }; });
   document.getElementById('btnBaixarSkusVendidos').onclick = () => baixarPlanilhaSkusVendidos();
   document.getElementById('btnBaixarSkusNaoVendidos').onclick = () => baixarPlanilhaSkusNaoVendidos();
   bindClientNameLinks(main);

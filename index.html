@@ -5182,7 +5182,7 @@ function campanhaItensDoPedido(itens){
   });
   return out;
 }
-// Pergunta o cashback do lojista quando o pedido tem itens da campanha. Devolve o % ou null (cancelou).
+// Pergunta o cashback do lojista quando o pedido tem itens da campanha. Devolve o %, 0 (sem cashback) ou null (cancelou).
 function campanhaPerguntarCashback(itensCamp){
   return new Promise(resolve => {
     const valor = itensCamp.reduce((s,i)=>s+i.valor,0);
@@ -5206,11 +5206,13 @@ function campanhaPerguntarCashback(itensCamp){
         <div id="campCashbackMsg"></div>
         <div class="modal-actions">
           <button class="ghost-btn" id="campCancelar">Voltar</button>
+          <button class="ghost-btn" id="campSemCashback">Sem cashback</button>
           <button class="primary-btn" id="campConfirmar">Confirmar cashback</button>
         </div>
       </div>`;
     document.body.appendChild(bd);
     bd.querySelector('#campCancelar').onclick = () => { bd.remove(); resolve(null); };
+    bd.querySelector('#campSemCashback').onclick = () => { bd.remove(); resolve(0); };
     bd.querySelector('#campConfirmar').onclick = () => {
       const v = Number(bd.querySelector('#campCashback').value);
       if(!v){ bd.querySelector('#campCashbackMsg').innerHTML = `<div class="msg err">Escolha o % de cashback.</div>`; return; }
@@ -5267,7 +5269,8 @@ async function campanhaSalvarCashback(vendedorCodigo, clienteCodigo, entradaId, 
   const itensCamp = campanhaItensDoPedido(h.skus.itens || []);
   const anterior = h.skus.campanha || {};
   const reg2 = campanhaMontarRegistro(itensCamp, pct === undefined ? anterior.cashbackPct : pct);
-  if(reg2.cashbackPct !== null){
+  if(reg2.cashbackPct === 0 && anterior.garantiaNumero) reg2.garantiaNumero = anterior.garantiaNumero;
+  if(reg2.cashbackPct){
     reg2.garantiaNumero = await campanhaGarantiaParaRegistro({vendedorCodigo, clienteCodigo, numeroPedido: h.skus.numeroPedido||'', uf: h.skus.uf||'', entradaId, reg: reg2}, anterior.garantiaNumero || null);
   }
   h.skus.campanha = reg2;
@@ -5294,7 +5297,7 @@ function campanhaTabelaPedidos(pedidos, mostrarVendedor){
     <tbody>${pedidos.map(p => `<tr>
       <td>${fmtDatePt(p.data)}</td><td>${p.numeroPedido||'—'}</td><td>${p.clienteNome}</td>${mostrarVendedor?`<td>${vendorNome(p.vendedorCodigo)}</td>`:''}
       <td style="text-align:right;">${p.itens.reduce((s,i)=>s+i.qtd,0)}</td><td style="text-align:right;">${fmtMoney(p.valorItens)}</td><td style="text-align:right;">${fmtMoney(p.premio)}</td>
-      <td style="text-align:right;">${p.cashbackPct===null ? '' : `${p.cashbackPct}% · ${fmtMoney(p.cashback)} `}<button class="ghost-btn campEditCb" style="padding:3px 8px; font-size:11.5px;" data-v="${p.vendedorCodigo}" data-c="${p.clienteCodigo}" data-e="${p.entradaId}">${p.cashbackPct===null?'⚠️ Informar':'Alterar'}</button></td>
+      <td style="text-align:right;">${p.cashbackPct===null ? '' : p.cashbackPct===0 ? 'Sem cashback ' : `${p.cashbackPct}% · ${fmtMoney(p.cashback)} `}<button class="ghost-btn campEditCb" style="padding:3px 8px; font-size:11.5px;" data-v="${p.vendedorCodigo}" data-c="${p.clienteCodigo}" data-e="${p.entradaId}">${p.cashbackPct===null?'⚠️ Informar':'Alterar'}</button></td>
       <td>${campanhaStatusGarantiaHTML(p)}</td>
     </tr>`).join('')}</tbody></table>`;
 }
@@ -5511,13 +5514,13 @@ async function campanhaSincronizarPctDoPedido(g, pct){
 async function campanhaEnviarPendentesParaGarantia(pedidos){
   let enviados = 0;
   for(const p of pedidos){
-    if(p.cashbackPct === null || p.garantiaNumero) continue;
+    if(!p.cashbackPct || p.garantiaNumero) continue;
     try{ await campanhaSalvarCashback(p.vendedorCodigo, p.clienteCodigo, p.entradaId, undefined); enviados++; }catch(e){ console.warn('campanha → garantia', e); }
   }
   return enviados;
 }
 function campanhaStatusGarantiaHTML(p){
-  if(p.cashbackPct === null) return '';
+  if(!p.cashbackPct && !p.garantiaNumero) return '';
   if(!p.garantiaNumero) return `<button class="ghost-btn campEnviarGar" style="padding:3px 8px; font-size:11.5px;" data-v="${p.vendedorCodigo}" data-c="${p.clienteCodigo}" data-e="${p.entradaId}">Enviar p/ Garantia</button>`;
   const g = (STATE.garantias||[]).find(x => x.numero === p.garantiaNumero);
   const st = g ? (g.excluida ? {label:'Excluída', cls:'danger'} : (GARANTIA_STATUS[g.status] || {label:g.status, cls:'info'})) : {label:'—', cls:'info'};
@@ -7719,7 +7722,7 @@ function abrirSubirPedidoModal(codigo){
           const pct = await campanhaPerguntarCashback(itensCamp);
           if(pct === null) return;
           skusInfoFinal.campanha = campanhaMontarRegistro(itensCamp, pct);
-          campanhaParaGarantia = true;
+          campanhaParaGarantia = pct > 0; // sem cashback (0) não gera Garantia
         }
       }
       const btnConf = step.querySelector('#btnConfirmarPedido');
@@ -10460,6 +10463,32 @@ async function abrirPdfGarantia(path){
 // Com NF de devolução: valor integral. Sem NF: total − IPI − ST − ICMS − PIS − Cofins, onde
 // ICMS/PIS/Cofins incidem sobre (valor financeiro − IPI − ST). ICMS 18% em SP, 4% nas demais UFs.
 // Itens que não vieram saem pelo valor proporcional: total do item × (valor da garantia ÷ total).
+// Motivos sugeridos de devolução (o vendedor pode escrever outro).
+const G_MOTIVOS_DEVOLUCAO = ['Defeito de fabricação','Não funcionou','Peça errada / código errado','Pedido errado (vendedor)','Avaria no transporte','Embalagem danificada','Cliente desistiu','Fora do prazo / sem giro'];
+function gDatalistMotivos(){ return `<datalist id="gMotivosLista">${G_MOTIVOS_DEVOLUCAO.map(m=>`<option value="${gEsc(m)}">`).join('')}</datalist>`; }
+// Quantidades da conferência de um item que veio: {estoque, defeito}.
+function gConfQtds(item){
+  const c = item.conferencia || {}; const q = Number(item.quantidade)||0;
+  if(c.destino === 'estoque') return {estoque:q, defeito:0};
+  if(c.destino === 'descarte') return {estoque:0, defeito:q};
+  if(c.destino === 'dividido') return {estoque:Number(c.qtdEstoque)||0, defeito:Number(c.qtdDefeito)||0};
+  return {estoque:0, defeito:0};
+}
+function gConfItemOk(item){
+  const c = item.conferencia || {};
+  if(c.veio === false) return true;
+  if(c.veio !== true || !c.destino) return false;
+  if(c.destino !== 'dividido') return true;
+  const q = gConfQtds(item);
+  return q.estoque >= 0 && q.defeito >= 0 && (q.estoque + q.defeito) === (Number(item.quantidade)||0);
+}
+function gDestinoTexto(item){
+  const c = item.conferencia || {};
+  if(c.destino === 'estoque') return 'Estoque';
+  if(c.destino === 'descarte') return 'Defeito / descarte';
+  if(c.destino === 'dividido'){ const q = gConfQtds(item); return `${q.estoque} estoque · ${q.defeito} defeito`; }
+  return '—';
+}
 function calcularGarantia(g){
   const total = gR2(g.valorTotal);
   const ipi = gR2(g.valorIpi);
@@ -10896,6 +10925,7 @@ async function renderNovaGarantia(el, aoConcluir){
     numeroOrcamento:'', clienteCodigo:'', clienteNome:'', cnpj:'', municipio:'', uf:'', consultor:'',
     valorTotal:0, valorIpi:0, valorSt:0, valorFinanceiro:null,
     nfDevolucao:null, clienteEnvia:null, fretePagoPor:'', freteValor:null, obs:'', itens:[],
+    motivoModo:'todos', motivoGeral:'',
   };
   let arquivoPdf = null;
 
@@ -10934,9 +10964,10 @@ async function renderNovaGarantia(el, aoConcluir){
 
   function desenharItens(){
     const box = form.querySelector('#gItens');
+    const porItem = d.motivoModo === 'item';
     box.innerHTML = `
       <table class="cred-table">
-        <thead><tr><th>Código</th><th>Descrição</th><th style="width:80px;">Qtd</th><th style="width:110px;">Unitário</th><th style="width:120px;">Total</th><th></th></tr></thead>
+        <thead><tr><th>Código</th><th>Descrição</th><th style="width:80px;">Qtd</th><th style="width:110px;">Unitário</th><th style="width:120px;">Total</th>${porItem ? '<th style="min-width:190px;">Motivo da devolução</th>' : ''}<th></th></tr></thead>
         <tbody>
           ${d.itens.map((i, idx) => `
             <tr>
@@ -10945,6 +10976,7 @@ async function renderNovaGarantia(el, aoConcluir){
               <td><input data-i="${idx}" data-f="quantidade" value="${gFmtNumInput(i.quantidade)}"></td>
               <td><input data-i="${idx}" data-f="unitario" value="${gFmtNumInput(i.unitario)}"></td>
               <td><input data-i="${idx}" data-f="total" value="${gFmtNumInput(i.total)}"></td>
+              ${porItem ? `<td><input data-i="${idx}" data-f="motivo" list="gMotivosLista" placeholder="Escolha ou escreva" value="${gEsc(i.motivo||'')}"></td>` : ''}
               <td><button type="button" class="ghost-btn" data-remover="${idx}" style="padding:5px 9px; color:var(--danger);">✕</button></td>
             </tr>`).join('')}
         </tbody>
@@ -10955,7 +10987,7 @@ async function renderNovaGarantia(el, aoConcluir){
       inp.oninput = () => {
         const item = d.itens[Number(inp.dataset.i)];
         const f = inp.dataset.f;
-        item[f] = (f === 'codigo' || f === 'descricao') ? inp.value : gNum(inp.value);
+        item[f] = (f === 'codigo' || f === 'descricao' || f === 'motivo') ? inp.value : gNum(inp.value);
         if((f === 'quantidade' || f === 'unitario') && item.quantidade && item.unitario){
           item.total = gR2(item.quantidade * item.unitario);
           const tot = box.querySelector(`input[data-i="${inp.dataset.i}"][data-f="total"]`);
@@ -10965,7 +10997,7 @@ async function renderNovaGarantia(el, aoConcluir){
       };
     });
     box.querySelectorAll('[data-remover]').forEach(b => { b.onclick = () => { d.itens.splice(Number(b.dataset.remover), 1); desenharItens(); desenharResumo(); }; });
-    box.querySelector('#gAddItem').onclick = () => { d.itens.push({codigo:'', descricao:'', quantidade:0, unitario:0, total:0}); desenharItens(); };
+    box.querySelector('#gAddItem').onclick = () => { d.itens.push({codigo:'', descricao:'', quantidade:0, unitario:0, total:0, motivo:''}); desenharItens(); };
   }
 
   function desenharClienteInfo(){
@@ -11000,6 +11032,16 @@ async function renderNovaGarantia(el, aoConcluir){
 
       <div class="panel">
         <h3>3. Perguntas</h3>
+        ${gDatalistMotivos()}
+        <label class="field-label">Motivo da devolução</label>
+        <div class="toggle-row" id="gMotivoModo" style="max-width:420px;">
+          <button type="button" class="toggle-btn ${d.motivoModo==='todos'?'active':''}" data-val="todos">Mesmo motivo para todos</button>
+          <button type="button" class="toggle-btn ${d.motivoModo==='item'?'active':''}" data-val="item">Item a item</button>
+        </div>
+        <div id="gMotivoGeralBox" style="margin:8px 0 14px; ${d.motivoModo==='todos'?'':'display:none;'}">
+          <input type="text" id="gMotivoGeral" list="gMotivosLista" value="${gEsc(d.motivoGeral)}" placeholder="Escolha ou escreva o motivo" style="width:100%; max-width:420px; padding:9px 12px; border:1px solid var(--border); border-radius:7px; font-size:13.5px;">
+        </div>
+        <p class="hint" id="gMotivoItemHint" style="margin:8px 0 14px; ${d.motivoModo==='item'?'':'display:none;'}">Preencha o motivo de cada item na coluna "Motivo da devolução" da tabela de itens acima.</p>
         <div class="form-row">
           ${campo('gVf', 'Valor financeiro — valor da NF (R$)', gFmtNumInput(d.valorFinanceiro), 'placeholder="ex: 464,94" style="width:100%; padding:9px 12px; border:1px solid var(--border); border-radius:7px; font-size:13.5px;"')}
         </div>
@@ -11056,6 +11098,18 @@ async function renderNovaGarantia(el, aoConcluir){
     q('#gSt').oninput = () => { d.valorSt = gNum(q('#gSt').value); desenharResumo(); };
     q('#gVf').oninput = () => { const v = q('#gVf').value.trim(); d.valorFinanceiro = v ? gNum(v) : null; desenharResumo(); };
     q('#gObs').oninput = () => { d.obs = q('#gObs').value; };
+    q('#gMotivoGeral').oninput = () => { d.motivoGeral = q('#gMotivoGeral').value; };
+    q('#gMotivoModo').querySelectorAll('.toggle-btn').forEach(b => {
+      b.onclick = () => {
+        d.motivoModo = b.dataset.val;
+        q('#gMotivoModo').querySelectorAll('.toggle-btn').forEach(x => x.classList.toggle('active', x === b));
+        q('#gMotivoGeralBox').style.display = d.motivoModo === 'todos' ? '' : 'none';
+        q('#gMotivoItemHint').style.display = d.motivoModo === 'item' ? '' : 'none';
+        // Ao passar pra item a item, já preenche com o motivo geral (se tiver) pra não perder.
+        if(d.motivoModo === 'item' && d.motivoGeral.trim()) d.itens.forEach(i => { if(!String(i.motivo||'').trim()) i.motivo = d.motivoGeral.trim(); });
+        desenharItens();
+      };
+    });
     q('#gFretePor').onchange = () => {
       d.fretePagoPor = q('#gFretePor').value;
       q('#gFreteValorBox').style.display = d.fretePagoPor === 'tf' ? '' : 'none';
@@ -11088,6 +11142,8 @@ async function renderNovaGarantia(el, aoConcluir){
     if(!d.itens.length) return erro('A garantia precisa de pelo menos um item.');
     if(d.itens.some(i => !String(i.codigo||'').trim() || !(i.quantidade > 0))) return erro('Todo item precisa de código e quantidade.');
     if(d.uf.length !== 2) return erro('Informe a UF do cliente (2 letras).');
+    if(d.motivoModo === 'todos' && !d.motivoGeral.trim()) return erro('Informe o motivo da devolução.');
+    if(d.motivoModo === 'item' && d.itens.some(i => !String(i.motivo||'').trim())) return erro('Informe o motivo da devolução de cada item.');
     if(d.nfDevolucao === null) return erro('Responda se o cliente fará NF de devolução.');
     if(d.clienteEnvia === null) return erro('Responda se o cliente vai enviar a mercadoria de volta.');
     if(d.nfDevolucao === false && !(d.valorFinanceiro > 0)) return erro('Informe o valor financeiro (valor da NF) — sem ele não dá pra calcular os impostos.');
@@ -11124,7 +11180,9 @@ async function renderNovaGarantia(el, aoConcluir){
         fretePagoPor: d.clienteEnvia ? (d.fretePagoPor || null) : null,
         freteValor: d.clienteEnvia && d.fretePagoPor === 'tf' && d.freteValor !== null ? gR2(d.freteValor) : null,
         obs: d.obs.trim(),
-        itens: d.itens.map(i => ({codigo: String(i.codigo).trim(), descricao: String(i.descricao||'').trim(), quantidade: Number(i.quantidade)||0, unitario: gR2(i.unitario), total: gR2(i.total), conferencia: {veio:null, destino:null}})),
+        motivoModo: d.motivoModo,
+        motivoDevolucao: d.motivoModo === 'todos' ? d.motivoGeral.trim() : '',
+        itens: d.itens.map(i => ({codigo: String(i.codigo).trim(), descricao: String(i.descricao||'').trim(), quantidade: Number(i.quantidade)||0, unitario: gR2(i.unitario), total: gR2(i.total), motivo: d.motivoModo === 'todos' ? d.motivoGeral.trim() : String(i.motivo||'').trim(), conferencia: {veio:null, destino:null}})),
         pdfPath,
         pdfNome: arquivoPdf ? arquivoPdf.name : null,
         status: 'pendente',
@@ -11206,8 +11264,10 @@ async function abrirDetalheGarantia(numero, aoMudar){
     const st = GARANTIA_STATUS[g.status] || {label:g.status, cls:'info'};
     const emConferencia = podeConferir && g.status === 'aguardando_mercadoria';
     const mostrarConferencia = g.clienteEnvia && ['aguardando_mercadoria','conferida','concluida'].includes(g.status);
-    const todosMarcados = (g.itens||[]).every(i => i.conferencia && (i.conferencia.veio === false || (i.conferencia.veio === true && i.conferencia.destino)));
+    const todosMarcados = (g.itens||[]).every(gConfItemOk);
     const linkCliente = !gConferente(s.tipo);
+    const temMotivoItem = g.motivoModo === 'item' && (g.itens||[]).some(i => i.motivo);
+    const scrollAnterior = (backdrop.querySelector('.modal')||{}).scrollTop || 0;
 
     backdrop.innerHTML = `
       <div class="modal" style="max-width:860px; max-height:88vh; overflow-y:auto;">
@@ -11232,7 +11292,9 @@ async function abrirDetalheGarantia(numero, aoMudar){
           ${g.valorFinanceiro ? `<span class="status-badge status-info">Valor financeiro: ${fmtMoney(g.valorFinanceiro)}</span>` : ''}
           ${g.pdfPath ? `<button class="ghost-btn" id="gAbrirPdf" style="padding:6px 12px;">📄 Abrir PDF</button>` : ''}
         </div>
+        ${g.motivoDevolucao ? `<div class="msg" style="background:var(--warn-soft); margin-bottom:12px;"><b>Motivo da devolução:</b> ${gEsc(g.motivoDevolucao)}</div>` : ''}
         ${g.obs ? `<div class="msg" style="background:var(--bg); margin-bottom:12px;"><b>Observação:</b> ${gEsc(g.obs)}</div>` : ''}
+        ${g.obsConferencia && !emConferencia ? `<div class="msg" style="background:var(--bg); margin-bottom:12px;"><b>Observação da conferência${g.conferidoPor ? ' ('+gEsc(g.conferidoPor)+')' : ''}:</b> ${gEsc(g.obsConferencia)}</div>` : ''}
         ${sac && (g.fotos||[]).length ? `<div style="margin-bottom:12px;"><div class="field-label">Fotos do problema</div><div id="gSacFotos" style="display:flex; flex-wrap:wrap; gap:8px;"><span class="hint">Carregando fotos...</span></div></div>` : ''}
         ${sac && g.sacParecer ? `
           <div class="msg" style="background:${g.sacParecer.procede ? 'var(--ok-soft)' : 'var(--danger-soft)'}; margin-bottom:12px;">
@@ -11246,7 +11308,7 @@ async function abrirDetalheGarantia(numero, aoMudar){
         <div style="overflow-x:auto;">
         <table class="cred-table">
           <thead><tr>
-            <th>Código</th><th>Descrição</th><th style="text-align:right;">Qtd</th><th style="text-align:right;">Unitário</th><th style="text-align:right;">Total</th>
+            <th>Código</th><th>Descrição</th>${temMotivoItem ? '<th>Motivo</th>' : ''}<th style="text-align:right;">Qtd</th><th style="text-align:right;">Unitário</th><th style="text-align:right;">Total</th>
             ${preDecisao ? '' : '<th style="text-align:right;">Na garantia</th>'}
             ${mostrarConferencia ? '<th>Chegou?</th><th>Destino</th>' : ''}
           </tr></thead>
@@ -11264,20 +11326,30 @@ async function abrirDetalheGarantia(numero, aoMudar){
                         <button class="toggle-btn ${conf.veio===false?'active':''}" data-conf="${idx}" data-veio="nao" data-val="nao" style="padding:6px 10px; ${conf.veio===false?'border-color:var(--danger); color:var(--danger); background:var(--danger-soft);':''}">✗ Não veio</button>
                       </div>
                     </td>
-                    <td>${conf.veio === true ? `
+                    <td style="min-width:200px;">${conf.veio === true ? `
                       <select class="filter-select" data-destino="${idx}" style="padding:6px 8px; font-size:13px;">
                         <option value="" ${!conf.destino?'selected':''}>Escolha…</option>
-                        <option value="estoque" ${conf.destino==='estoque'?'selected':''}>Volta pro estoque</option>
-                        <option value="descarte" ${conf.destino==='descarte'?'selected':''}>Descarte</option>
-                      </select>` : '—'}</td>`;
+                        <option value="estoque" ${conf.destino==='estoque'?'selected':''}>Tudo volta pro estoque</option>
+                        <option value="descarte" ${conf.destino==='descarte'?'selected':''}>Tudo com defeito / descarte</option>
+                        ${(Number(i.quantidade)||0) > 1 ? `<option value="dividido" ${conf.destino==='dividido'?'selected':''}>Dividir (parte estoque, parte defeito)</option>` : ''}
+                      </select>
+                      ${conf.destino === 'dividido' ? (() => { const q = gConfQtds(i); const ok = gConfItemOk(i); return `
+                        <div style="display:flex; gap:8px; align-items:center; margin-top:6px; font-size:12.5px; flex-wrap:wrap;">
+                          <label>Estoque <input type="number" min="0" step="1" data-qtdconf="${idx}" data-tipo="estoque" value="${q.estoque}" style="width:58px; padding:3px 6px;"></label>
+                          <label>Defeito <input type="number" min="0" step="1" data-qtdconf="${idx}" data-tipo="defeito" value="${q.defeito}" style="width:58px; padding:3px 6px;"></label>
+                        </div>
+                        <div style="font-size:11.5px; margin-top:3px; color:${ok ? 'var(--ok)' : 'var(--danger)'};">${ok ? '✓' : '⚠️'} ${q.estoque + q.defeito} de ${i.quantidade} peça(s)</div>`; })() : ''}` : '—'}
+                      <input type="text" data-obsconf="${idx}" value="${gEsc(conf.obs||'')}" placeholder="Observação (opcional)" style="width:100%; margin-top:6px; padding:4px 8px; font-size:12.5px; border:1px solid var(--border); border-radius:6px;">
+                    </td>`;
                 } else {
                   colunasConf = `<td>${conf.veio === true ? '<span style="color:var(--ok); font-weight:600;">✓ Veio</span>' : conf.veio === false ? '<span style="color:var(--danger); font-weight:600;">✗ Não veio</span>' : '—'}</td>
-                    <td>${conf.destino === 'estoque' ? 'Estoque' : conf.destino === 'descarte' ? 'Descarte' : '—'}</td>`;
+                    <td>${gDestinoTexto(i)}${conf.obs ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:3px;">📝 ${gEsc(conf.obs)}</div>` : ''}</td>`;
                 }
               }
               const riscado = naoVeio ? 'opacity:.5; text-decoration:line-through;' : '';
               return `<tr>
                 <td style="white-space:nowrap; ${riscado}"><b>${gEsc(i.codigo)}</b></td><td style="${riscado}">${gEsc(i.descricao)}</td>
+                ${temMotivoItem ? `<td style="font-size:12.5px; ${riscado}">${gEsc(i.motivo||'—')}</td>` : ''}
                 <td style="text-align:right; ${riscado}">${i.quantidade}</td>
                 <td style="text-align:right; white-space:nowrap; ${riscado}">${fmtMoney(i.unitario)}</td>
                 <td style="text-align:right; white-space:nowrap; ${riscado}">${fmtMoney(i.total)}</td>
@@ -11317,6 +11389,7 @@ async function abrirDetalheGarantia(numero, aoMudar){
       </div>
     `;
 
+    { const m = backdrop.querySelector('.modal'); if(m) m.scrollTop = scrollAnterior; }
     const acoes = backdrop.querySelector('#gAcoes');
     if(!g.excluida && ehGerente && g.status === 'pendente'){
       acoes.innerHTML = `
@@ -11498,7 +11571,9 @@ async function abrirDetalheGarantia(numero, aoMudar){
       acoes.innerHTML = `
         <div class="panel" style="margin-bottom:0; padding:16px 18px;">
           <h3 style="font-size:15px;">Conferência</h3>
-          <p class="hint" style="margin-bottom:10px;">Marque cada item: se veio, escolha estoque ou descarte. Item que não veio sai da garantia pelo valor proporcional — o valor acima já se atualiza.</p>
+          <p class="hint" style="margin-bottom:10px;">Marque cada item: se veio, escolha estoque, defeito ou divida a quantidade entre os dois. Item que não veio sai da garantia pelo valor proporcional — o valor acima já se atualiza.</p>
+          <label class="field-label">Observações da conferência (opcional)</label>
+          <textarea id="gObsConf" class="import-area" style="min-height:56px;" placeholder="Ex.: caixa chegou amassada, 2 peças sem embalagem...">${gEsc(g.obsConferencia||'')}</textarea>
           <div class="modal-actions">
             <button class="ghost-btn" id="gSalvarConf">Salvar e continuar depois</button>
             <button class="primary-btn" id="gFinalizarConf" ${todosMarcados ? '' : 'disabled style="opacity:.5; cursor:not-allowed;"'}>Finalizar conferência</button>
@@ -11519,13 +11594,37 @@ async function abrirDetalheGarantia(numero, aoMudar){
           const item = g.itens[Number(b.dataset.conf)];
           item.conferencia = item.conferencia || {veio:null, destino:null};
           item.conferencia.veio = b.dataset.veio === 'sim';
-          if(!item.conferencia.veio) item.conferencia.destino = null;
+          if(!item.conferencia.veio){ item.conferencia.destino = null; delete item.conferencia.qtdEstoque; delete item.conferencia.qtdDefeito; }
           desenhar();
         };
       });
       backdrop.querySelectorAll('[data-destino]').forEach(sel => {
-        sel.onchange = () => { g.itens[Number(sel.dataset.destino)].conferencia.destino = sel.value || null; desenhar(); };
+        sel.onchange = () => {
+          const item = g.itens[Number(sel.dataset.destino)];
+          const c = item.conferencia;
+          c.destino = sel.value || null;
+          if(c.destino === 'dividido'){
+            if(c.qtdEstoque === undefined){ c.qtdEstoque = Number(item.quantidade)||0; c.qtdDefeito = 0; }
+          } else { delete c.qtdEstoque; delete c.qtdDefeito; }
+          desenhar();
+        };
       });
+      backdrop.querySelectorAll('[data-qtdconf]').forEach(inp => {
+        inp.onchange = () => {
+          const item = g.itens[Number(inp.dataset.qtdconf)];
+          const total = Number(item.quantidade)||0;
+          const v = Math.max(0, Math.min(total, Math.round(Number(inp.value)||0)));
+          // Preenche o outro lado automaticamente com o que sobra.
+          if(inp.dataset.tipo === 'estoque'){ item.conferencia.qtdEstoque = v; item.conferencia.qtdDefeito = total - v; }
+          else { item.conferencia.qtdDefeito = v; item.conferencia.qtdEstoque = total - v; }
+          desenhar();
+        };
+      });
+      backdrop.querySelectorAll('[data-obsconf]').forEach(inp => {
+        inp.oninput = () => { const it = g.itens[Number(inp.dataset.obsconf)]; it.conferencia = it.conferencia || {veio:null, destino:null}; it.conferencia.obs = inp.value; };
+      });
+      const obsConfEl = acoes.querySelector('#gObsConf');
+      if(obsConfEl) obsConfEl.oninput = () => { g.obsConferencia = obsConfEl.value; };
     }
     if(!g.excluida && podeConferir && g.status === 'conferida'){
       acoes.innerHTML = `

@@ -434,13 +434,34 @@
   .pl-pace b{font-weight:600;}
   .pl-pace .ok{color:var(--pace-ok);} .pl-pace .warn{color:var(--pace-warn);} .pl-pace .bad{color:var(--pace-bad);} .pl-pace .dim{color:var(--board-dim);}
   .pl-tl{background:var(--board-2); padding:8px 16px 6px; border:1px solid var(--board-line); border-top:0; border-radius:0 0 var(--radius) var(--radius); margin-bottom:14px;}
-  .pl-dias{display:flex; gap:2px; align-items:center; height:16px;}
-  .pl-d{flex:1; height:6px; background:var(--tl-track); position:relative; border-radius:1px;}
-  .pl-d.passou{background:var(--tl-done);}
-  .pl-d.fds{background:transparent; border-top:1px dashed var(--tl-we); height:0;}
-  .pl-d.venda::after{content:""; position:absolute; left:50%; top:50%; width:8px; height:8px; margin:-4px 0 0 -4px; border-radius:50%; background:var(--tl-dot);}
-  .pl-d.hoje{background:var(--primary);}
-  .pl-d.hoje::before{content:""; position:absolute; left:50%; top:-7px; margin-left:-4px; border:4px solid transparent; border-top-color:var(--primary);}
+  .pl-dias{display:flex; gap:2px; align-items:center; height:22px;}
+  .pl-d{flex:1; height:22px; position:relative; display:flex; align-items:center; background:none; border:0; padding:0; margin:0; border-radius:3px; min-width:0;}
+  button.pl-d{cursor:pointer;}
+  button.pl-d:hover, button.pl-d.sel{background:color-mix(in srgb, var(--board-ink) 12%, transparent);}
+  .pl-d i{display:block; width:100%; height:6px; background:var(--tl-track); border-radius:1px;}
+  .pl-d.passou i{background:var(--tl-done);}
+  .pl-d.fds i{background:transparent; border-top:1px dashed var(--tl-we); height:0;}
+  .pl-d.venda::after{content:""; position:absolute; left:50%; top:50%; width:8px; height:8px; margin:-4px 0 0 -4px; border-radius:50%; background:var(--tl-dot); pointer-events:none;}
+  .pl-d.hoje i{background:var(--primary);}
+  .pl-d.hoje::before{content:""; position:absolute; left:50%; top:-4px; margin-left:-4px; border:4px solid transparent; border-top-color:var(--primary); pointer-events:none;}
+  .pl-semanas{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;}
+  .pl-sem{display:inline-flex; gap:8px; align-items:baseline; padding:5px 10px; border-radius:7px; border:1px solid color-mix(in srgb, var(--board-dim) 45%, transparent); background:none; color:var(--board-dim); font:inherit; font-size:12.5px;}
+  .pl-sem b{font-family:var(--font-display); font-size:16px; font-weight:600; color:var(--board-ink); font-variant-numeric:tabular-nums;}
+  button.pl-sem{cursor:pointer;}
+  button.pl-sem:hover{border-color:var(--board-ink);}
+  .pl-sem.sel{background:var(--primary); border-color:var(--primary); color:#fff;}
+  .pl-sem.sel b{color:#fff;}
+  .pl-sem.futura{opacity:.55;}
+  .pl-dia-info{margin-top:10px; padding:10px 12px; border-radius:8px; background:var(--board); border:1px solid color-mix(in srgb, var(--board-dim) 35%, transparent); color:var(--board-ink); font-size:13.5px;}
+  .pl-dia-top{display:flex; justify-content:space-between; align-items:center; gap:10px; color:var(--board-dim); font-weight:600;}
+  .pl-dia-x{background:none; border:0; color:var(--board-dim); cursor:pointer; font-size:14px; padding:2px 6px; border-radius:6px;}
+  .pl-dia-x:hover{color:var(--board-ink);}
+  .pl-dia-val{margin-top:4px;}
+  .pl-dia-val b{font-family:var(--font-display); font-size:26px; font-weight:600; margin-right:4px; font-variant-numeric:tabular-nums;}
+  .pl-dia-sem{margin-top:2px; color:var(--board-dim);}
+  .pl-dia-sem b{color:var(--board-ink);}
+  .pl-dia-vend{display:flex; flex-wrap:wrap; gap:6px 16px; margin-top:8px; padding-top:8px; border-top:1px solid color-mix(in srgb, var(--board-dim) 25%, transparent); color:var(--board-dim);}
+  .pl-dia-vend b{color:var(--board-ink); font-weight:600;}
   .pl-leg{display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; font-size:11.5px; color:var(--board-dim); margin-top:4px;}
   .pl-leg span{display:inline-flex; align-items:center; gap:5px;}
   .pl-dot{width:7px; height:7px; border-radius:50%; background:var(--tl-dot); display:inline-block;}
@@ -6339,19 +6360,106 @@ function placarMil(v){
   v = Number(v)||0;
   return v >= 1000 ? 'R$ ' + (v/1000).toLocaleString('pt-BR', {maximumFractionDigits:1}) + ' mil' : fmtMoney(v);
 }
-function placarLinhaTempoHTML(anoSel, mesSel, diasNoMes, diaAtual, mesEhAtual, diasComVenda){
+// Soma as vendas registradas por dia do mês: {dia: {valor, pedidos, porVendedor:{nome: valor}}}.
+// Recebe a lista de atividades (a mesma de vendorMonthStats) e, opcionalmente, o nome do vendedor.
+function placarSomarVendasPorDia(destino, atividades, nomeVendedor){
+  (atividades||[]).forEach(a => {
+    if(!a.vendeu || !a.data) return;
+    const d = Number(String(a.data).slice(8,10));
+    if(!destino[d]) destino[d] = {valor:0, pedidos:0, porVendedor:{}};
+    destino[d].valor += (a.valor||0);
+    destino[d].pedidos += 1;
+    if(nomeVendedor) destino[d].porVendedor[nomeVendedor] = (destino[d].porVendedor[nomeVendedor]||0) + (a.valor||0);
+  });
+  return destino;
+}
+// Semanas do mês (segunda a domingo), cortadas no começo e no fim do mês.
+function placarSemanasDoMes(anoSel, mesSel, diasNoMes){
+  const semanas = [];
+  let ini = 1;
+  for(let d=1; d<=diasNoMes; d++){
+    const wd = new Date(anoSel, mesSel-1, d).getDay();
+    if(wd === 0 || d === diasNoMes){ semanas.push({ini, fim:d}); ini = d+1; }
+  }
+  return semanas;
+}
+function placarLinhaTempoHTML(anoSel, mesSel, diasNoMes, diaAtual, mesEhAtual, vendasPorDia){
+  vendasPorDia = vendasPorDia || {};
+  const mm = String(mesSel).padStart(2,'0');
   let cel = '';
   for(let d=1; d<=diasNoMes; d++){
     const wd = new Date(anoSel, mesSel-1, d).getDay();
     const fds = wd===0 || wd===6;
     const passou = d <= diaAtual;
     const hoje = mesEhAtual && d === diaAtual;
-    const venda = !fds && passou && diasComVenda.has(d);
-    cel += `<span class="pl-d ${fds?'fds':''} ${passou&&!fds?'passou':''} ${hoje?'hoje':''} ${venda?'venda':''}"></span>`;
+    const info = vendasPorDia[d];
+    const venda = passou && info && info.pedidos > 0;
+    const cls = `pl-d ${fds?'fds':''} ${passou&&!fds?'passou':''} ${hoje?'hoje':''} ${venda?'venda':''}`;
+    if(passou){
+      const dica = `${String(d).padStart(2,'0')}/${mm}: ${info ? fmtMoney(info.valor) : 'sem venda'}`;
+      cel += `<button type="button" class="${cls}" data-ini="${d}" data-fim="${d}" title="${dica}" aria-label="${dica}"><i></i></button>`;
+    } else {
+      cel += `<span class="${cls}"><i></i></span>`;
+    }
   }
+  const semanas = placarSemanasDoMes(anoSel, mesSel, diasNoMes);
+  const chips = semanas.map(s => {
+    const total = Object.keys(vendasPorDia).filter(d => d >= s.ini && d <= s.fim).reduce((t,d) => t + vendasPorDia[d].valor, 0);
+    const rotulo = s.ini === s.fim ? `${s.ini}/${mm}` : `${s.ini} a ${s.fim}/${mm}`;
+    if(s.ini > diaAtual) return `<span class="pl-sem futura"><span>${rotulo}</span><b>—</b></span>`;
+    return `<button type="button" class="pl-sem" data-ini="${s.ini}" data-fim="${s.fim}"><span>${rotulo}</span><b>${placarMil(total)}</b></button>`;
+  }).join('');
+  return `<div class="pl-tl">
+    <div class="pl-dias">${cel}</div>
+    <div class="pl-leg"><span>1/${mm}</span><span><i class="pl-dot"></i>dia com venda · clique num dia ou numa semana para ver o quanto vendeu</span><span>${diasNoMes}/${mm}</span></div>
+    <div class="pl-semanas">${chips}</div>
+    <div class="pl-dia-info" hidden></div>
+  </div>`;
+}
+// Liga os cliques da linha do tempo: dia ou semana -> total vendido, pedidos e (gerente) por vendedor.
+function placarBindLinhaTempo(container, anoSel, mesSel, diasNoMes, diaAtual, vendasPorDia, mostrarVendedores){
+  const tl = container.querySelector('.pl-tl');
+  if(!tl) return;
+  const box = tl.querySelector('.pl-dia-info');
   const mm = String(mesSel).padStart(2,'0');
-  return `<div class="pl-tl"><div class="pl-dias" aria-hidden="true">${cel}</div>
-    <div class="pl-leg"><span>1/${mm}</span><span><i class="pl-dot"></i>dia com venda</span><span>${diasNoMes}/${mm}</span></div></div>`;
+  const semanas = placarSemanasDoMes(anoSel, mesSel, diasNoMes);
+  let aberto = null;
+  const somar = (ini, fim) => {
+    const r = {valor:0, pedidos:0, porVendedor:{}};
+    for(let d=ini; d<=Math.min(fim, diaAtual); d++){
+      const v = vendasPorDia[d]; if(!v) continue;
+      r.valor += v.valor; r.pedidos += v.pedidos;
+      Object.entries(v.porVendedor).forEach(([n,x]) => { r.porVendedor[n] = (r.porVendedor[n]||0) + x; });
+    }
+    return r;
+  };
+  const mostrar = (ini, fim, btn) => {
+    const chave = ini+'-'+fim;
+    tl.querySelectorAll('.sel').forEach(b => b.classList.remove('sel'));
+    if(aberto === chave){ aberto = null; box.hidden = true; return; }
+    aberto = chave; btn.classList.add('sel');
+    const r = somar(ini, fim);
+    const ehDia = ini === fim;
+    const titulo = ehDia
+      ? (() => { const t = new Date(anoSel, mesSel-1, ini).toLocaleDateString('pt-BR', {weekday:'long', day:'2-digit', month:'2-digit'}); return t.charAt(0).toUpperCase() + t.slice(1); })()
+      : `Semana de ${String(ini).padStart(2,'0')}/${mm} a ${String(fim).padStart(2,'0')}/${mm}`;
+    let extra = '';
+    if(ehDia){
+      const sem = semanas.find(s => ini >= s.ini && ini <= s.fim);
+      if(sem && sem.ini !== sem.fim){ const rs = somar(sem.ini, sem.fim); extra = `<div class="pl-dia-sem">Na semana (${sem.ini} a ${sem.fim}/${mm}): <b>${fmtMoney(rs.valor)}</b> em ${rs.pedidos} pedido(s)</div>`; }
+    }
+    const vend = Object.entries(r.porVendedor).filter(([,x]) => x > 0).sort((a,b) => b[1]-a[1]);
+    box.innerHTML = `
+      <div class="pl-dia-top"><span>${titulo}</span><button type="button" class="pl-dia-x" aria-label="Fechar">✕</button></div>
+      ${r.pedidos ? `<div class="pl-dia-val"><b>${fmtMoney(r.valor)}</b> em ${r.pedidos} pedido(s)</div>` : `<div class="pl-dia-val">Nenhuma venda registrada ${ehDia ? 'nesse dia' : 'nessa semana'}.</div>`}
+      ${extra}
+      ${mostrarVendedores && vend.length ? `<div class="pl-dia-vend">${vend.map(([n,x]) => `<span>${n} <b>${fmtMoney(x)}</b></span>`).join('')}</div>` : ''}`;
+    box.hidden = false;
+    box.querySelector('.pl-dia-x').onclick = () => { aberto = null; box.hidden = true; tl.querySelectorAll('.sel').forEach(b => b.classList.remove('sel')); };
+  };
+  tl.querySelectorAll('button[data-ini]').forEach(b => {
+    b.onclick = () => mostrar(Number(b.dataset.ini), Number(b.dataset.fim), b);
+  });
 }
 
 function renderVendorDashboard(main){
@@ -6411,7 +6519,7 @@ function renderVendorDashboard(main){
   };
 
   // Dias com venda no mês (bolinhas da linha do tempo), a partir da atividade registrada.
-  const diasComVenda = new Set(s.atividade.filter(a => a.vendeu && a.data).map(a => Number(String(a.data).slice(8,10))));
+  const vendasPorDia = placarSomarVendasPorDia({}, s.atividade);
 
   // Escalação de hoje: quem pediu retorno hoje + quem tem crédito livre e não comprou no mês.
   const nomeDia = new Date().toLocaleDateString('pt-BR', {weekday:'long'});
@@ -6475,7 +6583,7 @@ function renderVendorDashboard(main){
       </div>
       <div class="pl-pace"><b class="${ritmoCls}">${ritmoTxt}</b><span class="dim">${ritmoSub}</span></div>
     </div>
-    ${placarLinhaTempoHTML(anoSel, mesSel, diasNoMes, diaAtual, s.mesEhAtual, diasComVenda)}
+    ${placarLinhaTempoHTML(anoSel, mesSel, diasNoMes, diaAtual, s.mesEhAtual, vendasPorDia)}
 
     ${s.mesEhAtual ? `
       <div class="pl-dica">
@@ -6524,6 +6632,7 @@ function renderVendorDashboard(main){
     STATE.mesSelecionado = e.target.value;
     renderVendorShell();
   };
+  placarBindLinhaTempo(main, anoSel, mesSel, diasNoMes, diaAtual, vendasPorDia, false);
   const irPara = (pagina) => { STATE.route = {page: pagina}; renderVendorShell(); try{ window.scrollTo(0,0); }catch(e){} };
   const btnHoje = document.getElementById('plVerHoje'); if(btnHoje) btnHoje.onclick = () => irPara('hoje');
   document.getElementById('plIrRelatorios').onclick = (e) => { e.preventDefault(); irPara('relatorios'); };
@@ -8186,7 +8295,7 @@ function renderManagerOverview(main){
   const totalClientes = STATE.roster.filter(c => !codigosOcultos.has(c.vendedorCodigo)).length;
   let totalAtrasados = 0, totalHojeFeitos = 0, totalHoje = 0, totalVendas = 0, totalValorVendas = 0, totalPositivados = 0, totalContatadosMes = 0, totalMetaVendas = 0, totalDevedores = 0, totalValorDevido = 0;
   const porVendedor = [];
-  const diasComVenda = new Set();
+  const vendasPorDia = {};
   vendVisiveis.forEach(v=>{
     const s = vendorStats(v.codigo);
     const m = vendorMonthStats(v.codigo);
@@ -8195,7 +8304,7 @@ function renderManagerOverview(main){
     totalVendas += m.numVendas; totalValorVendas += m.valorVendas; totalPositivados += m.positivados;
     totalContatadosMes += m.contatadosMes; totalMetaVendas += (m.metaVendas||0); totalDevedores += inad.qtd;
     totalValorDevido += inad.total;
-    m.atividade.forEach(a => { if(a.vendeu && a.data) diasComVenda.add(Number(String(a.data).slice(8,10))); });
+    placarSomarVendasPorDia(vendasPorDia, m.atividade, v.nome);
     porVendedor.push({v, s, m, inad});
   });
   const naoCadastrados = STATE.config.inadimplenciaNaoCadastrados || {qtd:0, total:0};
@@ -8260,7 +8369,7 @@ function renderManagerOverview(main){
       </div>
       <div class="pl-pace"><b class="${ritmoCls}">${ritmoTxt}</b><span class="dim">${ritmoSub}</span></div>
     </div>
-    ${placarLinhaTempoHTML(anoSel, mesSel, diasNoMes, diaAtual, mesEhAtual, diasComVenda)}
+    ${placarLinhaTempoHTML(anoSel, mesSel, diasNoMes, diaAtual, mesEhAtual, vendasPorDia)}
 
     <section class="pl-painel pl-ranking">
       <div class="pl-ph"><h3>Classificação da equipe</h3><span>${ehGerente ? 'clique no vendedor para ver a carteira' : 'por % da meta de vendas'}</span></div>
@@ -8338,6 +8447,7 @@ function renderManagerOverview(main){
     STATE.mesSelecionado = e.target.value;
     if(STATE.session.tipo === 'gerente') renderManagerShell(); else renderComprasShell();
   };
+  placarBindLinhaTempo(main, anoSel, mesSel, diasNoMes, diaAtual, vendasPorDia, true);
   main.querySelectorAll('.pl-rank tr[data-codigo]').forEach(el=>{
     const abrir = () => {
       if(STATE.session.tipo !== 'gerente') return; // Roberto (compras) só tem Visão geral, não o detalhe por vendedor.

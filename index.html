@@ -176,31 +176,51 @@
   .modo-toggle button:hover{color:var(--ink);}
   .modo-toggle button[aria-pressed="true"]{background:var(--ink); color:var(--surface); font-weight:600;}
 
-  /* ---------- MENU NO TOPO (computador) ----------
+  /* ---------- MENU (computador) ----------
+     Em cima: o que é de vendas. Ao lado: os módulos (Financeira, Compras, Estoque, Configurações)
+     e, no vendedor, as ferramentas. No canto direito: seletor de mês, usuário, Claro/Escuro, Atualizar e Sair.
      No celular continua a gaveta lateral de antes (regras em "CELULAR" lá embaixo). */
+  .nav-titulo{font-size:12px; font-weight:700; color:color-mix(in srgb, var(--pitch-ink) 70%, transparent); padding:14px 13px 6px; letter-spacing:.02em;}
+  .nav-vendas, .nav-modulos{display:flex; flex-direction:column; gap:3px;}
   @media (min-width: 761px){
-    .shell{display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-areas:"nav user" "main main"; align-content:start; min-height:100vh;}
-    .sidebar{grid-area:nav; width:auto; flex-direction:row; flex-wrap:nowrap; align-items:center; gap:0 4px; padding:0 0 0 20px; border-bottom:1px solid var(--nav-line);}
-    .sidebar .brand{margin:0 14px 0 0; padding:9px 0;}
+    .shell{display:grid; grid-template-columns:220px minmax(0,1fr); grid-template-rows:auto auto 1fr; grid-template-areas:"brand util" "brand vendas" "side main"; min-height:100vh;}
+    .shell::before{content:""; grid-area:1 / 1 / 3 / 3; background:var(--pitch); border-bottom:1px solid var(--nav-line);}
+    .shell::after{content:""; grid-area:side; background:var(--pitch); border-right:1px solid var(--nav-line);}
+    .sidebar, .sidebar nav{display:contents;}
+    .sidebar .brand{grid-area:brand; position:relative; z-index:1; margin:0; padding:10px 20px; align-self:center;}
     .sidebar .brand .mark{width:30px; height:30px; box-shadow:0 0 0 1px var(--nav-line);}
-    .sidebar .brand .name{font-size:18px; color:var(--nav-strong);}
-    .sidebar nav{flex:1 1 0; min-width:0; flex-direction:row; flex-wrap:wrap; align-items:stretch; gap:0;}
-    .sidebar .nav-item{border-radius:0; padding:15px 11px 12px; border-bottom:3px solid transparent; background:none; white-space:nowrap;}
-    .sidebar .nav-item:hover{background:none;}
-    .sidebar .nav-item.active{background:none; border-bottom-color:var(--primary); color:var(--nav-strong);}
-    .sidebar .nav-group{gap:6px;}
-    .sidebar .nav-sub{margin:0; padding:0; border-left:0; flex-direction:row; align-items:stretch; gap:0; background:color-mix(in srgb, var(--pitch-ink) 8%, transparent);}
-    .sidebar .nav-sub .nav-item{font-size:14px; padding:15px 10px 12px;}
-    .topbar-user{grid-area:user; position:static; align-self:stretch; border-radius:0; border:0; border-bottom:1px solid var(--nav-line); background:var(--pitch); box-shadow:none; padding:6px 20px 6px 12px;}
-    .topbar-user .whoami{color:var(--pitch-ink);}
-    .topbar-user .whoami b{color:var(--nav-strong);}
-    .topbar-user .whoami-avatar{border-color:var(--nav-line);}
-    .topbar-user .logout-btn{border-color:color-mix(in srgb, var(--pitch-ink) 35%, transparent); color:var(--pitch-ink); background:none;}
+    .sidebar .brand .name{font-size:19px; color:var(--nav-strong);}
+    .nav-vendas{grid-area:vendas; position:relative; z-index:1; flex-direction:row; flex-wrap:wrap; align-items:stretch; gap:0; min-width:0;}
+    .nav-vendas .nav-item{border-radius:0; padding:10px 12px 11px; border-bottom:3px solid transparent; background:none; white-space:nowrap;}
+    .nav-vendas .nav-item:hover{background:none;}
+    .nav-vendas .nav-item.active{background:none; border-bottom-color:var(--primary); color:var(--nav-strong);}
+    .nav-modulos{grid-area:side; position:sticky; top:0; z-index:1; align-self:start; padding:8px 12px 24px; max-height:100vh; overflow-y:auto;}
+    .nav-modulos .nav-item{padding:10px 13px; font-size:14.5px;}
+    .nav-modulos .nav-item.active{box-shadow:inset 3px 0 0 var(--primary);}
+    .topbar-user{grid-area:util; position:relative; top:auto; right:auto; z-index:1; justify-self:end; align-self:center; border-radius:0; border:0; background:none; box-shadow:none; padding:8px 20px 0 12px; gap:8px;}
+    .topbar-user .whoami{color:var(--pitch-ink); font-size:11.5px;}
+    .topbar-user .whoami b{color:var(--nav-strong); font-size:13px;}
+    .topbar-user .whoami-avatar{width:30px; height:30px; border-color:var(--nav-line);}
+    .topbar-user .logout-btn{border-color:color-mix(in srgb, var(--pitch-ink) 35%, transparent); color:var(--pitch-ink); background:none; padding:6px 9px;}
     .topbar-user .logout-btn:hover{border-color:var(--primary); color:var(--nav-strong); background:none;}
     .topbar-user .modo-toggle{border-color:color-mix(in srgb, var(--pitch-ink) 35%, transparent); background:none;}
     .topbar-user .modo-toggle button{color:var(--pitch-ink);}
     .topbar-user .modo-toggle button[aria-pressed="true"]{background:var(--nav-strong); color:var(--pitch);}
-    .main{grid-area:main; width:100%; max-width:1240px; margin:0 auto; padding:24px 32px 48px; overflow:visible;}
+    .topo-mes:empty{display:none;}
+    .topo-mes .mes-bar{border:1px solid color-mix(in srgb, var(--pitch-ink) 35%, transparent); background:none; box-shadow:none; border-radius:10px; padding:3px 4px; gap:4px;}
+    .topo-mes .mes-bar .mes-bar-label{display:none;}
+    .topo-mes .mes-bar select{font-size:15px; min-width:150px; padding:3px 2px; color:var(--nav-strong);}
+    .topo-mes .mes-bar select option{color:var(--ink); background:var(--surface);}
+    .topo-mes .mes-bar .mes-nav{width:28px; height:28px; font-size:12px; background:none; border-color:color-mix(in srgb, var(--pitch-ink) 35%, transparent); color:var(--nav-strong);}
+    .topo-mes .mes-bar .mes-badge{font-size:11px; padding:3px 8px;}
+    .main{grid-area:main; width:100%; max-width:1240px; margin:0 auto; padding:18px 28px 48px; overflow:visible;}
+    .main .page-header{margin-bottom:14px;}
+  }
+  @media (min-width: 761px) and (max-width: 1280px){
+    .shell{grid-template-columns:190px minmax(0,1fr);}
+    .nav-vendas .nav-item{padding:10px 9px 11px; font-size:14px;}
+    .topbar-user .whoami{display:none;}
+    .topo-mes .mes-bar .mes-badge{display:none;}
   }
   .page-header{margin-bottom:24px;}
   .page-header:has(.mes-bar){flex-direction:column; align-items:flex-start !important;}
@@ -519,7 +539,6 @@
   .pl-ranking{margin-bottom:16px;}
   .pl-rank td{white-space:nowrap;}
   .pl-rank .pl-sm{white-space:nowrap;}
-  @media (min-width:761px) and (max-width:1250px){ .sidebar .nav-item, .sidebar .nav-sub .nav-item{padding:13px 8px 10px; font-size:13.5px;} .sidebar .brand .name{display:none;} .topbar-user .whoami{display:none;} }
   .pl-rolagem{overflow-x:auto;}
   .pl-rank td{vertical-align:middle;}
   .pl-rank th:nth-child(2), .pl-rank td:nth-child(2){text-align:left;}
@@ -585,6 +604,7 @@
       color:var(--nav-strong); font-family:var(--font-display); font-weight:600; font-size:17px; border-bottom:1px solid color-mix(in srgb, var(--pitch-ink) 20%, transparent);}
     .drawer-head img{width:30px; height:30px; border-radius:50%;}
     .nav-item{padding:14px 14px; font-size:16px;}
+    .topo-mes{display:none;}
     .menu-overlay{position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:70; opacity:0; pointer-events:none; transition:opacity .2s;}
     .shell.menu-aberto .sidebar{z-index:90;}
     .shell.menu-aberto .sidebar nav{transform:translateX(0);}
@@ -4871,21 +4891,36 @@ function sidebarHTML(items){
       <div class="mobile-page">${(items.flatMap(it => it.children ? it.children : [it]).find(it => it.page===activePage)||{}).label || ''}</div>
       <nav>
         <div class="drawer-head"><img src="${LOGO_SRC}" alt="">TF Imports</div>
-        ${items.map(it => {
-          if(!it.children) return `<div class="nav-item ${activePage===it.page?'active':''}" data-page="${it.page}">${it.label}</div>`;
-          STATE.menuGrupos = STATE.menuGrupos || {};
-          const filhoAtivo = it.children.some(c => c.page===activePage);
-          const aberto = filhoAtivo || STATE.menuGrupos[it.group];
-          return `
-            <div class="nav-item nav-group ${aberto?'open':''}" data-group="${it.group}">${it.label}<span class="nav-caret">${aberto?'▾':'▸'}</span></div>
-            <div class="nav-sub" style="${aberto?'':'display:none;'}">
-              ${it.children.map(c => `<div class="nav-item ${activePage===c.page?'active':''}" data-page="${c.page}">${c.label}</div>`).join('')}
+        ${(() => {
+          // Em cima: vendas. Ao lado: módulos (e, no vendedor, as ferramentas). Mesmos itens de sempre.
+          const MODULOS = ['financeira','compras-estoque','credenciais','garantia','sac'];
+          const FERRAMENTAS = STATE.session.tipo === 'vendedor' ? ['historico','relatorios','assistente'] : [];
+          const itemHTML = (it) => {
+            if(!it.children) return `<div class="nav-item ${activePage===it.page?'active':''}" data-page="${it.page}">${it.label}</div>`;
+            STATE.menuGrupos = STATE.menuGrupos || {};
+            const filhoAtivo = it.children.some(c => c.page===activePage);
+            const aberto = filhoAtivo || STATE.menuGrupos[it.group];
+            return `
+              <div class="nav-item nav-group ${aberto?'open':''}" data-group="${it.group}">${it.label}<span class="nav-caret">${aberto?'▾':'▸'}</span></div>
+              <div class="nav-sub" style="${aberto?'':'display:none;'}">
+                ${it.children.map(c => `<div class="nav-item ${activePage===c.page?'active':''}" data-page="${c.page}">${c.label}</div>`).join('')}
+              </div>`;
+          };
+          const ehModulo = (it) => it.children || MODULOS.includes(it.page);
+          const vendas = items.filter(it => !ehModulo(it) && !FERRAMENTAS.includes(it.page));
+          const modulos = items.filter(ehModulo);
+          const ferramentas = items.filter(it => FERRAMENTAS.includes(it.page));
+          return `<div class="nav-vendas">${vendas.map(itemHTML).join('')}</div>
+            <div class="nav-modulos">
+              ${modulos.length ? `<div class="nav-titulo">Módulos</div>${modulos.map(itemHTML).join('')}` : ''}
+              ${ferramentas.length ? `<div class="nav-titulo">Ferramentas</div>${ferramentas.map(itemHTML).join('')}` : ''}
             </div>`;
-        }).join('')}
+        })()}
       </nav>
     </div>
     <div class="menu-overlay" id="menu-overlay"></div>
     <div class="topbar-user">
+      <div class="topo-mes" id="topoMes"></div>
       ${foto ? `<img class="whoami-avatar" src="${foto}" alt="${STATE.session.nome}">` : `<div class="whoami-avatar whoami-avatar-fallback">${(STATE.session.nome||'?')[0].toUpperCase()}</div>`}
       <div class="whoami">Conectado como<b>${STATE.session.nome}${vendorObj?' · Nº '+vendorNumero(vendorObj):''}</b></div>
       ${modoToggleHTML()}
@@ -4918,8 +4953,33 @@ function aplicarModo(m){
   document.querySelectorAll('.modo-toggle [data-modo]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.modo === m)));
 }
 
+// Seletor de mês no canto de cima (computador): quando a tela desenha o seu seletor de mês,
+// ele é levado para a barra do topo. É o mesmo elemento (mesmos botões e mesma ação), só muda de lugar.
+let OBS_MES = null;
+function ligarSeletorMesNoTopo(){
+  if(OBS_MES){ OBS_MES.disconnect(); OBS_MES = null; }
+  const main = document.getElementById('main');
+  const slot = document.getElementById('topoMes');
+  if(!main || !slot || !window.matchMedia || !window.matchMedia('(min-width: 761px)').matches) return;
+  let dono = null;
+  const ajustar = () => {
+    const bars = main.querySelectorAll('.mes-bar');
+    if(bars.length === 1){
+      slot.replaceChildren(bars[0]);
+      dono = main.firstElementChild;
+    } else if(slot.firstChild && (!dono || !main.contains(dono))){
+      slot.replaceChildren();
+      dono = null;
+    }
+  };
+  OBS_MES = new MutationObserver(ajustar);
+  OBS_MES.observe(main, {childList:true, subtree:true});
+  ajustar();
+}
+
 function bindSidebar(onNav){
   document.querySelectorAll('.modo-toggle [data-modo]').forEach(b => { b.onclick = () => aplicarModo(b.dataset.modo); });
+  ligarSeletorMesNoTopo();
   const shellEl = document.querySelector('.shell');
   const btnMenu = document.getElementById('btn-menu');
   const overlay = document.getElementById('menu-overlay');

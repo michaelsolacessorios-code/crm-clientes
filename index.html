@@ -574,6 +574,48 @@
     .pl-mb .c .v{font-size:22px;}
   }
 
+  /* ---------- GAVETA DOS INDICADORES ---------- */
+  tr.pl-ind{cursor:pointer;}
+  tr.pl-ind:hover td{background:var(--bg);}
+  tr.pl-ind td:last-child::after{content:"›"; color:var(--primary); font-weight:700; font-size:17px; margin-left:10px;}
+  tr.pl-ind:focus-visible{outline:2px solid var(--primary); outline-offset:-2px;}
+  .pl-gaveta-fundo{position:fixed; inset:0; background:rgba(10,20,15,.45); z-index:45; display:flex; justify-content:flex-end;}
+  .pl-gaveta{width:min(680px, 100vw); height:100%; background:var(--surface); color:var(--ink); box-shadow:-8px 0 30px rgba(0,0,0,.25); display:flex; flex-direction:column; animation:plGavEntra .22s cubic-bezier(.16,1,.3,1);}
+  #plGavCorpo{display:flex; flex-direction:column; height:100%; min-height:0;}
+  @keyframes plGavEntra{from{transform:translateX(40px); opacity:.6;} to{transform:none; opacity:1;}}
+  @media (prefers-reduced-motion: reduce){ .pl-gaveta{animation:none;} }
+  .pl-gav-topo{display:flex; justify-content:space-between; align-items:flex-start; gap:10px; padding:16px 18px 10px; border-bottom:1px solid var(--border);}
+  .pl-gav-topo h3{font-family:var(--font-display); font-size:24px; font-weight:600; margin:0; line-height:1.1;}
+  .pl-gav-topo span{font-size:13px; color:var(--ink-soft);}
+  .pl-gav-x{background:none; border:1px solid var(--border); border-radius:8px; color:var(--ink-soft); font-size:15px; padding:4px 10px; cursor:pointer;}
+  .pl-gav-x:hover{color:var(--ink); border-color:var(--primary);}
+  .pl-gav-fil{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px 18px; border-bottom:1px solid var(--border);}
+  .pl-chip{border:1px solid var(--border); background:none; color:var(--ink-soft); border-radius:999px; padding:5px 12px; font-size:13px; cursor:pointer; font-family:inherit;}
+  .pl-chip:hover{color:var(--ink);}
+  .pl-chip.on{background:var(--ink); color:var(--surface); border-color:var(--ink); font-weight:600;}
+  .pl-gav-sel{padding:6px 10px !important; font-size:13px !important;}
+  .pl-gav-busca{flex:1 1 160px; min-width:140px; padding:7px 12px !important; font-size:13.5px !important;}
+  .pl-gav-xl{margin-left:auto; padding:6px 12px; font-size:13px;}
+  .pl-gav-cont{overflow:auto; flex:1; min-height:0; padding-bottom:20px;}
+  .pl-gav-qtd{font-size:12.5px; color:var(--ink-faint); padding:8px 18px 0; margin:0;}
+  .pl-gav-tab td, .pl-gav-tab th{padding:8px 12px; font-size:13.5px;}
+  .pl-gav-tab.com-pos td:nth-child(2), .pl-gav-tab.com-pos th:nth-child(2){text-align:left; white-space:normal;}
+  .pl-gav-tab.com-pos th:first-child, .pl-gav-tab.com-pos td:first-child{width:44px;}
+  .pl-gav-tab.sem-pos td:first-child, .pl-gav-tab.sem-pos th:first-child{text-align:left; white-space:normal;}
+  .pl-gav-tab td:last-child{white-space:nowrap;}
+  .pl-am{color:var(--warn); font-weight:700;}
+  .main table.pl-gav-tab, .pl-gaveta table{display:table;}
+
+  /* ---------- BUSCA DE PRODUTO NOS CONTAINERS ---------- */
+  .pl-busca-prod .search-input{width:100%;}
+  .pl-busca-res{display:flex; flex-direction:column; gap:8px; margin-top:12px;}
+  .pl-busca-linha{display:grid; grid-template-columns:200px minmax(0,1fr) auto; gap:14px; align-items:center; padding:12px 14px; border:1px solid var(--border); border-radius:var(--radius); background:var(--bg);}
+  .pl-busca-cont{display:flex; flex-direction:column; gap:2px;}
+  .pl-busca-cont b{font-family:var(--font-display); font-size:19px; font-weight:600;}
+  .pl-busca-cont span{font-size:13px; font-weight:600; color:var(--accent);}
+  .pl-busca-item{font-size:14.5px; min-width:0;}
+  @media (max-width: 760px){ .pl-busca-linha{grid-template-columns:1fr;} }
+
   /* ---------- CELULAR ---------- */
   .menu-toggle, .mobile-page, .menu-overlay, .drawer-head{display:none;}
   @media (max-width: 760px){
@@ -3140,6 +3182,12 @@ async function renderPrevisaoCompras(main){
         <div id="msgPrevisao"></div>
       </div>
     ` : ''}
+    <div class="panel pl-busca-prod">
+      <h3>Buscar produto nos containers</h3>
+      <p class="hint">Digite o código (ou parte da descrição) e veja em qual container ele vem, quanto chega, quanto ainda está livre e a previsão de chegada.${STATE.session.tipo==='vendedor' ? ' Dá para reservar direto para o seu cliente.' : ''}</p>
+      <input type="text" class="search-input" id="buscaProdutoPrevisao" placeholder="Ex: CB-USBC-2M" autocomplete="off" value="${String(STATE.previsaoBusca||'').replace(/"/g,'&quot;')}">
+      <div id="resultadoBuscaProduto"></div>
+    </div>
     <div id="listaContainers"></div>
   `;
 
@@ -3304,6 +3352,40 @@ async function renderPrevisaoCompras(main){
     });
   }
   drawContainers();
+
+  // Busca de produto nos containers ainda não chegados: container, quantidade, livre, previsão e reservar.
+  function drawBuscaProduto(){
+    const box = document.getElementById('resultadoBuscaProduto');
+    if(!box) return;
+    const termo = String(STATE.previsaoBusca||'').trim().toUpperCase();
+    if(termo.length < 2){ box.innerHTML = ''; return; }
+    const ehVendedor = STATE.session.tipo === 'vendedor';
+    const achados = [];
+    (STATE.previsoes||[]).filter(c => c.status !== 'chegou').forEach(cont => {
+      (cont.itens||[]).forEach(item => {
+        const cod = String(item.codigo||'').toUpperCase(), desc = String(item.descricao||'').toUpperCase();
+        if(cod.includes(termo) || desc.includes(termo)) achados.push({cont, item, r: resumoItemPrevisao(item)});
+      });
+    });
+    achados.sort((a,b) => String(a.cont.previsaoChegada||'9999').localeCompare(String(b.cont.previsaoChegada||'9999')));
+    if(!achados.length){ box.innerHTML = `<div class="empty-state" style="padding:18px; margin-top:10px;">Nenhum container a caminho com "${String(STATE.previsaoBusca).replace(/</g,'&lt;')}".</div>`; return; }
+    box.innerHTML = `<div class="pl-busca-res">${achados.map(({cont, item, r}) => {
+      const minhas = ehVendedor ? (item.intencoes||[]).filter(i => i.vendedorCodigo === STATE.session.codigo).reduce((s,i) => s + (i.quantidade||0), 0) : 0;
+      return `<div class="pl-busca-linha">
+        <div class="pl-busca-cont"><b>📦 ${cont.nome}</b><span>${cont.previsaoChegada ? 'Chega em ' + fmtDatePt(cont.previsaoChegada) : 'Sem data de previsão'}</span></div>
+        <div class="pl-busca-item"><b>${item.codigo}</b> — ${item.descricao||''}
+          <div class="client-meta">Chegando: <b>${item.quantidade}</b> · Reservado: <b>${r.reservado}</b> · Livre: <b style="color:${r.livre>0?'var(--ok)':'var(--danger)'};">${r.livre}</b>${minhas ? ` · Suas reservas: <b>${minhas}</b>` : ''}</div>
+        </div>
+        ${ehVendedor ? `<button class="primary-btn btnReservarBusca" data-container="${cont.id}" data-item="${item.id}" ${r.livre>0?'':'title="Já está todo reservado, mas você ainda pode registrar a intenção"'}>Reservar para cliente</button>` : ''}
+      </div>`;
+    }).join('')}</div>`;
+    box.querySelectorAll('.btnReservarBusca').forEach(btn => {
+      btn.onclick = () => abrirModalIntencao(btn.dataset.container, btn.dataset.item, main);
+    });
+  }
+  const inpBusca = document.getElementById('buscaProdutoPrevisao');
+  if(inpBusca){ inpBusca.oninput = () => { STATE.previsaoBusca = inpBusca.value; drawBuscaProduto(); }; }
+  drawBuscaProduto();
 
   if(podeSubir){
     document.getElementById('btnProcessarPrevisao').onclick = async () => {
@@ -4936,7 +5018,8 @@ function modoAtual(){
   const v = document.documentElement.getAttribute('data-visual');
   if(v === 'white') return 'claro';
   if(v === 'dark') return 'escuro';
-  return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'escuro' : 'claro';
+  // Sem escolha e computador no modo claro: visual padrão (barra verde, página clara) — nenhum botão marcado.
+  return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'escuro' : '';
 }
 function modoToggleHTML(){
   const m = modoAtual();
@@ -6654,9 +6737,9 @@ function renderVendorDashboard(main){
     <div class="pl-cols">
       <div class="pl-stack">
         <section class="pl-painel">
-          <div class="pl-ph"><h3>Tabela de metas</h3><span>${s.mesEhAtual ? 'pts vs. ritmo do mês' : 'resultado do mês'}</span></div>
+          <div class="pl-ph"><h3>Tabela de metas</h3><span>clique numa linha para ver o detalhe · ${s.mesEhAtual ? 'pts vs. ritmo do mês' : 'resultado do mês'}</span></div>
           <table class="pl-goals"><thead><tr><th>Indicador</th><th>Feito</th><th>Meta</th><th class="pl-esconde">%</th><th>${s.mesEhAtual?'Ritmo':'Resultado'}</th></tr></thead><tbody>
-            ${linhas.map(l => `<tr>
+            ${linhas.map((l,i) => `<tr class="pl-ind" data-ind="${['vendas','contato','posit','skus','volume'][i]}" tabindex="0">
               <td>${l.nome}${l.sub?`<span class="pl-sm">${l.sub}</span>`:''}${l.pct!==null?`<span class="pl-meter"><i class="${l.pct>=100?'cheio':''}" style="width:${Math.min(100,l.pct)}%"></i></span>`:''}</td>
               <td>${l.feito}</td><td>${l.meta!==null?l.meta:'<span class="pl-na">—</span>'}</td>
               <td class="pl-esconde">${l.pct!==null?l.pct+'%':'—'}</td><td>${ritmoCel(l.pct)}</td></tr>`).join('')}
@@ -6693,6 +6776,11 @@ function renderVendorDashboard(main){
     renderVendorShell();
   };
   placarBindLinhaTempo(main, anoSel, mesSel, diasNoMes, diaAtual, vendasPorDia, false);
+  main.querySelectorAll('tr.pl-ind').forEach(tr => {
+    const abrir = () => abrirGavetaIndicador(tr.dataset.ind, s.mesChave, STATE.session.codigo);
+    tr.onclick = abrir;
+    tr.onkeydown = (e) => { if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); abrir(); } };
+  });
   const irPara = (pagina) => { STATE.route = {page: pagina}; renderVendorShell(); try{ window.scrollTo(0,0); }catch(e){} };
   const btnHoje = document.getElementById('plVerHoje'); if(btnHoje) btnHoje.onclick = () => irPara('hoje');
   document.getElementById('plIrRelatorios').onclick = (e) => { e.preventDefault(); irPara('relatorios'); };
@@ -8348,6 +8436,181 @@ function totalSkusEVolumeEquipe(mesChave){
 // Visão geral (gerente/diretor e Compras) no layout Placar. Mesmos números de antes:
 // meta da equipe, indicadores, inadimplência por vendedor, UF e os cartões de cada vendedor
 // (agora na "Classificação da equipe", que abre a carteira do vendedor como antes).
+// ---------------- GAVETA DOS INDICADORES (Visão geral) ----------------
+// Clicar numa linha de "Indicadores da equipe" abre um painel na lateral com o ranking/lista
+// daquele indicador, filtros e "Exportar Excel". Só lê os dados que já estão carregados; não grava nada.
+function indDadosDoMes(mesChave, vendedorCodigo){
+  const vendVisiveis = vendedorCodigo ? STATE.vendors.filter(v => v.codigo === vendedorCodigo) : vendorsVisiveis(mesChave);
+  const porCodigo = new Map(STATE.roster.map(c => [c.codigo, c]));
+  const vendNome = new Map(STATE.vendors.map(v => [v.codigo, v.nome]));
+  const clientesCompra = new Map();   // codigo -> {nome, vendedor, valor, pedidos}
+  const skus = new Map();             // codigo -> {descricao, quantidade, pedidos}
+  const comprouNoMes = new Set();
+  vendVisiveis.forEach(v => {
+    const contatos = STATE.contatosCache[v.codigo] || {};
+    Object.entries(contatos).forEach(([cod, reg]) => {
+      (reg.historico||[]).forEach(h => {
+        if(!h.vendeu || !h.data || h.data.slice(0,7) !== mesChave) return;
+        const codigo = Number(cod);
+        comprouNoMes.add(codigo);
+        const c = porCodigo.get(codigo);
+        const atual = clientesCompra.get(codigo) || {codigo, nome: c ? c.nome : ('Cliente Nº '+codigo), vendedor: v.nome, valor:0, pedidos:0};
+        atual.valor += (h.valor||0); atual.pedidos += 1;
+        clientesCompra.set(codigo, atual);
+        ((h.skus && h.skus.itens) || []).forEach(i => {
+          const sc = String(i.codigo||'').trim().toUpperCase();
+          if(!sc || sc === '—' || sc === '?') return;
+          const s = skus.get(sc) || {codigo: sc, descricao: i.descricao||'', quantidade:0, pedidos:0};
+          s.quantidade += (i.quantidade||0); s.pedidos += 1;
+          if(!s.descricao && i.descricao) s.descricao = i.descricao;
+          skus.set(sc, s);
+        });
+      });
+    });
+  });
+  return {vendVisiveis, porCodigo, vendNome, clientesCompra, skus, comprouNoMes};
+}
+
+function abrirGavetaIndicador(tipo, mesChave, vendedorCodigo){
+  const soVendedor = !!vendedorCodigo;
+  const D = indDadosDoMes(mesChave, vendedorCodigo);
+  const mesEhAtual = mesChave === currentMonthKey();
+  const ui = {vend:'todos', filtro:null, busca:'', ordem:null};
+  const fundo = document.createElement('div');
+  fundo.className = 'pl-gaveta-fundo';
+  fundo.innerHTML = `<aside class="pl-gaveta" role="dialog" aria-modal="true" aria-labelledby="plGavTit"><div id="plGavCorpo"></div></aside>`;
+  document.body.appendChild(fundo);
+  const fechar = () => { fundo.remove(); document.removeEventListener('keydown', esc); };
+  const esc = (e) => { if(e.key === 'Escape') fechar(); };
+  document.addEventListener('keydown', esc);
+  fundo.onclick = (e) => { if(e.target === fundo) fechar(); };
+  const corpo = fundo.querySelector('#plGavCorpo');
+  const chips = (campo, ops) => ops.map(([v,l]) => `<button type="button" class="pl-chip ${ui[campo]===v?'on':''}" data-campo="${campo}" data-v="${v}">${l}</button>`).join('');
+  const selVend = () => soVendedor ? '' : `<select class="filter-select pl-gav-sel" id="plGavVend"><option value="todos">Todos os vendedores</option>${D.vendVisiveis.map(v => `<option value="${v.codigo}" ${String(ui.vend)===String(v.codigo)?'selected':''}>${v.nome}</option>`).join('')}</select>`;
+  const doVend = (nome) => ui.vend === 'todos' || nome === D.vendNome.get(Number(ui.vend));
+  const pct = (a,b) => b ? Math.round(a/b*100) : 0;
+
+  function montar(){
+    let titulo = '', sub = '', filtros = '', cab = [], linhas = [], excel = [], ehRanking = true;
+    if(tipo === 'vendas'){
+      titulo = 'Clientes que mais compraram'; sub = 'no mês selecionado';
+      filtros = selVend();
+      const r = [...D.clientesCompra.values()].filter(c => doVend(c.vendedor)).sort((a,b) => b.valor - a.valor);
+      cab = ['Cliente','Vendedor','Pedidos','Valor'];
+      linhas = r.map(c => [`${c.nome} <span class="client-num">Nº ${c.codigo}</span>`, c.vendedor, c.pedidos, fmtMoney(c.valor)]);
+      excel = r.map((c,i) => ({'Posição':i+1, 'Cliente Nº':c.codigo, 'Cliente':c.nome, 'Vendedor':c.vendedor, 'Pedidos':c.pedidos, 'Valor':c.valor}));
+    }
+    else if(soVendedor && (tipo === 'contato' || tipo === 'posit')){
+      // Vendedor: em vez de ranking de vendedores, a lista dos clientes dele.
+      const ehContato = tipo === 'contato';
+      ui.filtro = ui.filtro || 'nao';
+      ehRanking = false;
+      titulo = ehContato ? 'Contato com seus clientes' : 'Positivação dos seus clientes';
+      sub = ehContato ? 'quem já teve contato no mês' : 'quem já comprou no mês';
+      const contatos = STATE.contatosCache[vendedorCodigo] || {};
+      const todos = clientsForVendor(vendedorCodigo).map(c => {
+        const reg = contatos[c.codigo];
+        const ok = ehContato ? (reg && (reg.historico||[]).some(h => h.data && h.data.slice(0,7) === mesChave)) : D.comprouNoMes.has(c.codigo);
+        return {c, ok: !!ok, ult: reg ? reg.ultimoContato : null};
+      });
+      const nOk = todos.filter(x => x.ok).length;
+      const rotOk = ehContato ? 'Contatados' : 'Compraram', rotNao = ehContato ? 'Não contatados' : 'Não compraram';
+      filtros = chips('filtro', [['nao', `${rotNao} (${todos.length - nOk})`], ['sim', `${rotOk} (${nOk})`], ['todos', `Todos (${todos.length})`]]) + `<input type="text" class="search-input pl-gav-busca" id="plGavBusca" placeholder="Buscar nome ou número" value="${ui.busca.replace(/"/g,'&quot;')}">`;
+      const q = ui.busca.trim().toLowerCase();
+      const r = todos.filter(x => (ui.filtro==='todos' || (ui.filtro==='sim' ? x.ok : !x.ok)) && (!q || String(x.c.nome||'').toLowerCase().includes(q) || String(x.c.codigo).includes(q)))
+        .sort((a,b) => daysBetween(b.ult) - daysBetween(a.ult) || String(a.c.nome||'').localeCompare(String(b.c.nome||''),'pt-BR'));
+      cab = ['Cliente','Telefone','Último contato','No mês'];
+      linhas = r.map(x => [`<span class="client-name-link" data-codigo="${x.c.codigo}">${x.c.nome}</span> <span class="client-num">Nº ${x.c.codigo}</span>`, x.c.telefone||'', x.ult ? fmtDatePt(x.ult) : 'nunca', x.ok ? `<span class="pl-up">${ehContato?'Contatado':'Comprou'}</span>` : `<span class="pl-am">${ehContato?'Sem contato':'Não comprou'}</span>`]);
+      excel = r.map(x => ({'Cliente Nº':x.c.codigo, 'Cliente':x.c.nome, 'Telefone':x.c.telefone||'', 'Último contato':x.ult||'nunca', [ehContato?'Contatado no mês':'Comprou no mês']: x.ok?'Sim':'Não'}));
+    }
+    else if(tipo === 'contato' || tipo === 'posit'){
+      const ehContato = tipo === 'contato';
+      ui.ordem = ui.ordem || 'mais';
+      titulo = ehContato ? 'Contato por vendedor' : 'Positivação por vendedor';
+      sub = ehContato ? 'clientes contatados no mês' : 'clientes que compraram no mês';
+      filtros = chips('ordem', [['mais', ehContato ? 'Quem mais contatou' : 'Maior positivação'], ['menos', ehContato ? 'Quem menos contatou' : 'Menor positivação']]);
+      const r = D.vendVisiveis.map(v => { const m = vendorMonthStats(v.codigo, mesChave); const s = vendorStats(v.codigo); const feito = ehContato ? m.contatadosMes : m.positivados; return {v, feito, total:m.totalClientes, p:pct(feito, m.totalClientes), atrasados:s.atrasados}; })
+        .sort((a,b) => ui.ordem === 'mais' ? b.p - a.p : a.p - b.p);
+      cab = ehContato ? ['Vendedor','Contatados','Carteira','%','Atrasados'] : ['Vendedor','Compraram','Carteira','%'];
+      linhas = r.map(x => { const cor = x.p < 30 ? 'pl-dn' : (x.p < 60 ? 'pl-am' : 'pl-up'); const base = [x.v.nome, x.feito, x.total, `<span class="${cor}">${x.p}%</span><span class="pl-meter"><i style="width:${Math.min(100,x.p)}%"></i></span>`]; return ehContato ? [...base, x.atrasados] : base; });
+      excel = r.map((x,i) => { const o = {'Posição':i+1, 'Vendedor':x.v.nome}; o[ehContato?'Contatados':'Compraram'] = x.feito; o['Carteira'] = x.total; o['%'] = x.p; if(ehContato) o['Atrasados'] = x.atrasados; return o; });
+    }
+    else if(tipo === 'base'){
+      ui.filtro = ui.filtro || 'todos';
+      ehRanking = false;
+      titulo = 'Clientes na base'; sub = 'filtre por quem comprou no mês';
+      const todos = [];
+      D.vendVisiveis.forEach(v => clientsForVendor(v.codigo).forEach(c => todos.push({c, vendedor:v.nome, comprou:D.comprouNoMes.has(c.codigo)})));
+      const nSim = todos.filter(x => x.comprou).length;
+      filtros = chips('filtro', [['todos', `Todos (${todos.length})`], ['sim', `Compraram (${nSim})`], ['nao', `Não compraram (${todos.length - nSim})`]]) + selVend() + `<input type="text" class="search-input pl-gav-busca" id="plGavBusca" placeholder="Buscar nome ou número" value="${ui.busca.replace(/"/g,'&quot;')}">`;
+      const q = ui.busca.trim().toLowerCase();
+      const r = todos.filter(x => doVend(x.vendedor) && (ui.filtro==='todos' || (ui.filtro==='sim' ? x.comprou : !x.comprou)) && (!q || String(x.c.nome||'').toLowerCase().includes(q) || String(x.c.codigo).includes(q)))
+        .sort((a,b) => String(a.c.nome||'').localeCompare(String(b.c.nome||''), 'pt-BR'));
+      cab = ['Cliente','Vendedor','Cidade','No mês'];
+      linhas = r.map(x => [`<span class="client-name-link" data-codigo="${x.c.codigo}">${x.c.nome}</span> <span class="client-num">Nº ${x.c.codigo}</span>`, x.vendedor, [x.c.municipio, x.c.uf].filter(Boolean).join('/'), x.comprou ? '<span class="pl-up">Comprou</span>' : '<span class="pl-na">Não comprou</span>']);
+      excel = r.map(x => ({'Cliente Nº':x.c.codigo, 'Cliente':x.c.nome, 'Vendedor':x.vendedor, 'Cidade':x.c.municipio||'', 'UF':x.c.uf||'', 'Comprou no mês':x.comprou?'Sim':'Não'}));
+    }
+    else if(tipo === 'atrasados'){
+      ehRanking = false;
+      titulo = 'Clientes atrasados'; sub = '30+ dias sem contato · mais atrasado primeiro';
+      filtros = selVend();
+      const r = [];
+      D.vendVisiveis.forEach(v => { const contatos = STATE.contatosCache[v.codigo] || {}; clientsForVendor(v.codigo).forEach(c => { const ult = contatos[c.codigo]?.ultimoContato; if(statusFor(ult) === 'danger') r.push({c, vendedor:v.nome, ult, dias:daysBetween(ult)}); }); });
+      const lista = r.filter(x => doVend(x.vendedor)).sort((a,b) => b.dias - a.dias);
+      cab = ['Cliente','Vendedor','Telefone','Último contato','Dias'];
+      linhas = lista.map(x => [`<span class="client-name-link" data-codigo="${x.c.codigo}">${x.c.nome}</span> <span class="client-num">Nº ${x.c.codigo}</span>`, x.vendedor, x.c.telefone||'', x.ult ? fmtDatePt(x.ult) : 'nunca', `<span class="pl-dn">${x.dias===Infinity?'—':x.dias}</span>`]);
+      excel = lista.map(x => ({'Cliente Nº':x.c.codigo, 'Cliente':x.c.nome, 'Vendedor':x.vendedor, 'Telefone':x.c.telefone||'', 'Último contato':x.ult||'nunca', 'Dias sem contato':x.dias===Infinity?'':x.dias}));
+    }
+    else if(tipo === 'hoje'){
+      ui.filtro = ui.filtro || 'nao';
+      ehRanking = false;
+      titulo = 'Contatos de hoje'; sub = new Date().toLocaleDateString('pt-BR', {weekday:'long', day:'2-digit', month:'2-digit'});
+      const wd = todayWeekday();
+      const todos = [];
+      D.vendVisiveis.forEach(v => { const contatos = STATE.contatosCache[v.codigo] || {}; clientsForVendor(v.codigo).filter(c => wd && c.diaSemana === wd).forEach(c => todos.push({c, vendedor:v.nome, feito: contatos[c.codigo]?.ultimoContato === todayStr()})); });
+      const nFeito = todos.filter(x => x.feito).length;
+      filtros = chips('filtro', [['nao', `Não contatados (${todos.length - nFeito})`], ['sim', `Contatados (${nFeito})`], ['todos', `Todos (${todos.length})`]]) + selVend();
+      const r = todos.filter(x => doVend(x.vendedor) && (ui.filtro==='todos' || (ui.filtro==='sim' ? x.feito : !x.feito))).sort((a,b) => a.vendedor.localeCompare(b.vendedor,'pt-BR') || String(a.c.nome).localeCompare(String(b.c.nome),'pt-BR'));
+      cab = ['Cliente','Vendedor','Telefone','Situação'];
+      linhas = r.map(x => [`<span class="client-name-link" data-codigo="${x.c.codigo}">${x.c.nome}</span> <span class="client-num">Nº ${x.c.codigo}</span>`, x.vendedor, x.c.telefone||'', x.feito ? '<span class="pl-up">Contatado</span>' : '<span class="pl-am">Falta contatar</span>']);
+      excel = r.map(x => ({'Cliente Nº':x.c.codigo, 'Cliente':x.c.nome, 'Vendedor':x.vendedor, 'Telefone':x.c.telefone||'', 'Situação':x.feito?'Contatado':'Falta contatar'}));
+      if(!wd) sub += ' · fim de semana, sem lista do dia';
+      if(!mesEhAtual) sub += ' · (sempre mostra o dia de hoje)';
+    }
+    else {
+      const ehVolume = tipo === 'volume';
+      const r = [...D.skus.values()].sort((a,b) => b.quantidade - a.quantidade || b.pedidos - a.pedidos);
+      const totalUn = r.reduce((s,x) => s + x.quantidade, 0);
+      titulo = ehVolume ? 'Itens que mais venderam em volume' : 'Ranking de SKUs';
+      sub = ehVolume ? `${totalUn.toLocaleString('pt-BR')} unidades no mês` : `${r.length} SKUs diferentes no mês · por quantidade`;
+      cab = ehVolume ? ['Código','Descrição','Unidades','% do volume'] : ['Código','Descrição','Unidades','Pedidos'];
+      linhas = r.map(x => [x.codigo, x.descricao||'', x.quantidade.toLocaleString('pt-BR'), ehVolume ? `${(totalUn ? x.quantidade/totalUn*100 : 0).toFixed(1).replace('.',',')}%<span class="pl-meter"><i style="width:${Math.min(100, totalUn ? x.quantidade/r[0].quantidade*100 : 0)}%"></i></span>` : x.pedidos]);
+      excel = r.map((x,i) => ehVolume ? ({'Posição':i+1, 'Código':x.codigo, 'Descrição':x.descricao||'', 'Unidades':x.quantidade, '% do volume':totalUn ? Math.round(x.quantidade/totalUn*1000)/10 : 0}) : ({'Posição':i+1, 'Código':x.codigo, 'Descrição':x.descricao||'', 'Unidades':x.quantidade, 'Pedidos':x.pedidos}));
+    }
+
+    corpo.innerHTML = `
+      <div class="pl-gav-topo"><div><h3 id="plGavTit">${titulo}</h3><span>${sub}</span></div><button type="button" class="pl-gav-x" aria-label="Fechar">✕</button></div>
+      <div class="pl-gav-fil">${filtros}<button type="button" class="ghost-btn pl-gav-xl" id="plGavExcel">⬇️ Exportar Excel</button></div>
+      <div class="pl-gav-cont">${linhas.length ? `<p class="pl-gav-qtd">${linhas.length} ${linhas.length===1?'linha':'linhas'}</p>
+        <table class="pl-goals pl-gav-tab ${ehRanking?'com-pos':'sem-pos'}"><thead><tr>${ehRanking?'<th></th>':''}${cab.map((c,i) => `<th>${c}</th>`).join('')}</tr></thead>
+        <tbody>${linhas.map((l,i) => `<tr>${ehRanking?`<td class="pl-pos">${i+1}º</td>`:''}${l.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`
+        : `<div class="pl-vazio"><b>Nada para mostrar</b>Troque o filtro ou o mês.</div>`}</div>`;
+    corpo.querySelector('.pl-gav-x').onclick = fechar;
+    corpo.querySelectorAll('.pl-chip').forEach(b => { b.onclick = () => { ui[b.dataset.campo] = b.dataset.v; montar(); }; });
+    const sv = corpo.querySelector('#plGavVend'); if(sv) sv.onchange = () => { ui.vend = sv.value; montar(); };
+    const bb = corpo.querySelector('#plGavBusca'); if(bb) bb.oninput = () => { ui.busca = bb.value; montar(); const n = corpo.querySelector('#plGavBusca'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
+    corpo.querySelector('#plGavExcel').onclick = () => {
+      if(!excel.length) return;
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(excel), titulo.slice(0,31));
+      XLSX.writeFile(wb, `${titulo.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'_')}_${mesChave}.xlsx`);
+    };
+    if(typeof bindClientNameLinks === 'function') bindClientNameLinks(corpo);
+  }
+  montar();
+  const x = corpo.querySelector('.pl-gav-x'); if(x) x.focus();
+}
+
 function renderManagerOverview(main){
   const mesVisao = STATE.mesSelecionado||currentMonthKey();
   const vendVisiveis = vendorsVisiveis(mesVisao);
@@ -8454,16 +8717,16 @@ function renderManagerOverview(main){
       <div class="pl-stack">
 
         <section class="pl-painel">
-          <div class="pl-ph"><h3>Indicadores da equipe</h3><span>${mesEhAtual ? 'mês atual (parcial)' : 'fechamento do mês'}</span></div>
+          <div class="pl-ph"><h3>Indicadores da equipe</h3><span>clique numa linha para ver o detalhe · ${mesEhAtual ? 'mês atual' : 'fechamento do mês'}</span></div>
           <table class="pl-goals"><tbody>
-            <tr><td>Vendas<span class="pl-sm">vendido da meta total</span><span class="pl-meter"><i class="${pctVendasGeral>=100?'cheio':''}" style="width:${pctVendasGeral}%"></i></span></td><td>${fmtMoney(totalValorVendas)}<span class="pl-sm">de ${fmtMoney(totalMetaVendas)} · ${pctVendasGeral}%</span></td></tr>
-            <tr><td>Contato<span class="pl-sm">clientes contatados no mês</span><span class="pl-meter"><i class="${pctContatoGeral>=100?'cheio':''}" style="width:${Math.min(100,pctContatoGeral)}%"></i></span></td><td>${totalContatadosMes} / ${totalClientes}<span class="pl-sm">${pctContatoGeral}%</span></td></tr>
-            <tr><td>Positivação<span class="pl-sm">clientes que compraram</span><span class="pl-meter"><i class="${pctPositivacaoGeral>=100?'cheio':''}" style="width:${Math.min(100,pctPositivacaoGeral)}%"></i></span></td><td>${totalPositivados} / ${totalClientes}<span class="pl-sm">${pctPositivacaoGeral}%</span></td></tr>
-            <tr><td>Clientes na base</td><td>${totalClientes}</td></tr>
-            <tr><td>Atrasados<span class="pl-sm">30+ dias sem contato</span></td><td class="${totalAtrasados>0?'pl-dn':''}">${totalAtrasados}</td></tr>
-            ${mesEhAtual ? `<tr><td>Contatados hoje</td><td>${totalHojeFeitos} / ${totalHoje}</td></tr>` : ''}
-            <tr><td>SKUs diferentes vendidos<span class="pl-sm">variedade, toda a equipe</span></td><td>${totalSkusVolume.totalSkus}</td></tr>
-            <tr><td>Volume vendido<span class="pl-sm">unidades, toda a equipe</span></td><td>${Number(totalSkusVolume.totalUnidades||0).toLocaleString('pt-BR')}</td></tr>
+            <tr class="pl-ind" data-ind="vendas" tabindex="0"><td>Vendas<span class="pl-sm">vendido da meta total</span><span class="pl-meter"><i class="${pctVendasGeral>=100?'cheio':''}" style="width:${pctVendasGeral}%"></i></span></td><td>${fmtMoney(totalValorVendas)}<span class="pl-sm">de ${fmtMoney(totalMetaVendas)} · ${pctVendasGeral}%</span></td></tr>
+            <tr class="pl-ind" data-ind="contato" tabindex="0"><td>Contato<span class="pl-sm">clientes contatados no mês</span><span class="pl-meter"><i class="${pctContatoGeral>=100?'cheio':''}" style="width:${Math.min(100,pctContatoGeral)}%"></i></span></td><td>${totalContatadosMes} / ${totalClientes}<span class="pl-sm">${pctContatoGeral}%</span></td></tr>
+            <tr class="pl-ind" data-ind="posit" tabindex="0"><td>Positivação<span class="pl-sm">clientes que compraram</span><span class="pl-meter"><i class="${pctPositivacaoGeral>=100?'cheio':''}" style="width:${Math.min(100,pctPositivacaoGeral)}%"></i></span></td><td>${totalPositivados} / ${totalClientes}<span class="pl-sm">${pctPositivacaoGeral}%</span></td></tr>
+            <tr class="pl-ind" data-ind="base" tabindex="0"><td>Clientes na base</td><td>${totalClientes}</td></tr>
+            <tr class="pl-ind" data-ind="atrasados" tabindex="0"><td>Atrasados<span class="pl-sm">30+ dias sem contato</span></td><td class="${totalAtrasados>0?'pl-dn':''}">${totalAtrasados}</td></tr>
+            ${mesEhAtual ? `<tr class="pl-ind" data-ind="hoje" tabindex="0"><td>Contatados hoje</td><td>${totalHojeFeitos} / ${totalHoje}</td></tr>` : ''}
+            <tr class="pl-ind" data-ind="skus" tabindex="0"><td>SKUs diferentes vendidos<span class="pl-sm">variedade, toda a equipe</span></td><td>${totalSkusVolume.totalSkus}</td></tr>
+            <tr class="pl-ind" data-ind="volume" tabindex="0"><td>Volume vendido<span class="pl-sm">unidades, toda a equipe</span></td><td>${Number(totalSkusVolume.totalUnidades||0).toLocaleString('pt-BR')}</td></tr>
           </tbody></table>
         </section>
         <div class="progress-row pl-extras">
@@ -8508,6 +8771,11 @@ function renderManagerOverview(main){
     if(STATE.session.tipo === 'gerente') renderManagerShell(); else renderComprasShell();
   };
   placarBindLinhaTempo(main, anoSel, mesSel, diasNoMes, diaAtual, vendasPorDia, true);
+  main.querySelectorAll('tr.pl-ind').forEach(tr => {
+    const abrir = () => abrirGavetaIndicador(tr.dataset.ind, mesVisao);
+    tr.onclick = abrir;
+    tr.onkeydown = (e) => { if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); abrir(); } };
+  });
   main.querySelectorAll('.pl-rank tr[data-codigo]').forEach(el=>{
     const abrir = () => {
       if(STATE.session.tipo !== 'gerente') return; // Roberto (compras) só tem Visão geral, não o detalhe por vendedor.

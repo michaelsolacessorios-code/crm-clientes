@@ -4218,10 +4218,30 @@ function vendorLeadsStats(vendedorCodigo){
 }
 
 // Quantos clientes inadimplentes um vendedor tem, e o total em R$ que eles devem juntos.
+// Mesma base da tela Financeira: títulos em aberto da última planilha de títulos, separados
+// pelo vendedor que vem na planilha. (Antes usava a marcação "inadimplente" gravada em cada
+// cliente, que podia ficar desatualizada quando a lista antiga de inadimplência era importada.)
 function vendorInadimplenciaStats(vendedorCodigo){
-  const inadimplentes = clientsForVendor(vendedorCodigo).filter(c => c.inadimplente);
-  const total = inadimplentes.reduce((soma,c) => soma + (c.valorDevido||0), 0);
-  return {qtd: inadimplentes.length, total};
+  let qtd = 0, total = 0;
+  Object.entries(STATE.financeiro||{}).forEach(([codigo, fin]) => {
+    if(!fin || fin.vendedorCodigo !== vendedorCodigo) return;
+    const st = statusFinanceiroCliente(Number(codigo));
+    if(!st) return;
+    qtd++; total += st.valor;
+  });
+  return {qtd, total: Math.round(total*100)/100};
+}
+// Títulos em aberto cujo vendedor da planilha não está cadastrado no CRM (linha "sem vendedor").
+function inadimplenciaSemVendedor(){
+  let qtd = 0, total = 0;
+  const cods = new Set(STATE.vendors.map(v => v.codigo));
+  Object.entries(STATE.financeiro||{}).forEach(([codigo, fin]) => {
+    if(!fin || (fin.vendedorCodigo !== null && fin.vendedorCodigo !== undefined && cods.has(fin.vendedorCodigo))) return;
+    const st = statusFinanceiroCliente(Number(codigo));
+    if(!st) return;
+    qtd++; total += st.valor;
+  });
+  return {qtd, total: Math.round(total*100)/100};
 }
 
 // Só essas siglas contam como UF de verdade — qualquer outra coisa (campo vazio, data
@@ -6726,7 +6746,7 @@ function renderVendorDashboard(main){
     <div class="stat-card ok"><div class="num display">${lstats.convertidos}</div><div class="label">Leads convertidos (viraram cliente e compraram)</div></div>
     <button type="button" class="stat-card pl-amarelo" id="plCartaoAmarelo" title="Abrir a Financeira">
       <span class="pl-cartao" aria-hidden="true"></span>
-      <span><span class="num display">${s.devedores} ${s.devedores===1?'devedor':'devedores'}</span>
+      <span><span class="num display">${inadStats.qtd} ${inadStats.qtd===1?'devedor':'devedores'}</span>
       <span class="label">${fmtMoney(inadStats.total)} em inadimplência na sua carteira</span></span>
     </button>`;
 
@@ -8756,7 +8776,7 @@ function renderManagerOverview(main){
     placarSomarVendasPorDia(vendasPorDia, m.atividade, v.nome);
     porVendedor.push({v, s, m, inad});
   });
-  const naoCadastrados = STATE.config.inadimplenciaNaoCadastrados || {qtd:0, total:0};
+  const naoCadastrados = inadimplenciaSemVendedor();
   const totalSkusVolume = totalSkusEVolumeEquipe(STATE.mesSelecionado||currentMonthKey());
   const pctPositivacaoGeral = totalClientes ? Math.round(totalPositivados/totalClientes*100) : 0;
   const pctContatoGeral = totalClientes ? Math.round(totalContatadosMes/totalClientes*100) : 0;
@@ -8881,7 +8901,7 @@ function renderManagerOverview(main){
             }).join('')}
             ${naoCadastrados.qtd > 0 ? `<tr style="color:var(--ink-faint);"><td>Sem vendedor cadastrado no CRM</td><td>${naoCadastrados.qtd}</td><td>${fmtMoney(naoCadastrados.total)}</td></tr>` : ''}
           </tbody></table>
-          ${naoCadastrados.qtd > 0 ? `<p class="hint" style="margin:10px 14px 12px;">Esses ${naoCadastrados.qtd} clientes vieram na última lista de inadimplência com um vendedor que não existe cadastrado no CRM — por isso não entraram em nenhuma carteira, só somam no total geral.</p>` : ''}
+          ${naoCadastrados.qtd > 0 ? `<p class="hint" style="margin:10px 14px 12px;">Esses ${naoCadastrados.qtd} clientes vieram na última planilha de títulos com um vendedor que não existe cadastrado no CRM — por isso não entraram em nenhuma carteira, só somam no total geral.</p>` : ''}
         </section>
       </div>
     </div>

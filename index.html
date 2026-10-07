@@ -416,7 +416,8 @@
   .pl-topo{display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:14px;}
   .pl-quem{display:flex; align-items:center; gap:12px;}
   .pl-foto{width:52px; height:52px; border-radius:50%; object-fit:cover; border:2px solid var(--surface); box-shadow:var(--shadow-soft); flex-shrink:0;}
-  .pl-sub{font-size:13.5px; color:var(--ink-soft);}
+  .pl-sub{font-size:13.5px; color:var(--ink-soft); overflow-wrap:anywhere;}
+  .pl-topo > div{min-width:0;}
   .pl-board{background:var(--board); color:var(--board-ink); border:1px solid var(--board-line); border-bottom:0; border-radius:var(--radius) var(--radius) 0 0; display:grid; grid-template-columns:auto minmax(0,1fr) auto; overflow:hidden; container-type:inline-size;}
   .pl-clock{background:var(--primary); color:#fff; padding:10px 18px; text-align:center; display:flex; flex-direction:column; justify-content:center; min-width:104px;}
   .pl-clock.win{background:var(--ok);}
@@ -491,6 +492,47 @@
     .pl-acoes{grid-column:2; flex-direction:row; align-items:center; justify-content:space-between;}
   }
   .main table.pl-goals{display:table;}
+
+  /* ---------- PLACAR: Visão geral e Financeira ---------- */
+  .pl-cols-largo{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);}
+  .pl-ranking{margin-bottom:16px;}
+  .pl-rank td{white-space:nowrap;}
+  .pl-rank .pl-sm{white-space:nowrap;}
+  @media (min-width:761px) and (max-width:1250px){ .sidebar .nav-item, .sidebar .nav-sub .nav-item{padding:13px 8px 10px; font-size:13.5px;} .sidebar .brand .name{display:none;} .topbar-user .whoami{display:none;} }
+  .pl-rolagem{overflow-x:auto;}
+  .pl-rank td{vertical-align:middle;}
+  .pl-rank th:nth-child(2), .pl-rank td:nth-child(2){text-align:left;}
+  .pl-rank tr.pl-clica{cursor:pointer;}
+  .pl-rank tr.pl-clica:hover td{background:var(--bg);}
+  .pl-pos{font-family:var(--font-display); font-weight:700; font-size:19px; color:var(--ink-faint); width:38px;}
+  .pl-lider .pl-pos{color:var(--primary);}
+  .pl-vend{display:inline-flex; align-items:center; gap:9px;}
+  .pl-vend img{width:30px; height:30px; border-radius:50%; object-fit:cover; flex-shrink:0;}
+  .pl-decide{display:flex; flex-direction:column;}
+  .pl-decide button{display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:12px; align-items:center; text-align:left; background:none; border:0; border-top:1px solid var(--border); padding:11px 14px; cursor:pointer; color:var(--ink); font:inherit;}
+  .pl-decide button:hover{background:var(--bg);}
+  .pl-decide .n{font-family:var(--font-display); font-weight:700; font-size:28px; line-height:1; min-width:30px; text-align:center; font-variant-numeric:tabular-nums;}
+  .pl-decide .t{display:block; font-size:14.5px; font-weight:600;}
+  .pl-decide .d{display:block; font-size:12.5px; color:var(--ink-soft);}
+  .pl-decide .ir{color:var(--primary); font-size:13.5px; font-weight:700;}
+  .pl-cartao-inline{display:inline-block; vertical-align:-3px; margin:0 8px 0 0; width:12px; height:17px;}
+  .pl-mb{display:grid; grid-template-columns:140px repeat(auto-fit, minmax(130px,1fr)); background:var(--board); color:var(--board-ink); border:1px solid var(--board-line); border-radius:var(--radius); overflow:hidden; margin-bottom:16px;}
+  .pl-mb .lead{background:var(--primary); color:#fff; padding:10px 18px; display:flex; flex-direction:column; justify-content:center; min-width:110px;}
+  .pl-mb .lead b{font-family:var(--font-display); font-size:26px; line-height:1; font-weight:700;}
+  .pl-mb .lead span{font-size:12.5px; font-weight:600;}
+  .pl-mb .c{padding:10px 14px; border-left:1px solid var(--board-2); min-width:0;}
+  .pl-mb .c .l{font-size:12px; color:var(--board-dim); display:flex; align-items:center; gap:6px;}
+  .pl-mb .c .v{font-family:var(--font-display); font-size:28px; font-weight:600; line-height:1.15; font-variant-numeric:tabular-nums; white-space:nowrap;}
+  .pl-fin-cartao{width:12px; height:17px; border-radius:2px; flex-shrink:0; transform:rotate(-6deg); display:inline-block; background:transparent;}
+  .pl-fin-cartao.amarelo{background:var(--yc);}
+  .pl-fin-cartao.vermelho{background:var(--primary);}
+  @media (max-width: 900px){ .pl-cols-largo{grid-template-columns:1fr;} }
+  @media (max-width: 620px){
+    .pl-mb{grid-template-columns:repeat(2, minmax(0,1fr));}
+    .pl-mb .lead{grid-column:1/-1; flex-direction:row; align-items:baseline; gap:10px; min-width:0;}
+    .pl-mb .c{border-left:0; border-top:1px solid var(--board-2);}
+    .pl-mb .c .v{font-size:22px;}
+  }
 
   /* ---------- CELULAR ---------- */
   .menu-toggle, .mobile-page, .menu-overlay, .drawer-head{display:none;}
@@ -5923,23 +5965,40 @@ async function clientesFinanceiroDoVendedor(vendedorCodigo){
   return lista;
 }
 
+// Faixa de placar da Financeira (mesmos números dos quadradinhos de antes, mais os críticos).
+function finPlacarHTML(clientes, mostrarSemContato){
+  const total = clientes.reduce((s,c)=>s+c.valor,0);
+  const criticos = clientes.filter(c => c.diasMax > 60).length;
+  const medios = clientes.filter(c => c.diasMax >= 30 && c.diasMax <= 60).length;
+  const semContato = clientes.filter(c=>!c.cobranca || !c.cobranca.historico || c.cobranca.historico.length===0).length;
+  return `<div class="pl-mb">
+    <div class="lead"><b>Cobrança</b><span>${mostrarSemContato ? 'todas as carteiras' : 'sua carteira'}</span></div>
+    <div class="c"><div class="l">Clientes inadimplentes</div><div class="v">${clientes.length}</div></div>
+    <div class="c"><div class="l">Total em aberto</div><div class="v">${fmtMoney(total)}</div></div>
+    ${mostrarSemContato ? `<div class="c"><div class="l">Sem nenhum contato ainda</div><div class="v">${semContato}</div></div>` : ''}
+    <div class="c"><div class="l"><span class="pl-fin-cartao amarelo" aria-hidden="true"></span>30 a 60 dias</div><div class="v">${medios}</div></div>
+    <div class="c"><div class="l"><span class="pl-fin-cartao vermelho" aria-hidden="true"></span>Crítico (60+ dias)</div><div class="v">${criticos}</div></div>
+  </div>`;
+}
+function finCartaoHTML(c){
+  return `<span class="pl-fin-cartao ${c.diasMax>60?'vermelho':(c.diasMax>=30?'amarelo':'')}" title="${c.rotulo}" aria-hidden="true"></span>`;
+}
+
 async function renderVendorFinanceira(main){
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
   const clientes = await clientesFinanceiroDoVendedor(STATE.session.codigo);
   const totalDevido = clientes.reduce((s,c) => s+c.valor, 0);
   main.innerHTML = `
-    <div class="page-header"><div class="eyebrow">Financeira</div><h2>Cobrança de inadimplentes</h2></div>
-    <p style="font-size:13px; color:var(--ink-soft); margin-bottom:16px;">Clientes que somem da sua rotina diária normal — só voltam a aparecer se você agendar um retorno de cobrança. Cor pelo título mais atrasado, valor é a soma de tudo em aberto.</p>
-    <div class="progress-row" style="margin-bottom:18px;">
-      <div class="stat-card danger"><div class="num display">${clientes.length}</div><div class="label">Clientes inadimplentes</div></div>
-      <div class="stat-card danger"><div class="num display" style="font-size:20px;">${fmtMoney(totalDevido)}</div><div class="label">Total em aberto</div></div>
-    </div>
+    <div class="page-header"><h2>Cobrança de inadimplentes</h2></div>
+    ${finPlacarHTML(clientes, false)}
+    <p style="font-size:13px; color:var(--ink-soft); margin-bottom:16px;">Clientes que somem da sua rotina diária normal — só voltam a aparecer se você agendar um retorno de cobrança. Cor pelo título mais atrasado, valor é a soma de tudo em aberto. Total em aberto: <b style="color:var(--ink);">${fmtMoney(totalDevido)}</b>.</p>
     <div class="client-list" id="listaFinanceira"></div>
   `;
   const lista = document.getElementById('listaFinanceira');
   if(clientes.length===0){ lista.innerHTML = `<div class="empty-state">Nenhum cliente inadimplente por aqui. 🎉</div>`; return; }
   lista.innerHTML = clientes.map(c => `
     <div class="client-row status-${c.cor}" style="cursor:pointer;" data-codigo="${c.codigo}">
+      ${finCartaoHTML(c)}
       <div class="client-info">
         <div class="client-name">${c.nome} <span class="client-num">Nº ${c.codigo}</span></div>
         <div class="client-meta">${c.onde} · ${c.titulos.length} título(s) em aberto${c.cobranca && c.cobranca.agendadoPara ? ' · Retorno agendado: '+fmtDatePt(c.cobranca.agendadoPara) : ''}</div>
@@ -6066,7 +6125,8 @@ async function renderFinanceiroBody(main, rerender){
   const clientes = await todosClientesFinanceiro();
 
   main.innerHTML = `
-    <div class="page-header"><div class="eyebrow">Financeira</div><h2>Cobrança — todos os clientes</h2></div>
+    <div class="page-header"><h2>Cobrança — todos os clientes</h2></div>
+    ${finPlacarHTML(clientes, true)}
 
     <div class="panel import-panel" style="border-left-color:var(--debt);">
       <div class="import-panel-title"><span class="import-badge" style="background:#111;">1</span><h3>Subir planilha de títulos em aberto</h3></div>
@@ -6078,11 +6138,6 @@ async function renderFinanceiroBody(main, rerender){
       <div id="msgFinanceiro"></div>
     </div>
 
-    <div class="progress-row" style="margin-bottom:6px;">
-      <div class="stat-card danger"><div class="num display">${clientes.length}</div><div class="label">Clientes inadimplentes (100%)</div></div>
-      <div class="stat-card danger"><div class="num display" style="font-size:20px;">${fmtMoney(clientes.reduce((s,c)=>s+c.valor,0))}</div><div class="label">Total em aberto</div></div>
-      <div class="stat-card"><div class="num display">${clientes.filter(c=>!c.cobranca || !c.cobranca.historico || c.cobranca.historico.length===0).length}</div><div class="label">Sem nenhum contato ainda</div></div>
-    </div>
 
     <div class="toolbar">
       <input type="text" class="search-input" id="buscaFinanceiro" placeholder="Buscar por número do cliente...">
@@ -6125,6 +6180,7 @@ async function renderFinanceiroBody(main, rerender){
     if(r.length===0){ lista.innerHTML = `<div class="empty-state">Nenhum cliente encontrado.</div>`; return; }
     lista.innerHTML = r.map(c => `
       <div class="client-row status-${c.cor}" style="cursor:pointer;" data-codigo="${c.codigo}">
+        ${finCartaoHTML(c)}
         <div class="client-info">
           <div class="client-name">${c.nome} <span class="client-num">Nº ${c.codigo}</span></div>
           <div class="client-meta">Vendedor: ${c.vendedorNome} · ${c.onde} · ${c.titulos.length} título(s)${c.cobranca && c.cobranca.historico && c.cobranca.historico.length ? ` · ${c.cobranca.historico.length} contato(s) registrado(s)` : ' · sem contato ainda'}${c.cobranca && c.cobranca.agendadoPara ? ' · Retorno: '+fmtDatePt(c.cobranca.agendadoPara) : ''}</div>
@@ -6328,8 +6384,8 @@ function renderVendorDashboard(main){
     const diff = p.pctMedioIndicadores - p.pctMesPassado, pts = Math.abs(diff);
     if(bateu){ ritmoTxt = 'Meta batida, agora é saldo'; ritmoCls = 'ok'; }
     else if(diff === 0){ ritmoTxt = 'No ritmo do mês'; ritmoCls = 'ok'; }
-    else if(diff > 0){ ritmoTxt = `${pts} pts à frente do ritmo`; ritmoCls = 'ok'; }
-    else if(diff > -15){ ritmoTxt = `${pts} pts atrás do ritmo`; ritmoCls = 'warn'; }
+    else if(diff > 0){ ritmoTxt = `${pts} ${pts===1?'pt':'pts'} à frente do ritmo`; ritmoCls = 'ok'; }
+    else if(diff > -15){ ritmoTxt = `${pts} ${pts===1?'pt':'pts'} atrás do ritmo`; ritmoCls = 'warn'; }
     else { ritmoTxt = `${pts} pts atrás: hora de acelerar`; ritmoCls = 'bad'; }
     ritmoSub = `${p.pctMedioIndicadores}% feito · ${p.pctMesPassado}% do mês`;
   }
@@ -8120,12 +8176,17 @@ function totalSkusEVolumeEquipe(mesChave){
   return {totalSkus: skuCodesUnicos.size, totalUnidades};
 }
 
+// Visão geral (gerente/diretor e Compras) no layout Placar. Mesmos números de antes:
+// meta da equipe, indicadores, inadimplência por vendedor, UF e os cartões de cada vendedor
+// (agora na "Classificação da equipe", que abre a carteira do vendedor como antes).
 function renderManagerOverview(main){
   const mesVisao = STATE.mesSelecionado||currentMonthKey();
   const vendVisiveis = vendorsVisiveis(mesVisao);
   const codigosOcultos = new Set(STATE.vendors.filter(v => vendedorOcultoNoMes(v, mesVisao)).map(v => v.codigo));
   const totalClientes = STATE.roster.filter(c => !codigosOcultos.has(c.vendedorCodigo)).length;
   let totalAtrasados = 0, totalHojeFeitos = 0, totalHoje = 0, totalVendas = 0, totalValorVendas = 0, totalPositivados = 0, totalContatadosMes = 0, totalMetaVendas = 0, totalDevedores = 0, totalValorDevido = 0;
+  const porVendedor = [];
+  const diasComVenda = new Set();
   vendVisiveis.forEach(v=>{
     const s = vendorStats(v.codigo);
     const m = vendorMonthStats(v.codigo);
@@ -8134,56 +8195,137 @@ function renderManagerOverview(main){
     totalVendas += m.numVendas; totalValorVendas += m.valorVendas; totalPositivados += m.positivados;
     totalContatadosMes += m.contatadosMes; totalMetaVendas += (m.metaVendas||0); totalDevedores += inad.qtd;
     totalValorDevido += inad.total;
+    m.atividade.forEach(a => { if(a.vendeu && a.data) diasComVenda.add(Number(String(a.data).slice(8,10))); });
+    porVendedor.push({v, s, m, inad});
   });
   const naoCadastrados = STATE.config.inadimplenciaNaoCadastrados || {qtd:0, total:0};
   const totalSkusVolume = totalSkusEVolumeEquipe(STATE.mesSelecionado||currentMonthKey());
   const pctPositivacaoGeral = totalClientes ? Math.round(totalPositivados/totalClientes*100) : 0;
   const pctContatoGeral = totalClientes ? Math.round(totalContatadosMes/totalClientes*100) : 0;
   const pctVendasGeral = totalMetaVendas ? Math.min(100, Math.round(totalValorVendas/totalMetaVendas*100)) : 0;
+  const pctVendasReal = totalMetaVendas ? Math.round(totalValorVendas/totalMetaVendas*100) : 0;
   const mesEhAtual = (STATE.mesSelecionado||currentMonthKey()) === currentMonthKey();
   const [anoSel, mesSel] = (STATE.mesSelecionado||currentMonthKey()).split('-').map(Number);
-  const mesNome = new Date(anoSel, mesSel-1, 1).toLocaleDateString('pt-BR', {month:'long', year:'numeric'});
+  const mesCurto = new Date(anoSel, mesSel-1, 1).toLocaleDateString('pt-BR', {month:'long'});
   const ultimaAtualizacaoTxt = STATE.config.ultimaAtualizacaoBaseData ? fmtDataHora(STATE.config.ultimaAtualizacaoBaseData) : 'ainda não registrada';
+  const ehGerente = STATE.session.tipo === 'gerente';
+
+  // Relógio do mês (90 minutos de jogo) e ritmo da equipe, com a mesma regra do vendedor.
+  const diasNoMes = new Date(anoSel, mesSel, 0).getDate();
+  const diaAtual = mesEhAtual ? new Date().getDate() : diasNoMes;
+  const pctMes = mesEhAtual ? Math.round(diaAtual/diasNoMes*100) : 100;
+  const minuto = mesEhAtual ? Math.max(1, Math.round(diaAtual/diasNoMes*90)) : 90;
+  const tempo = !mesEhAtual ? 'Fim de jogo' : (diaAtual === diasNoMes ? 'Último dia' : (minuto <= 45 ? '1º tempo' : '2º tempo'));
+  const bateu = totalMetaVendas > 0 && totalValorVendas >= totalMetaVendas;
+  const mediaEquipe = Math.round((Math.min(100,pctContatoGeral) + Math.min(100,pctPositivacaoGeral) + pctVendasGeral)/3);
+  const ptsTxt = (n) => `${n} ${n===1?'pt':'pts'}`;
+  let ritmoTxt, ritmoCls, ritmoSub;
+  if(!mesEhAtual){
+    ritmoTxt = !totalMetaVendas ? 'Mês fechado' : bateu ? 'Meta de vendas batida' : `Fechou em ${pctVendasReal}% da meta`;
+    ritmoCls = bateu ? 'ok' : (pctVendasReal >= 90 ? 'warn' : 'bad'); ritmoSub = 'mês fechado';
+  } else {
+    const diff = mediaEquipe - pctMes, pts = Math.abs(diff);
+    if(bateu){ ritmoTxt = 'Meta batida, agora é saldo'; ritmoCls = 'ok'; }
+    else if(diff === 0){ ritmoTxt = 'No ritmo do mês'; ritmoCls = 'ok'; }
+    else if(diff > 0){ ritmoTxt = `${ptsTxt(pts)} à frente do ritmo`; ritmoCls = 'ok'; }
+    else if(diff > -15){ ritmoTxt = `${ptsTxt(pts)} atrás do ritmo`; ritmoCls = 'warn'; }
+    else { ritmoTxt = `${ptsTxt(pts)} atrás: hora de acelerar`; ritmoCls = 'bad'; }
+    ritmoSub = `${mediaEquipe}% feito · ${pctMes}% do mês`;
+  }
+
+  // Classificação: os mesmos números dos cartões de vendedor de antes, ordenados por % da meta de vendas.
+  const ranking = porVendedor.map(x => {
+    const pctV = x.m.metaVendas ? Math.round(x.m.valorVendas/x.m.metaVendas*100) : 0;
+    const media = Math.round((Math.min(100,x.m.pctMeta) + Math.min(100,x.m.pctPositivacao) + x.m.pctMetaVendas)/3);
+    return {...x, pctV, ritmo: media - pctMes};
+  }).sort((a,b) => b.pctV - a.pctV || b.m.valorVendas - a.m.valorVendas);
+  const ritmoCel = (r) => {
+    if(!r.m.metaVendas) return '<span class="pl-na">sem meta</span>';
+    if(!mesEhAtual) return r.pctV >= 100 ? '<span class="pl-up">Bateu</span>' : `<span class="pl-dn">${r.pctV}%</span>`;
+    return r.ritmo >= 0 ? `<span class="pl-up">+${r.ritmo}</span>` : `<span class="pl-dn">−${Math.abs(r.ritmo)}</span>`;
+  };
+
   main.innerHTML = `
-    <div class="page-header" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
-      <div><div class="eyebrow">Painel do gerente · ${STATE.session.nome}</div><h2>Visão geral</h2></div>
+    <div class="page-header pl-topo">
+      <div><h2>Visão geral</h2><div class="pl-sub">${ehGerente ? 'Painel do gerente' : 'Painel de compras'} · ${STATE.session.nome} · 📅 Última atualização da base: <b style="color:var(--ink);">${ultimaAtualizacaoTxt}</b></div></div>
       ${mesSeletorHTML('seletorMesVisaoGeral')}
     </div>
-    <p style="font-size:12.5px; color:var(--ink-soft); margin-bottom:16px; margin-top:-10px;">📅 Última atualização da base: <b style="color:var(--ink);">${ultimaAtualizacaoTxt}</b></p>
 
-    <div class="panel meta-big">
-      <h3 style="text-transform:capitalize">Meta da equipe — ${mesNome}${mesEhAtual ? '' : ' (fechamento)'}</h3>
-      <p class="hint">Meta total somando todos os vendedores, e o quanto foi atingido nesse mês.</p>
-      <div class="progress-row">
-        <div class="stat-card">
-          <div class="num display">${totalContatadosMes}<span class="den"> / ${totalClientes}</span></div>
-          <div class="label">Contato — clientes contatados (${pctContatoGeral}%)</div>
-          <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${pctContatoGeral}%; background:${pctContatoGeral>=100?'var(--ok)':'var(--accent)'}"></div></div>
-        </div>
-        <div class="stat-card">
-          <div class="num display">${totalPositivados}<span class="den"> / ${totalClientes}</span></div>
-          <div class="label">Positivação — clientes que compraram (${pctPositivacaoGeral}%)</div>
-          <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${pctPositivacaoGeral}%; background:${pctPositivacaoGeral>=100?'var(--ok)':'var(--accent)'}"></div></div>
-        </div>
-        <div class="stat-card ok">
-          <div class="num-money" style="color:var(--ok);">${fmtMoney(totalValorVendas)}</div>
-          <div class="num-money-meta">/ ${fmtMoney(totalMetaVendas)}</div>
-          <div class="label">Valores — vendido de meta total (${pctVendasGeral}%)</div>
-          <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${pctVendasGeral}%; background:${pctVendasGeral>=100?'var(--ok)':'var(--accent)'}"></div></div>
+    <div class="pl-board">
+      <div class="pl-clock ${bateu?'win':''}"><span class="s" style="text-transform:capitalize">${mesCurto}</span><span class="m">${minuto}'</span><span class="s">${tempo}</span></div>
+      <div class="pl-score" aria-label="Equipe vendeu ${fmtMoney(totalValorVendas)} de uma meta de ${fmtMoney(totalMetaVendas)}">
+        <div class="lado esq"><span class="lab">Equipe</span><span class="val">${placarMil(totalValorVendas)}</span></div>
+        <span class="x" aria-hidden="true">×</span>
+        <div class="lado"><span class="lab">Meta</span><span class="val dim">${totalMetaVendas ? placarMil(totalMetaVendas) : 'sem meta'}</span></div>
+      </div>
+      <div class="pl-pace"><b class="${ritmoCls}">${ritmoTxt}</b><span class="dim">${ritmoSub}</span></div>
+    </div>
+    ${placarLinhaTempoHTML(anoSel, mesSel, diasNoMes, diaAtual, mesEhAtual, diasComVenda)}
+
+    <section class="pl-painel pl-ranking">
+      <div class="pl-ph"><h3>Classificação da equipe</h3><span>${ehGerente ? 'clique no vendedor para ver a carteira' : 'por % da meta de vendas'}</span></div>
+      <div class="pl-rolagem"><table class="pl-goals pl-rank"><thead><tr>
+        <th></th><th>Vendedor</th><th>Vendas</th><th>% meta</th><th class="pl-esconde">Contato</th><th class="pl-esconde">Positiv.</th><th class="pl-esconde">Clientes</th><th class="pl-esconde">Atras.</th><th>${mesEhAtual?'Ritmo':'Fechou'}</th>
+      </tr></thead><tbody>
+        ${ranking.length ? ranking.map((r,i) => `
+          <tr class="${ehGerente?'pl-clica':''} ${i===0?'pl-lider':''}" data-codigo="${r.v.codigo}" ${ehGerente?'tabindex="0"':''}>
+            <td class="pl-pos">${i+1}º</td>
+            <td><span class="pl-vend">${vendorPhotoSrc(r.v) ? `<img src="${vendorPhotoSrc(r.v)}" alt="">` : ''}<span>${r.v.nome}<span class="pl-sm">Nº ${vendorNumero(r.v)}</span></span></span></td>
+            <td>${placarMil(r.m.valorVendas)}<span class="pl-sm">de ${r.m.metaVendas ? placarMil(r.m.metaVendas) : '—'}</span></td>
+            <td>${r.m.metaVendas ? r.pctV+'%' : '—'}<span class="pl-meter"><i class="${r.pctV>=100?'cheio':''}" style="width:${Math.min(100,r.pctV)}%"></i></span></td>
+            <td class="pl-esconde">${r.m.pctMeta}%</td>
+            <td class="pl-esconde">${r.m.pctPositivacao}%</td>
+            <td class="pl-esconde">${r.s.total}</td>
+            <td class="pl-esconde ${r.s.atrasados>0?'pl-dn':''}">${r.s.atrasados}</td>
+            <td>${ritmoCel(r)}</td>
+          </tr>`).join('') : `<tr><td colspan="9" class="pl-na" style="text-align:center;">Nenhum vendedor ativo nesse mês.</td></tr>`}
+      </tbody></table></div>
+    </section>
+    <div class="pl-cols pl-cols-largo">
+      <div class="pl-stack">
+
+        <section class="pl-painel">
+          <div class="pl-ph"><h3>Indicadores da equipe</h3><span>${mesEhAtual ? 'mês atual (parcial)' : 'fechamento do mês'}</span></div>
+          <table class="pl-goals"><tbody>
+            <tr><td>Vendas<span class="pl-sm">vendido da meta total</span><span class="pl-meter"><i class="${pctVendasGeral>=100?'cheio':''}" style="width:${pctVendasGeral}%"></i></span></td><td>${fmtMoney(totalValorVendas)}<span class="pl-sm">de ${fmtMoney(totalMetaVendas)} · ${pctVendasGeral}%</span></td></tr>
+            <tr><td>Contato<span class="pl-sm">clientes contatados no mês</span><span class="pl-meter"><i class="${pctContatoGeral>=100?'cheio':''}" style="width:${Math.min(100,pctContatoGeral)}%"></i></span></td><td>${totalContatadosMes} / ${totalClientes}<span class="pl-sm">${pctContatoGeral}%</span></td></tr>
+            <tr><td>Positivação<span class="pl-sm">clientes que compraram</span><span class="pl-meter"><i class="${pctPositivacaoGeral>=100?'cheio':''}" style="width:${Math.min(100,pctPositivacaoGeral)}%"></i></span></td><td>${totalPositivados} / ${totalClientes}<span class="pl-sm">${pctPositivacaoGeral}%</span></td></tr>
+            <tr><td>Clientes na base</td><td>${totalClientes}</td></tr>
+            <tr><td>Atrasados<span class="pl-sm">30+ dias sem contato</span></td><td class="${totalAtrasados>0?'pl-dn':''}">${totalAtrasados}</td></tr>
+            ${mesEhAtual ? `<tr><td>Contatados hoje</td><td>${totalHojeFeitos} / ${totalHoje}</td></tr>` : ''}
+            <tr><td>SKUs diferentes vendidos<span class="pl-sm">variedade, toda a equipe</span></td><td>${totalSkusVolume.totalSkus}</td></tr>
+            <tr><td>Volume vendido<span class="pl-sm">unidades, toda a equipe</span></td><td>${Number(totalSkusVolume.totalUnidades||0).toLocaleString('pt-BR')}</td></tr>
+          </tbody></table>
+        </section>
+        <div class="progress-row pl-extras">
+          ${promocaoCardGeralHTML(STATE.mesSelecionado||currentMonthKey())}
+          ${containersChegadosCardsHTML(STATE.mesSelecionado||currentMonthKey())}
         </div>
       </div>
-    </div>
 
-    <div class="progress-row">
-      <div class="stat-card"><div class="num display">${totalClientes}</div><div class="label">Clientes na base</div></div>
-      <div class="stat-card danger"><div class="num display">${totalAtrasados}</div><div class="label">Atrasados (30+ dias)</div></div>
-      ${mesEhAtual ? `<div class="stat-card accent"><div class="num display">${totalHojeFeitos}/${totalHoje}</div><div class="label">Contatados hoje</div></div>` : ''}
-      <div class="stat-card" style="border-color:var(--debt);"><div class="num display" style="color:var(--debt);">${totalDevedores}</div><div class="label">Clientes devedores (inadimplentes)</div></div>
-      <div class="stat-card" style="border-color:var(--debt);"><div class="num display" style="color:var(--debt); font-size:20px;">${fmtMoney(totalValorDevido)}</div><div class="label">Total em inadimplência (carteiras)</div></div>
-      <div class="stat-card"><div class="num display">${totalSkusVolume.totalSkus}</div><div class="label">SKUs diferentes vendidos (variedade, toda a equipe)</div></div>
-      <div class="stat-card"><div class="num display">${totalSkusVolume.totalUnidades}</div><div class="label">Volume vendido (unidades, toda a equipe)</div></div>
-      ${promocaoCardGeralHTML(STATE.mesSelecionado||currentMonthKey())}
-      ${containersChegadosCardsHTML(STATE.mesSelecionado||currentMonthKey())}
+      <div class="pl-stack">
+        ${ehGerente ? `
+        <section class="pl-painel">
+          <div class="pl-ph"><h3>Pra você decidir</h3><span>Estoque e Compras</span></div>
+          <div class="pl-decide" id="plDecide">
+            <button type="button" data-ir="garantia"><span class="n" id="plNGar">…</span><span><span class="t">Garantias aguardando autorização</span><span class="d">Estoque › Garantia › Pendentes</span></span><span class="ir">Abrir</span></button>
+            <button type="button" data-ir="sac"><span class="n" id="plNSac">…</span><span><span class="t">SAC aguardando decisão</span><span class="d">Estoque › SAC</span></span><span class="ir">Abrir</span></button>
+            <button type="button" data-ir="reclamacao"><span class="n" id="plNRec">…</span><span><span class="t">Reclamações de item pendentes</span><span class="d">Compras › Reclamação</span></span><span class="ir">Abrir</span></button>
+          </div>
+        </section>` : ''}
+
+        <section class="pl-painel">
+          <div class="pl-ph"><h3><span class="pl-cartao pl-cartao-inline" aria-hidden="true"></span>Inadimplência por vendedor</h3><span>${totalDevedores} devedores · ${fmtMoney(totalValorDevido)}</span></div>
+          <table class="pl-goals"><thead><tr><th>Vendedor</th><th>Devedores</th><th>Total devido</th></tr></thead><tbody>
+            ${vendVisiveis.map(v => {
+              const inad = vendorInadimplenciaStats(v.codigo);
+              return `<tr><td>${v.nome} <span class="client-num">Nº ${vendorNumero(v)}</span></td><td>${inad.qtd}</td><td>${fmtMoney(inad.total)}</td></tr>`;
+            }).join('')}
+            ${naoCadastrados.qtd > 0 ? `<tr style="color:var(--ink-faint);"><td>Sem vendedor cadastrado no CRM</td><td>${naoCadastrados.qtd}</td><td>${fmtMoney(naoCadastrados.total)}</td></tr>` : ''}
+          </tbody></table>
+          ${naoCadastrados.qtd > 0 ? `<p class="hint" style="margin:10px 14px 12px;">Esses ${naoCadastrados.qtd} clientes vieram na última lista de inadimplência com um vendedor que não existe cadastrado no CRM — por isso não entraram em nenhuma carteira, só somam no total geral.</p>` : ''}
+        </section>
+      </div>
     </div>
 
     <div class="panel">
@@ -8191,69 +8333,45 @@ function renderManagerOverview(main){
       <p class="hint">Percentual do valor vendido este mês em cada UF (todos os vendedores somados).</p>
       ${distribuicaoUfHTML(vendVisiveis.map(v=>v.codigo), STATE.mesSelecionado||currentMonthKey())}
     </div>
-
-    <div class="panel" style="border-color:var(--debt);">
-      <h3>Inadimplência por vendedor</h3>
-      <p class="hint">Quanto cada vendedor tem de clientes devedores hoje, e o total em R$ que a carteira dele deve.</p>
-      <table class="cred-table">
-        <thead><tr><th>Vendedor</th><th>Clientes devedores</th><th>Total devido</th></tr></thead>
-        <tbody>
-          ${vendVisiveis.map(v => {
-            const inad = vendorInadimplenciaStats(v.codigo);
-            return `<tr><td>${v.nome} <span class="client-num">Nº ${vendorNumero(v)}</span></td><td>${inad.qtd}</td><td>${fmtMoney(inad.total)}</td></tr>`;
-          }).join('')}
-          ${naoCadastrados.qtd > 0 ? `
-            <tr style="color:var(--ink-faint);">
-              <td>Sem vendedor cadastrado no CRM</td>
-              <td>${naoCadastrados.qtd}</td>
-              <td>${fmtMoney(naoCadastrados.total)}</td>
-            </tr>
-          ` : ''}
-        </tbody>
-      </table>
-      ${naoCadastrados.qtd > 0 ? `<p class="hint" style="margin-top:10px;">Esses ${naoCadastrados.qtd} clientes vieram na última lista de inadimplência com um vendedor que não existe cadastrado no CRM — por isso não entraram em nenhuma carteira, só somam no total geral.</p>` : ''}
-    </div>
-    <div class="vendor-cards" id="cards"></div>
   `;
   document.getElementById('seletorMesVisaoGeral').onchange = (e) => {
     STATE.mesSelecionado = e.target.value;
     if(STATE.session.tipo === 'gerente') renderManagerShell(); else renderComprasShell();
   };
-  const cards = document.getElementById('cards');
-  cards.innerHTML = vendVisiveis.map(v => {
-    const s = vendorStats(v.codigo);
-    const m = vendorMonthStats(v.codigo);
-    return `
-      <div class="vendor-card" data-codigo="${v.codigo}">
-        <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
-          ${vendorPhotoSrc(v) ? `<img src="${vendorPhotoSrc(v)}" alt="${v.nome}" style="width:42px; height:42px; border-radius:50%; object-fit:cover; flex-shrink:0; border:2px solid var(--surface); box-shadow:var(--shadow-soft);">` : ''}
-          <div>
-            <div class="vname" style="margin-bottom:0;">${v.nome}</div>
-            <div style="font-size:11px; color:var(--ink-faint);">Vendedor Nº ${vendorNumero(v)}</div>
-          </div>
-        </div>
-        <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${s.total?Math.round((s.emDia+s.atencao)/s.total*100):0}%; background:${s.atrasados>0?'var(--warn)':'var(--ok)'}"></div></div>
-        <div class="vstats">
-          <span><b>${s.total}</b> clientes</span>
-          <span style="color:${s.atrasados>0?'var(--danger)':'var(--ink-soft)'}"><b style="color:${s.atrasados>0?'var(--danger)':'var(--ink)'}">${s.atrasados}</b> atrasados</span>
-        </div>
-        <div class="vstats" style="margin-top:4px;">
-          <span>Contato: <b>${m.pctMeta}%</b></span>
-          <span>Positivação: <b>${m.pctPositivacao}%</b></span>
-        </div>
-        <div class="vstats" style="margin-top:4px;">
-          <span>Vendas: <b>${fmtMoney(m.valorVendas)}</b> / ${fmtMoney(m.metaVendas)} (${m.pctMetaVendas}%)</span>
-        </div>
-      </div>
-    `;
-  }).join('');
-  cards.querySelectorAll('.vendor-card').forEach(el=>{
-    el.onclick = () => {
+  main.querySelectorAll('.pl-rank tr[data-codigo]').forEach(el=>{
+    const abrir = () => {
       if(STATE.session.tipo !== 'gerente') return; // Roberto (compras) só tem Visão geral, não o detalhe por vendedor.
       STATE.route = {page:'vendedores', codigo:Number(el.dataset.codigo)};
       renderManagerShell();
     };
+    el.onclick = abrir;
+    el.onkeydown = (e) => { if(e.key === 'Enter') abrir(); };
   });
+  if(ehGerente){
+    main.querySelectorAll('#plDecide [data-ir]').forEach(b => {
+      b.onclick = () => {
+        const ir = b.dataset.ir;
+        if(ir === 'garantia'){ STATE.garantiaUI = Object.assign(STATE.garantiaUI||{}, {aba:'pendentes'}); STATE.route = {page:'garantia'}; }
+        else if(ir === 'sac'){ STATE.sacUI = Object.assign(STATE.sacUI||{}, {aba:'decisao'}); STATE.route = {page:'sac'}; }
+        else { STATE.comprasUI = Object.assign(STATE.comprasUI||{}, {aba:'reclamacao'}); STATE.route = {page:'compras-estoque'}; }
+        renderManagerShell();
+        try{ window.scrollTo(0,0); }catch(e){}
+      };
+    });
+    // Contagens chegam depois (vêm das funções de garantia/reclamação); se falhar, mostra "—".
+    (async () => {
+      const set = (id, v) => { const el = document.getElementById(id); if(el) el.textContent = v; };
+      try{
+        const gs = await listarGarantias();
+        set('plNGar', gs.filter(g => !g.excluida && g.status === 'pendente').length);
+        set('plNSac', gs.filter(g => !g.excluida && g.status === 'sac_decisao').length);
+      }catch(e){ set('plNGar', '—'); set('plNSac', '—'); }
+      try{
+        const rs = await listarReclamacoes();
+        set('plNRec', rs.filter(r => r.status === 'pendente').length);
+      }catch(e){ set('plNRec', '—'); }
+    })();
+  }
 }
 
 function renderManagerVendorDetail(main){

@@ -5,41 +5,91 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TF Imports — Carteira de Clientes</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+  // Aparência Claro/Escuro escolhida pela pessoa (fica só neste navegador; não grava nada no banco).
+  try{ var __modo = localStorage.getItem('crm-modo'); if(__modo==='claro') document.documentElement.setAttribute('data-visual','white'); else if(__modo==='escuro') document.documentElement.setAttribute('data-visual','dark'); }catch(e){}
+</script>
 <style>
+  /* Visual "Placar": barra de menu verde de transmissão, placar no topo das telas, vermelho TF nos destaques.
+     Sem escolha da pessoa = segue o computador (claro: página clara com placar escuro; escuro: tudo escuro).
+     data-visual="white" = Claro (tudo branco) · data-visual="dark" = Escuro. */
   :root{
-    --bg:#EEF1EC;
+    --bg:#EDF1EE;
     --surface:#FFFFFF;
-    --ink:#1C2620;
-    --ink-soft:#5B665F;
-    --ink-faint:#8B9590;
+    --ink:#13201A;
+    --ink-soft:#4C5B53;
+    --ink-faint:#6F7D75;
     --primary:#C4291B;
+    --primary-hover:#A82216;
     --primary-soft:#FBE6E2;
-    --accent:#E8791F;
+    --accent:#D96A12;
     --accent-soft:#FCEBDA;
-    --danger:#9E3327;
-    --danger-soft:#F4E1DD;
-    --warn:#C98A1D;
-    --warn-soft:#F7EAD3;
-    --info:#2B6CB0;
+    --danger:#B42318;
+    --danger-soft:#F9E3E0;
+    --warn:#A86B00;
+    --warn-soft:#FFF3D1;
+    --info:#24609E;
     --info-soft:#DCEAF7;
-    --ok:#3E7A52;
-    --ok-soft:#E2EEE4;
-    --border:#D8DED4;
-    --radius:14px;
-    --shadow-soft:0 1px 2px rgba(28,38,32,.05), 0 4px 12px rgba(28,38,32,.05);
-    --shadow-hover:0 2px 4px rgba(28,38,32,.07), 0 8px 20px rgba(28,38,32,.08);
+    --ok:#1F7A45;
+    --ok-soft:#E2F1E8;
+    --border:#DAE2DC;
+    --debt:#111111;
+    --debt-ink:#FFFFFF;
+    --sac:#7B4FC9;
+    --sac-soft:#F7F2FE;
+    --pitch:#0E2A20; --pitch-ink:#CFE0D6; --nav-strong:#FFFFFF; --nav-line:transparent;
+    --board:#13201A; --board-2:#1C2D25; --board-ink:#FFFFFF; --board-dim:#9FB5A9; --board-line:transparent;
+    --tl-track:#33463C; --tl-done:#5D7A6B; --tl-we:#3D5348; --tl-dot:#FFFFFF;
+    --pace-ok:#7EE2A6; --pace-warn:#FFC531; --pace-bad:#FF8A7A;
+    --yc:#FFC531; --yc-bg:#FFF6D6; --yc-line:#F0D77A; --yc-ink:#4A3903;
+    --radius:10px;
+    --shadow-soft:0 1px 2px rgba(19,32,26,.05), 0 3px 10px rgba(19,32,26,.05);
+    --shadow-hover:0 2px 4px rgba(19,32,26,.07), 0 8px 20px rgba(19,32,26,.08);
+    --font:'Barlow', -apple-system, 'Segoe UI', sans-serif;
+    --font-display:'Barlow Condensed', 'Arial Narrow', 'Barlow', sans-serif;
+  }
+  @media (prefers-color-scheme: dark){ :root:not([data-visual="white"]){
+    --bg:#0C1310; --surface:#151F1A; --ink:#E5EEE8; --ink-soft:#A8B7AF; --ink-faint:#8A9991;
+    --primary-soft:#3A1612; --accent:#F0954A; --accent-soft:#3A2410; --danger:#FF6B5B; --danger-soft:#3A1612;
+    --warn:#FFC531; --warn-soft:#2E2709; --info:#8CB8F0; --info-soft:#152536; --ok:#4CC27E; --ok-soft:#15301F;
+    --border:#2A3830; --debt:#E5EEE8; --debt-ink:#0C1310; --sac:#B79CF0; --sac-soft:#271C3D;
+    --pitch:#08190F; --board:#0A1510; --board-2:#14241C; --board-dim:#8FA79A;
+    --yc-bg:#2E2709; --yc-line:#5E4E12; --yc-ink:#FFE08A;
+    --shadow-soft:0 1px 2px rgba(0,0,0,.3); --shadow-hover:0 4px 14px rgba(0,0,0,.4);
+    color-scheme:dark; } }
+  :root[data-visual="white"]{
+    --bg:#F5F7F5; --border:#E1E6E2;
+    --pitch:#FFFFFF; --pitch-ink:#4C5B53; --nav-strong:#13201A; --nav-line:#E1E6E2;
+    --board:#FFFFFF; --board-2:#F0F3F1; --board-ink:#13201A; --board-dim:#6B7A72; --board-line:#E1E6E2;
+    --tl-track:#DCE3DE; --tl-done:#A7B6AD; --tl-we:#C9D2CC; --tl-dot:#13201A;
+    --pace-ok:#1F7A45; --pace-warn:#8A5A00; --pace-bad:#B42318;
+    color-scheme:light;
+  }
+  :root[data-visual="dark"]{
+    --bg:#0C1310; --surface:#151F1A; --ink:#E5EEE8; --ink-soft:#A8B7AF; --ink-faint:#8A9991;
+    --primary-soft:#3A1612; --accent:#F0954A; --accent-soft:#3A2410; --danger:#FF6B5B; --danger-soft:#3A1612;
+    --warn:#FFC531; --warn-soft:#2E2709; --info:#8CB8F0; --info-soft:#152536; --ok:#4CC27E; --ok-soft:#15301F;
+    --border:#2A3830; --debt:#E5EEE8; --debt-ink:#0C1310; --sac:#B79CF0; --sac-soft:#271C3D;
+    --pitch:#08190F; --board:#0A1510; --board-2:#14241C; --board-dim:#8FA79A;
+    --yc-bg:#2E2709; --yc-line:#5E4E12; --yc-ink:#FFE08A;
+    --shadow-soft:0 1px 2px rgba(0,0,0,.3); --shadow-hover:0 4px 14px rgba(0,0,0,.4);
+    color-scheme:dark;
   }
   *{box-sizing:border-box; margin:0; padding:0;}
   body{
-    font-family:'Inter', -apple-system, sans-serif;
+    font-family:var(--font);
     background:var(--bg);
     color:var(--ink);
     min-height:100vh;
     -webkit-font-smoothing:antialiased;
   }
-  .display{font-family:'Space Grotesk', 'Inter', sans-serif;}
+  ::selection{background:var(--primary); color:#fff;}
+  :focus-visible{outline:2px solid var(--primary); outline-offset:2px;}
+  input, select, textarea, button{color:inherit; font-family:inherit;}
+  input, select, textarea{background-color:var(--surface);}
+  .display{font-family:var(--font-display);}
   #app{min-height:100vh; display:flex; flex-direction:column;}
 
   /* ---------- LOGIN ---------- */
@@ -55,47 +105,47 @@
     width:60px; height:60px; border-radius:50%; margin-bottom:22px; overflow:hidden; box-shadow:var(--shadow-soft);
   }
   .login-mark img{width:100%; height:100%; object-fit:cover; display:block;}
-  .login-card h1{font-family:'Space Grotesk'; font-size:26px; font-weight:600; margin-bottom:7px; letter-spacing:-0.3px;}
+  .login-card h1{font-family:var(--font-display); font-size:26px; font-weight:600; margin-bottom:7px; letter-spacing:-0.3px;}
   .login-card p.sub{color:var(--ink-soft); font-size:14.5px; margin-bottom:26px; line-height:1.5;}
   .field-label{font-size:13px; font-weight:600; color:var(--ink-soft); margin-bottom:6px; display:block;}
   .login-input{
     width:100%; padding:12px 14px; border:1px solid var(--border); border-radius:10px; font-size:14.5px;
-    font-family:'Inter'; margin-bottom:16px;
+    font-family:var(--font); margin-bottom:16px;
   }
   .login-input:focus{outline:none; border-color:var(--primary);}
   .login-submit{
     width:100%; padding:12px 14px; border:1px solid var(--primary); background:var(--primary);
     color:#fff; border-radius:8px; cursor:pointer; font-size:14px; font-weight:600;
   }
-  .login-submit:hover{background:#96190F;}
+  .login-submit:hover{background:var(--primary-hover);}
   .login-error{background:var(--danger-soft); color:var(--danger); font-size:12.5px; padding:9px 12px; border-radius:7px; margin-bottom:14px;}
 
   /* ---------- SHELL ---------- */
   .shell{display:flex; flex:1; min-height:100vh;}
   .sidebar{
-    width:238px; flex-shrink:0; background:var(--primary); color:#fff;
+    width:238px; flex-shrink:0; background:var(--pitch); color:var(--nav-strong);
     display:flex; flex-direction:column; padding:24px 18px;
   }
   .sidebar .brand{display:flex; align-items:center; gap:11px; margin-bottom:30px; padding:0 6px;}
   .sidebar .brand .mark{width:36px; height:36px; border-radius:50%; overflow:hidden; flex-shrink:0; box-shadow:0 2px 6px rgba(0,0,0,.2);}
   .sidebar .brand .mark img{width:100%; height:100%; object-fit:cover; display:block;}
-  .sidebar .brand .name{font-family:'Space Grotesk'; font-weight:600; font-size:17px;}
+  .sidebar .brand .name{font-family:var(--font-display); font-weight:600; font-size:17px;}
   .sidebar nav{display:flex; flex-direction:column; gap:3px;}
   .nav-item{
     padding:11px 13px; border-radius:9px; cursor:pointer; font-size:14.5px; font-weight:500;
-    color:rgba(255,255,255,.75); display:flex; align-items:center; gap:9px; transition:background .15s;
+    color:var(--pitch-ink); display:flex; align-items:center; gap:9px; transition:background .15s, color .15s;
   }
-  .nav-item:hover{background:rgba(255,255,255,.08); color:#fff;}
-  .nav-item.active{background:rgba(255,255,255,.16); color:#fff;}
+  .nav-item:hover{background:color-mix(in srgb, var(--pitch-ink) 10%, transparent); color:var(--nav-strong);}
+  .nav-item.active{background:color-mix(in srgb, var(--pitch-ink) 16%, transparent); color:var(--nav-strong);}
   .nav-group{justify-content:space-between;}
-  .nav-group.open{background:rgba(255,255,255,.10); color:#fff;}
+  .nav-group.open{color:var(--nav-strong);}
   .nav-caret{font-size:12px; opacity:.85;}
-  .nav-sub{margin:2px 0 4px 14px; padding-left:8px; border-left:2px solid rgba(255,255,255,.3); display:flex; flex-direction:column; gap:2px;}
+  .nav-sub{margin:2px 0 4px 14px; padding-left:8px; border-left:2px solid color-mix(in srgb, var(--pitch-ink) 30%, transparent); display:flex; flex-direction:column; gap:2px;}
   .nav-sub .nav-item{font-size:13.5px; padding:8px 12px;}
   .sidebar-footer{margin-top:auto; padding-top:18px; border-top:1px solid rgba(255,255,255,.15);}
   .whoami-row{display:flex; align-items:center; gap:11px; margin-bottom:12px;}
   .whoami-avatar{width:46px; height:46px; border-radius:50%; object-fit:cover; flex-shrink:0; border:2px solid rgba(255,255,255,.3); box-shadow:0 2px 6px rgba(0,0,0,.2);}
-  .whoami-avatar-fallback{display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.15); color:#fff; font-family:'Space Grotesk'; font-weight:700; font-size:16px;}
+  .whoami-avatar-fallback{display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.15); color:#fff; font-family:var(--font-display); font-weight:700; font-size:16px;}
   .topbar-user{
     position:fixed; top:18px; right:24px; z-index:60;
     display:flex; align-items:center; gap:9px;
@@ -119,27 +169,60 @@
   .topbar-user .logout-btn:hover{background:var(--bg); border-color:var(--primary); color:var(--primary);}
 
   .main{flex:1; padding:32px 40px; overflow-y:auto; max-width:1140px;}
+
+  /* Seletor Claro | Escuro (fica na barra do topo, em todas as telas e perfis) */
+  .modo-toggle{display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--surface);}
+  .modo-toggle button{border:0; background:none; padding:6px 9px; font-size:12.5px; display:inline-flex; gap:5px; align-items:center; cursor:pointer; color:var(--ink-soft);}
+  .modo-toggle button:hover{color:var(--ink);}
+  .modo-toggle button[aria-pressed="true"]{background:var(--ink); color:var(--surface); font-weight:600;}
+
+  /* ---------- MENU NO TOPO (computador) ----------
+     No celular continua a gaveta lateral de antes (regras em "CELULAR" lá embaixo). */
+  @media (min-width: 761px){
+    .shell{display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-areas:"nav user" "main main"; align-content:start; min-height:100vh;}
+    .sidebar{grid-area:nav; width:auto; flex-direction:row; flex-wrap:nowrap; align-items:center; gap:0 4px; padding:0 0 0 20px; border-bottom:1px solid var(--nav-line);}
+    .sidebar .brand{margin:0 14px 0 0; padding:9px 0;}
+    .sidebar .brand .mark{width:30px; height:30px; box-shadow:0 0 0 1px var(--nav-line);}
+    .sidebar .brand .name{font-size:18px; color:var(--nav-strong);}
+    .sidebar nav{flex:1 1 0; min-width:0; flex-direction:row; flex-wrap:wrap; align-items:stretch; gap:0;}
+    .sidebar .nav-item{border-radius:0; padding:15px 11px 12px; border-bottom:3px solid transparent; background:none; white-space:nowrap;}
+    .sidebar .nav-item:hover{background:none;}
+    .sidebar .nav-item.active{background:none; border-bottom-color:var(--primary); color:var(--nav-strong);}
+    .sidebar .nav-group{gap:6px;}
+    .sidebar .nav-sub{margin:0; padding:0; border-left:0; flex-direction:row; align-items:stretch; gap:0; background:color-mix(in srgb, var(--pitch-ink) 8%, transparent);}
+    .sidebar .nav-sub .nav-item{font-size:14px; padding:15px 10px 12px;}
+    .topbar-user{grid-area:user; position:static; align-self:stretch; border-radius:0; border:0; border-bottom:1px solid var(--nav-line); background:var(--pitch); box-shadow:none; padding:6px 20px 6px 12px;}
+    .topbar-user .whoami{color:var(--pitch-ink);}
+    .topbar-user .whoami b{color:var(--nav-strong);}
+    .topbar-user .whoami-avatar{border-color:var(--nav-line);}
+    .topbar-user .logout-btn{border-color:color-mix(in srgb, var(--pitch-ink) 35%, transparent); color:var(--pitch-ink); background:none;}
+    .topbar-user .logout-btn:hover{border-color:var(--primary); color:var(--nav-strong); background:none;}
+    .topbar-user .modo-toggle{border-color:color-mix(in srgb, var(--pitch-ink) 35%, transparent); background:none;}
+    .topbar-user .modo-toggle button{color:var(--pitch-ink);}
+    .topbar-user .modo-toggle button[aria-pressed="true"]{background:var(--nav-strong); color:var(--pitch);}
+    .main{grid-area:main; width:100%; max-width:1240px; margin:0 auto; padding:24px 32px 48px; overflow:visible;}
+  }
   .page-header{margin-bottom:24px;}
   .page-header:has(.mes-bar){flex-direction:column; align-items:flex-start !important;}
   .mes-bar{display:inline-flex; align-items:center; gap:8px; background:var(--surface); border:2px solid var(--primary); border-radius:14px; padding:6px 8px; box-shadow:var(--shadow-soft);}
   .mes-bar .mes-bar-label{font-size:13px; font-weight:700; color:var(--ink-soft); padding-left:6px;}
-  .mes-bar select{font-family:'Space Grotesk'; font-size:17px; font-weight:700; border:none; background:transparent; color:var(--ink); padding:6px 4px; cursor:pointer; min-width:170px;}
+  .mes-bar select{font-family:var(--font-display); font-size:17px; font-weight:700; border:none; background:transparent; color:var(--ink); padding:6px 4px; cursor:pointer; min-width:170px;}
   .mes-bar .mes-nav{border:1px solid var(--border); background:var(--bg); border-radius:10px; width:36px; height:36px; font-size:16px; cursor:pointer; color:var(--ink);}
   .mes-bar .mes-nav:disabled{opacity:.35; cursor:default;}
   .mes-bar .mes-badge{font-size:11.5px; font-weight:700; padding:4px 10px; border-radius:20px;}
   .mes-bar .mes-badge.atual{background:var(--primary-soft); color:var(--primary);}
-  .mes-bar .mes-badge.fechado{background:#111; color:#fff;}
+  .mes-bar .mes-badge.fechado{background:var(--debt); color:var(--debt-ink);}
   .meta-big .num{font-size:44px !important; line-height:1.05;}
   .meta-big .progress-row{display:grid !important; grid-template-columns:repeat(3, minmax(0,1fr)); gap:18px;}
   .meta-big .stat-card{max-width:none !important; width:auto !important; min-width:0; padding:24px 26px;}
   .meta-big .num-money{word-break:break-word;}
   @media (max-width:900px){ .meta-big .progress-row{grid-template-columns:1fr;} }
   .meta-big .num .den{font-size:0.62em; color:var(--ink-soft); font-weight:700;}
-  .meta-big .num-money{font-family:'Space Grotesk'; font-size:32px; font-weight:600; line-height:1.1;}
-  .meta-big .num-money-meta{font-family:'Space Grotesk'; font-size:20px; font-weight:700; color:var(--ink-soft); margin-top:4px;}
+  .meta-big .num-money{font-family:var(--font-display); font-size:32px; font-weight:600; line-height:1.1;}
+  .meta-big .num-money-meta{font-family:var(--font-display); font-size:20px; font-weight:700; color:var(--ink-soft); margin-top:4px;}
   .meta-big .label{font-size:14px;}
   .meta-card-titulo{font-size:12.5px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--ink-soft); margin-bottom:6px;}
-  .meta-card-meta{font-family:'Inter', -apple-system, sans-serif; font-size:30px; font-weight:800; letter-spacing:-0.8px; font-variant-numeric:tabular-nums; line-height:1.05; color:var(--ink); word-break:break-word;}
+  .meta-card-meta{font-family:var(--font); font-size:30px; font-weight:800; letter-spacing:-0.8px; font-variant-numeric:tabular-nums; line-height:1.05; color:var(--ink); word-break:break-word;}
   .meta-card-meta.dinheiro{font-size:24px; letter-spacing:-0.5px; white-space:nowrap;}
   .meta-row{display:grid !important; grid-template-columns:repeat(auto-fit, minmax(230px,1fr)) !important; gap:16px;}
   .meta-row .stat-card{max-width:none !important; width:auto !important;}
@@ -150,7 +233,7 @@
   .meta-card-pct{font-weight:800; margin-left:4px;}
   #comprasConteudo > .page-header, #cfgConteudo > .page-header{display:none;}
   .page-header .eyebrow{font-size:13.5px; color:var(--ink-soft); margin-bottom:5px; font-weight:600;}
-  .page-header h2{font-family:'Space Grotesk'; font-size:29px; font-weight:600; letter-spacing:-0.3px;}
+  .page-header h2{font-family:var(--font-display); font-size:29px; font-weight:600; letter-spacing:-0.3px;}
 
   /* ---------- PROGRESS ---------- */
   .progress-row{display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:16px; margin-bottom:26px;}
@@ -160,7 +243,7 @@
     transition:box-shadow .18s, transform .18s;
   }
   .stat-card:hover{box-shadow:var(--shadow-hover); transform:translateY(-1px);}
-  .stat-card .num{font-family:'Space Grotesk'; font-size:28px; font-weight:600; line-height:1.15; word-break:break-word;}
+  .stat-card .num{font-family:var(--font-display); font-size:28px; font-weight:600; line-height:1.15; word-break:break-word;}
   .stat-card .label{font-size:13.5px; color:var(--ink-soft); margin-top:7px; font-weight:500;}
   .stat-card.accent .num{color:var(--accent);}
   .stat-card.danger .num{color:var(--danger);}
@@ -173,12 +256,12 @@
   .toolbar{display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; align-items:center;}
   .search-input{
     flex:1; min-width:200px; padding:11px 15px; border:1px solid var(--border); border-radius:10px;
-    font-size:14.5px; font-family:'Inter'; background:var(--surface);
+    font-size:14.5px; font-family:var(--font); background:var(--surface);
   }
   .search-input:focus{outline:none; border-color:var(--primary); box-shadow:0 0 0 3px var(--primary-soft);}
   select.filter-select{
     padding:11px 13px; border:1px solid var(--border); border-radius:10px; font-size:14.5px;
-    background:var(--surface); font-family:'Inter'; color:var(--ink);
+    background:var(--surface); font-family:var(--font); color:var(--ink);
   }
   .client-list{display:flex; flex-direction:column; gap:9px;}
   .client-row{
@@ -191,7 +274,7 @@
   .client-row.status-warn{border-left-color:var(--warn);}
   .client-row.status-info{border-left-color:var(--info);}
   .client-row.status-danger{border-left-color:var(--danger);}
-  .client-row.g-sac{border-left-color:#7B4FC9 !important; background:#F7F2FE;}
+  .client-row.g-sac{border-left-color:var(--sac) !important; background:var(--sac-soft);}
   .sac-badge{display:inline-block; background:#7B4FC9; color:#fff; font-size:11px; font-weight:700; padding:2px 8px; border-radius:20px; letter-spacing:.3px; vertical-align:middle;}
   .client-row.comprou-mes{background:var(--ok-soft);}
   .comprou-mes-linha{font-size:13px; color:var(--ok); font-weight:700; margin-top:3px;}
@@ -202,9 +285,9 @@
   .meta-resultado{font-size:27px; font-weight:800; line-height:1; flex-shrink:0; width:34px; text-align:center;}
   .meta-resultado.meta-ok{color:var(--ok);}
   .meta-resultado.meta-fail{color:var(--danger);}
-  .inadimplente-linha{font-size:12.5px; color:#111; font-weight:700; margin-top:3px;}
+  .inadimplente-linha{font-size:12.5px; color:var(--debt); font-weight:700; margin-top:3px;}
   .inadimplente-editar{font-size:12px; color:var(--ink-soft); cursor:pointer; padding:2px 6px; border-radius:6px; border:1px dashed var(--border);}
-  .inadimplente-editar:hover{border-color:#000; color:#000;}
+  .inadimplente-editar:hover{border-color:var(--debt); color:var(--debt);}
   /* Cliente inadimplente: pintado de preto por cima de qualquer outra cor (inclusive comprou-mes). */
   .client-row.inadimplente{background:#161616; border-left-color:#000;}
   .client-row.inadimplente .client-name,
@@ -248,7 +331,7 @@
     color:#fff; font-size:13.5px; font-weight:600; cursor:pointer; white-space:nowrap; flex-shrink:0;
     transition:transform .15s, box-shadow .15s;
   }
-  .check-btn:hover{background:#96190F; box-shadow:var(--shadow-soft); transform:translateY(-1px);}
+  .check-btn:hover{background:var(--primary-hover); box-shadow:var(--shadow-soft); transform:translateY(-1px);}
   .check-btn.done{background:var(--ok-soft); border-color:var(--ok); color:var(--ok);}
   .day-pill{font-size:11.5px; font-weight:600; color:var(--ink-faint); border:1px solid var(--border); padding:4px 9px; border-radius:20px; flex-shrink:0;}
   .agenda-pill{font-size:11.5px; font-weight:600; color:var(--accent); border:1px solid var(--accent); background:var(--accent-soft); padding:4px 10px; border-radius:20px; flex-shrink:0; cursor:pointer;}
@@ -276,10 +359,10 @@
 
   /* ---------- FORMS / MODAL ---------- */
   .panel{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:24px 26px; margin-bottom:22px; box-shadow:var(--shadow-soft);}
-  .panel h3{font-family:'Space Grotesk'; font-size:18px; font-weight:600; margin-bottom:5px;}
+  .panel h3{font-family:var(--font-display); font-size:18px; font-weight:600; margin-bottom:5px;}
   .panel .hint{font-size:13.5px; color:var(--ink-soft); margin-bottom:15px; line-height:1.6;}
   .admin-section-title{
-    font-family:'Space Grotesk'; font-size:13px; font-weight:700; text-transform:uppercase;
+    font-family:var(--font-display); font-size:13px; font-weight:700; text-transform:uppercase;
     letter-spacing:0.6px; color:var(--ink-soft); margin:32px 0 14px; padding-top:22px;
     border-top:2px solid var(--border);
   }
@@ -288,19 +371,19 @@
   .import-panel-title{display:flex; align-items:center; gap:10px; margin-bottom:6px;}
   .import-panel-title h3{margin-bottom:0;}
   .import-badge{
-    width:26px; height:26px; border-radius:50%; color:#fff; font-family:'Space Grotesk'; font-weight:700;
+    width:26px; height:26px; border-radius:50%; color:#fff; font-family:var(--font-display); font-weight:700;
     font-size:13px; display:flex; align-items:center; justify-content:center; flex-shrink:0;
   }
   .form-row{display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap; align-items:center;}
   .form-row input, .form-row select{
-    flex:1; min-width:140px; padding:9px 12px; border:1px solid var(--border); border-radius:7px; font-size:13.5px; font-family:'Inter';
+    flex:1; min-width:140px; padding:9px 12px; border:1px solid var(--border); border-radius:7px; font-size:13.5px; font-family:var(--font);
   }
   textarea.import-area{
     width:100%; min-height:110px; border:1px solid var(--border); border-radius:9px; padding:11px 13px;
-    font-family:'Inter'; font-size:14px; margin-bottom:10px; resize:vertical;
+    font-family:var(--font); font-size:14px; margin-bottom:10px; resize:vertical;
   }
   .primary-btn{padding:11px 20px; border-radius:9px; border:1px solid var(--primary); background:var(--primary); color:#fff; font-size:14.5px; font-weight:600; cursor:pointer; transition:transform .15s, box-shadow .15s;}
-  .primary-btn:hover{background:#96190F; box-shadow:var(--shadow-soft); transform:translateY(-1px);}
+  .primary-btn:hover{background:var(--primary-hover); box-shadow:var(--shadow-soft); transform:translateY(-1px);}
   .ghost-btn{padding:10px 15px; border-radius:9px; border:1px solid var(--border); background:none; color:var(--ink); font-size:14px; font-weight:500; cursor:pointer; transition:border-color .15s, color .15s;}
   .ghost-btn:hover{border-color:var(--primary); color:var(--primary);}
   .msg{font-size:13.5px; margin-top:8px; padding:9px 12px; border-radius:8px;}
@@ -311,7 +394,7 @@
   .cred-table th{text-align:left; font-size:11.5px; color:var(--ink-soft); font-weight:600; padding:6px 8px; border-bottom:1px solid var(--border);}
   .cred-table td{padding:8px; border-bottom:1px solid var(--border);}
   .cred-table input{padding:6px 8px; border:1px solid var(--border); border-radius:6px; font-size:12.5px; width:100%;}
-  .pin{font-family:'Space Grotesk'; font-weight:600; letter-spacing:1px;}
+  .pin{font-family:var(--font-display); font-weight:600; letter-spacing:1px;}
 
   .toggle-row{display:flex; gap:8px;}
   .toggle-btn{
@@ -323,11 +406,91 @@
 
   .modal-backdrop{position:fixed; inset:0; background:rgba(20,25,22,.5); display:flex; align-items:center; justify-content:center; z-index:50; padding:20px;}
   .modal{background:var(--surface); border-radius:16px; padding:26px; width:100%; max-width:390px; box-shadow:var(--shadow-hover);}
-  .modal h3{font-family:'Space Grotesk'; font-size:18px; margin-bottom:15px;}
-  .modal textarea{width:100%; min-height:70px; border:1px solid var(--border); border-radius:9px; padding:11px; font-family:'Inter'; font-size:14px; margin-bottom:14px;}
+  .modal h3{font-family:var(--font-display); font-size:18px; margin-bottom:15px;}
+  .modal textarea{width:100%; min-height:70px; border:1px solid var(--border); border-radius:9px; padding:11px; font-family:var(--font); font-size:14px; margin-bottom:14px;}
   .modal-actions{display:flex; gap:8px; justify-content:flex-end;}
 
   .loading{display:flex; align-items:center; justify-content:center; min-height:100vh; color:var(--ink-soft); font-size:14.5px;}
+
+  /* ---------- PLACAR (Dashboard do vendedor) ---------- */
+  .pl-topo{display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:14px;}
+  .pl-quem{display:flex; align-items:center; gap:12px;}
+  .pl-foto{width:52px; height:52px; border-radius:50%; object-fit:cover; border:2px solid var(--surface); box-shadow:var(--shadow-soft); flex-shrink:0;}
+  .pl-sub{font-size:13.5px; color:var(--ink-soft);}
+  .pl-board{background:var(--board); color:var(--board-ink); border:1px solid var(--board-line); border-bottom:0; border-radius:var(--radius) var(--radius) 0 0; display:grid; grid-template-columns:auto minmax(0,1fr) auto; overflow:hidden; container-type:inline-size;}
+  .pl-clock{background:var(--primary); color:#fff; padding:10px 18px; text-align:center; display:flex; flex-direction:column; justify-content:center; min-width:104px;}
+  .pl-clock.win{background:var(--ok);}
+  .pl-clock .m{font-family:var(--font-display); font-weight:700; font-size:44px; line-height:1; font-variant-numeric:tabular-nums;}
+  .pl-clock .s{font-size:12.5px; font-weight:600;}
+  .pl-score{display:flex; align-items:center; justify-content:center; gap:clamp(8px,2cqi,18px); padding:12px 16px; min-width:0;}
+  .pl-score .lado{display:flex; flex-direction:column; min-width:0;}
+  .pl-score .lado.esq{text-align:right;}
+  .pl-score .lab{font-size:12px; color:var(--board-dim);}
+  .pl-score .val{font-family:var(--font-display); font-weight:600; font-size:clamp(26px,6cqi,44px); line-height:1; font-variant-numeric:tabular-nums; white-space:nowrap;}
+  .pl-score .val.dim{color:var(--board-dim);}
+  .pl-score .x{font-family:var(--font-display); font-size:26px; color:var(--board-dim);}
+  .pl-pace{padding:10px 16px; border-left:1px solid var(--board-2); display:flex; flex-direction:column; justify-content:center; gap:2px; font-size:13px; min-width:190px;}
+  .pl-pace b{font-weight:600;}
+  .pl-pace .ok{color:var(--pace-ok);} .pl-pace .warn{color:var(--pace-warn);} .pl-pace .bad{color:var(--pace-bad);} .pl-pace .dim{color:var(--board-dim);}
+  .pl-tl{background:var(--board-2); padding:8px 16px 6px; border:1px solid var(--board-line); border-top:0; border-radius:0 0 var(--radius) var(--radius); margin-bottom:14px;}
+  .pl-dias{display:flex; gap:2px; align-items:center; height:16px;}
+  .pl-d{flex:1; height:6px; background:var(--tl-track); position:relative; border-radius:1px;}
+  .pl-d.passou{background:var(--tl-done);}
+  .pl-d.fds{background:transparent; border-top:1px dashed var(--tl-we); height:0;}
+  .pl-d.venda::after{content:""; position:absolute; left:50%; top:50%; width:8px; height:8px; margin:-4px 0 0 -4px; border-radius:50%; background:var(--tl-dot);}
+  .pl-d.hoje{background:var(--primary);}
+  .pl-d.hoje::before{content:""; position:absolute; left:50%; top:-7px; margin-left:-4px; border:4px solid transparent; border-top-color:var(--primary);}
+  .pl-leg{display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; font-size:11.5px; color:var(--board-dim); margin-top:4px;}
+  .pl-leg span{display:inline-flex; align-items:center; gap:5px;}
+  .pl-dot{width:7px; height:7px; border-radius:50%; background:var(--tl-dot); display:inline-block;}
+  .pl-dica{margin:0 0 16px; font-size:14px; color:var(--ink-soft); line-height:1.5;}
+  .pl-dica summary{cursor:pointer; font-weight:600; color:var(--ink); margin-top:6px; font-size:13.5px;}
+  .pl-dica ul{margin:6px 0 0; padding-left:18px; display:flex; flex-direction:column; gap:6px;}
+  .pl-cols{display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,1fr); gap:16px; align-items:start; margin-bottom:22px;}
+  .pl-stack{display:flex; flex-direction:column; gap:16px; min-width:0;}
+  .pl-painel{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); min-width:0; box-shadow:var(--shadow-soft);}
+  .pl-ph{display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap; padding:12px 14px 6px;}
+  .pl-ph h3{font-family:var(--font); font-size:15.5px; font-weight:700; margin:0;}
+  .pl-ph span{font-size:13px; color:var(--ink-soft); text-transform:none;}
+  .pl-goals{width:100%; border-collapse:collapse;}
+  .pl-goals th, .pl-goals td{padding:9px 14px; text-align:right; font-size:14px; border-top:1px solid var(--border); font-variant-numeric:tabular-nums;}
+  .pl-goals th{font-size:12px; color:var(--ink-faint); font-weight:600; border-top:0; padding-top:2px;}
+  .pl-goals th:first-child, .pl-goals td:first-child{text-align:left;}
+  .pl-goals td:first-child{font-weight:600;}
+  .pl-sm{display:block; font-size:12px; color:var(--ink-faint); font-weight:400;}
+  .pl-meter{display:block; height:4px; background:var(--border); border-radius:2px; overflow:hidden; margin-top:5px;}
+  .pl-meter i{display:block; height:100%; background:var(--ink-soft);}
+  .pl-meter i.cheio{background:var(--ok);}
+  .pl-up{color:var(--ok); font-weight:700;} .pl-dn{color:var(--danger); font-weight:700;} .pl-na{color:var(--ink-faint); font-size:13px;}
+  .pl-extras{margin-bottom:0;}
+  .pl-amarelo{display:flex; gap:12px; align-items:flex-start; text-align:left; cursor:pointer; background:var(--yc-bg); border-color:var(--yc-line); color:var(--yc-ink); font:inherit;}
+  .pl-amarelo .num, .pl-amarelo .label{color:var(--yc-ink); display:block;}
+  .pl-amarelo .num{font-size:22px;}
+  .pl-cartao{width:14px; height:20px; background:var(--yc); border-radius:2px; transform:rotate(-6deg); flex-shrink:0; margin-top:4px;}
+  .pl-li{display:grid; grid-template-columns:28px minmax(0,1fr) auto; gap:10px; align-items:center; padding:11px 14px; border-top:1px solid var(--border);}
+  .pl-n{font-family:var(--font-display); font-weight:600; font-size:18px; color:var(--ink-faint); font-variant-numeric:tabular-nums;}
+  .pl-acoes{display:flex; flex-direction:column; align-items:flex-end; gap:8px;}
+  .pl-vazio{padding:22px 14px; text-align:center; color:var(--ink-soft); font-size:14px; border-top:1px solid var(--border);}
+  .pl-vazio b{display:block; color:var(--ink); font-size:15.5px; margin-bottom:4px;}
+  .pl-mais{display:block; width:100%; text-align:center; padding:11px 14px; border:0; border-top:1px solid var(--border); background:none; color:var(--primary); font-weight:600; font-size:14px; cursor:pointer; border-radius:0 0 var(--radius) var(--radius);}
+  .pl-mais:hover{background:var(--bg);}
+  @media (max-width: 900px){
+    .pl-cols{grid-template-columns:1fr;}
+    .pl-escalacao{order:-1;}
+  }
+  @media (max-width: 620px){
+    .pl-board{grid-template-columns:auto minmax(0,1fr);}
+    .pl-pace{grid-column:1/-1; border-left:0; border-top:1px solid var(--board-2); min-width:0; flex-direction:row; flex-wrap:wrap; gap:4px 12px;}
+    .pl-clock{min-width:74px; padding:10px 12px;}
+    .pl-clock .m{font-size:32px;}
+    .pl-score{justify-content:flex-start;}
+    .pl-score .lado.esq{text-align:left;}
+    .pl-goals th, .pl-goals td{padding:8px;}
+    .pl-esconde{display:none;}
+    .pl-li{grid-template-columns:24px minmax(0,1fr);}
+    .pl-acoes{grid-column:2; flex-direction:row; align-items:center; justify-content:space-between;}
+  }
+  .main table.pl-goals{display:table;}
 
   /* ---------- CELULAR ---------- */
   .menu-toggle, .mobile-page, .menu-overlay, .drawer-head{display:none;}
@@ -342,21 +505,21 @@
     .menu-toggle{
       display:flex; align-items:center; justify-content:center; flex-shrink:0;
       width:42px; height:42px; border-radius:10px; border:none; cursor:pointer;
-      background:rgba(255,255,255,.14); color:#fff; font-size:22px; line-height:1;
+      background:color-mix(in srgb, var(--pitch-ink) 14%, transparent); color:var(--nav-strong); font-size:22px; line-height:1;
     }
     .sidebar .brand{margin-bottom:0; padding:0; gap:8px; min-width:0;}
     .sidebar .brand .mark{width:30px; height:30px;}
     .sidebar .brand .name{display:none;}
-    .mobile-page{display:block; font-family:'Space Grotesk'; font-weight:600; font-size:15.5px; color:#fff;
-      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; max-width:calc(100vw - 230px);}
+    .mobile-page{display:block; font-family:var(--font-display); font-weight:600; font-size:15.5px; color:#fff;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; max-width:calc(100vw - 230px); color:var(--nav-strong);}
     /* Menu lateral que abre por cima (gaveta) */
     .sidebar nav{
       position:fixed; top:0; left:0; bottom:0; width:min(82vw, 300px); z-index:80;
-      background:var(--primary); padding:0 14px 24px; overflow-y:auto;
+      background:var(--pitch); padding:0 14px 24px; overflow-y:auto;
       transform:translateX(-105%); transition:transform .22s ease; box-shadow:4px 0 20px rgba(0,0,0,.25);
     }
     .drawer-head{display:flex; align-items:center; gap:10px; height:60px; margin-bottom:8px;
-      color:#fff; font-family:'Space Grotesk'; font-weight:600; font-size:17px; border-bottom:1px solid rgba(255,255,255,.15);}
+      color:var(--nav-strong); font-family:var(--font-display); font-weight:600; font-size:17px; border-bottom:1px solid color-mix(in srgb, var(--pitch-ink) 20%, transparent);}
     .drawer-head img{width:30px; height:30px; border-radius:50%;}
     .nav-item{padding:14px 14px; font-size:16px;}
     .menu-overlay{position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:70; opacity:0; pointer-events:none; transition:opacity .2s;}
@@ -365,7 +528,8 @@
     .shell.menu-aberto .menu-overlay{display:block; opacity:1; pointer-events:auto;}
     .sidebar-footer{display:none;}
     /* Usuário no canto direito da barra, compacto */
-    .topbar-user{top:9px; right:10px; padding:4px; gap:5px; box-shadow:none; background:rgba(255,255,255,.95);}
+    .topbar-user{top:9px; right:10px; padding:4px; gap:5px; box-shadow:none; background:var(--surface);}
+    .topbar-user .modo-toggle button span{display:none;}
     .topbar-user .whoami{display:none;}
     .topbar-user .whoami-avatar{width:32px; height:32px;}
     .topbar-user .logout-btn{padding:7px 9px; font-size:12.5px;}
@@ -4661,12 +4825,38 @@ function sidebarHTML(items){
     <div class="topbar-user">
       ${foto ? `<img class="whoami-avatar" src="${foto}" alt="${STATE.session.nome}">` : `<div class="whoami-avatar whoami-avatar-fallback">${(STATE.session.nome||'?')[0].toUpperCase()}</div>`}
       <div class="whoami">Conectado como<b>${STATE.session.nome}${vendorObj?' · Nº '+vendorNumero(vendorObj):''}</b></div>
+      ${modoToggleHTML()}
       <button class="logout-btn" id="btn-refresh" title="Buscar dados novos, sem precisar sair e entrar">🔄<span class="lbl-atualizar"> Atualizar</span></button>
       <button class="logout-btn" id="btn-logout">Sair</button>
     </div>
   `;
 }
+// ---------- Aparência Claro | Escuro ----------
+// A escolha fica só no navegador de cada pessoa (localStorage), não grava nada no banco.
+// Sem escolha, segue o modo do computador.
+function modoAtual(){
+  const v = document.documentElement.getAttribute('data-visual');
+  if(v === 'white') return 'claro';
+  if(v === 'dark') return 'escuro';
+  return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'escuro' : 'claro';
+}
+function modoToggleHTML(){
+  const m = modoAtual();
+  const sol = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+  const lua = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>';
+  return `<div class="modo-toggle" role="group" aria-label="Aparência da tela">
+    <button type="button" data-modo="claro" aria-pressed="${m==='claro'}" title="Modo claro">${sol}<span>Claro</span></button>
+    <button type="button" data-modo="escuro" aria-pressed="${m==='escuro'}" title="Modo escuro">${lua}<span>Escuro</span></button>
+  </div>`;
+}
+function aplicarModo(m){
+  document.documentElement.setAttribute('data-visual', m === 'claro' ? 'white' : 'dark');
+  try{ localStorage.setItem('crm-modo', m); }catch(e){}
+  document.querySelectorAll('.modo-toggle [data-modo]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.modo === m)));
+}
+
 function bindSidebar(onNav){
+  document.querySelectorAll('.modo-toggle [data-modo]').forEach(b => { b.onclick = () => aplicarModo(b.dataset.modo); });
   const shellEl = document.querySelector('.shell');
   const btnMenu = document.getElementById('btn-menu');
   const overlay = document.getElementById('menu-overlay');
@@ -5101,6 +5291,7 @@ async function renderVendorShell(){
     {page:'leads', label:'Leads'},
     {page:'inativos', label:'Clientes inativos'},
     {page:'historico', label:'Histórico'},
+    {page:'relatorios', label:'Relatórios'},
     {page:'assistente', label:'🤖 Assistente IA'},
   ];
   if(campanhaAtivaNoMenu()) items.splice(1, 0, {page:'campanha', label:'🧰 Campanha'});
@@ -5121,6 +5312,7 @@ async function renderVendorShell(){
   else if(STATE.route.page==='garantia') await renderGarantiaModulo(main, renderVendorShell);
   else if(STATE.route.page==='sac') await renderSacModulo(main);
   else if(STATE.route.page==='compras-estoque') await renderComprasModulo(main, renderVendorShell);
+  else if(STATE.route.page==='relatorios') renderVendorRelatorios(main);
   else renderVendorHistorico(main);
 }
 
@@ -5146,7 +5338,7 @@ async function renderVendorAssistenteIA(main){
     return `<div style="align-self:flex-end; max-width:80%; background:var(--primary); color:#fff; padding:10px 14px; border-radius:14px 14px 2px 14px; font-size:14px;">${texto}</div>`;
   }
   function bolhaResposta(html){
-    return `<div style="align-self:flex-start; max-width:90%; background:#F3F1EA; color:var(--ink); padding:12px 16px; border-radius:14px 14px 14px 2px; font-size:14px; line-height:1.6; white-space:pre-wrap;">${html}</div>`;
+    return `<div style="align-self:flex-start; max-width:90%; background:var(--bg); color:var(--ink); padding:12px 16px; border-radius:14px 14px 14px 2px; font-size:14px; line-height:1.6; white-space:pre-wrap;">${html}</div>`;
   }
   function bolhaCarregando(){
     return `<div id="bolhaCarregando" style="align-self:flex-start; color:var(--ink-faint); font-size:13px; padding:4px 4px;">Pensando...</div>`;
@@ -5876,7 +6068,7 @@ async function renderFinanceiroBody(main, rerender){
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Financeira</div><h2>Cobrança — todos os clientes</h2></div>
 
-    <div class="panel import-panel" style="border-left-color:#111;">
+    <div class="panel import-panel" style="border-left-color:var(--debt);">
       <div class="import-panel-title"><span class="import-badge" style="background:#111;">1</span><h3>Subir planilha de títulos em aberto</h3></div>
       <p class="hint">Suba o relatório <b>exatamente como ele sai do sistema</b> — o CRM junta os títulos por cliente sozinho. Nada do que já foi registrado de observação/cobrança é apagado, não importa quantas vezes você subir de novo.</p>
       <div class="form-row" style="align-items:center;">
@@ -6084,6 +6276,28 @@ async function renderVendorInativos(main){
   draw();
 }
 
+// ---------------- PLACAR (layout novo do Dashboard do vendedor) ----------------
+// Mesmos números de antes (vendorMonthStats / progressoDoMes / dicasDoDia), só organizados como placar.
+// O que saiu daqui foi para a tela "Relatórios" (renderVendorRelatorios), nada foi removido do sistema.
+function placarMil(v){
+  v = Number(v)||0;
+  return v >= 1000 ? 'R$ ' + (v/1000).toLocaleString('pt-BR', {maximumFractionDigits:1}) + ' mil' : fmtMoney(v);
+}
+function placarLinhaTempoHTML(anoSel, mesSel, diasNoMes, diaAtual, mesEhAtual, diasComVenda){
+  let cel = '';
+  for(let d=1; d<=diasNoMes; d++){
+    const wd = new Date(anoSel, mesSel-1, d).getDay();
+    const fds = wd===0 || wd===6;
+    const passou = d <= diaAtual;
+    const hoje = mesEhAtual && d === diaAtual;
+    const venda = !fds && passou && diasComVenda.has(d);
+    cel += `<span class="pl-d ${fds?'fds':''} ${passou&&!fds?'passou':''} ${hoje?'hoje':''} ${venda?'venda':''}"></span>`;
+  }
+  const mm = String(mesSel).padStart(2,'0');
+  return `<div class="pl-tl"><div class="pl-dias" aria-hidden="true">${cel}</div>
+    <div class="pl-leg"><span>1/${mm}</span><span><i class="pl-dot"></i>dia com venda</span><span>${diasNoMes}/${mm}</span></div></div>`;
+}
+
 function renderVendorDashboard(main){
   const s = vendorMonthStats(STATE.session.codigo);
   const p = s.mesEhAtual ? progressoDoMes(s) : null;
@@ -6091,50 +6305,195 @@ function renderVendorDashboard(main){
   const lstats = vendorLeadsStats(STATE.session.codigo);
   const inadStats = vendorInadimplenciaStats(STATE.session.codigo);
   const [anoSel, mesSel] = s.mesChave.split('-').map(Number);
-  const mesNome = new Date(anoSel, mesSel-1, 1).toLocaleDateString('pt-BR', {month:'long', year:'numeric'});
+  const mesCurto = new Date(anoSel, mesSel-1, 1).toLocaleDateString('pt-BR', {month:'long'});
   const vendorAtualObj = STATE.vendors.find(v=>v.codigo===STATE.session.codigo);
   const vendorObj = {...vendorAtualObj, metaMes: s.metasMes.valor, metaSkus: s.metasMes.skus, metaVolume: s.metasMes.volume, metaPositivacao: s.metasMes.positivacao};
   const foto = vendorPhotoSrc(vendorObj);
+
+  // Relógio do mês: o mês inteiro vira 90 minutos de jogo.
+  const diasNoMes = new Date(anoSel, mesSel, 0).getDate();
+  const diaAtual = s.mesEhAtual ? new Date().getDate() : diasNoMes;
+  const pctMes = s.mesEhAtual ? p.pctMesPassado : 100;
+  const minuto = s.mesEhAtual ? Math.max(1, Math.round(diaAtual/diasNoMes*90)) : 90;
+  const tempo = !s.mesEhAtual ? 'Fim de jogo' : (diaAtual === diasNoMes ? 'Último dia' : (minuto <= 45 ? '1º tempo' : '2º tempo'));
+  const pctVendasReal = s.metaVendas ? Math.round(s.valorVendas/s.metaVendas*100) : 0;
+  const bateu = s.metaVendas > 0 && s.valorVendas >= s.metaVendas;
+
+  let ritmoTxt, ritmoCls, ritmoSub;
+  if(!s.mesEhAtual){
+    ritmoTxt = !s.metaVendas ? 'Mês fechado' : bateu ? 'Meta de vendas batida' : `Fechou em ${pctVendasReal}% da meta`;
+    ritmoCls = bateu ? 'ok' : (pctVendasReal >= 90 ? 'warn' : 'bad');
+    ritmoSub = 'mês fechado';
+  } else {
+    const diff = p.pctMedioIndicadores - p.pctMesPassado, pts = Math.abs(diff);
+    if(bateu){ ritmoTxt = 'Meta batida, agora é saldo'; ritmoCls = 'ok'; }
+    else if(diff === 0){ ritmoTxt = 'No ritmo do mês'; ritmoCls = 'ok'; }
+    else if(diff > 0){ ritmoTxt = `${pts} pts à frente do ritmo`; ritmoCls = 'ok'; }
+    else if(diff > -15){ ritmoTxt = `${pts} pts atrás do ritmo`; ritmoCls = 'warn'; }
+    else { ritmoTxt = `${pts} pts atrás: hora de acelerar`; ritmoCls = 'bad'; }
+    ritmoSub = `${p.pctMedioIndicadores}% feito · ${p.pctMesPassado}% do mês`;
+  }
+
+  // Tabela de metas: os mesmos 5 indicadores dos cards antigos.
+  const pm = vendorObj.metaPositivacao || 0;
+  const alvoPosit = pm ? Math.ceil(s.totalClientes*pm/100) : s.totalClientes;
+  const linhas = [
+    {nome:'Vendas', feito:placarMil(s.valorVendas), meta: s.metaVendas ? placarMil(s.metaVendas) : null, pct: s.metaVendas ? pctVendasReal : null,
+      sub: !s.metaVendas ? 'meta ainda não definida' : bateu ? `meta de ${fmtMoney(s.metaVendas)} batida` : `faltam ${fmtMoney(Math.max(0, s.metaVendas - s.valorVendas))}`},
+    {nome:'Contato', feito:s.contatadosMes, meta:s.totalClientes, pct:s.pctMeta,
+      sub: s.pctMeta < 100 ? `${s.totalClientes - s.contatadosMes} sem contato no mês` : 'toda a carteira teve contato'},
+    {nome:'Positivação', feito:s.positivados, meta:alvoPosit, pct: alvoPosit ? Math.min(100, Math.round(s.positivados/alvoPosit*100)) : 0,
+      sub: (pm ? `${pm}% da carteira · ` : '') + (s.pctPositivacao >= 100 ? 'toda a carteira comprou' : `${s.totalClientes - s.positivados} não compraram`)},
+    {nome:'SKUs distintos', feito:s.totalSkus, meta: vendorObj.metaSkus || null, pct: vendorObj.metaSkus ? Math.round(s.totalSkus/vendorObj.metaSkus*100) : null, sub: vendorObj.metaSkus ? '' : 'meta ainda não definida'},
+    {nome:'Volume', feito:s.totalUnidades.toLocaleString('pt-BR'), meta: vendorObj.metaVolume ? vendorObj.metaVolume.toLocaleString('pt-BR') : null, pct: vendorObj.metaVolume ? Math.round(s.totalUnidades/vendorObj.metaVolume*100) : null, sub: vendorObj.metaVolume ? 'unidades' : 'meta ainda não definida'},
+  ];
+  const ritmoCel = (pct) => {
+    if(pct === null) return '<span class="pl-na">sem meta</span>';
+    if(!s.mesEhAtual) return pct >= 100 ? '<span class="pl-up">Bateu</span>' : `<span class="pl-dn">−${100-pct}%</span>`;
+    const r = pct - pctMes;
+    return r >= 0 ? `<span class="pl-up">+${r}</span>` : `<span class="pl-dn">−${Math.abs(r)}</span>`;
+  };
+
+  // Dias com venda no mês (bolinhas da linha do tempo), a partir da atividade registrada.
+  const diasComVenda = new Set(s.atividade.filter(a => a.vendeu && a.data).map(a => Number(String(a.data).slice(8,10))));
+
+  // Escalação de hoje: quem pediu retorno hoje + quem tem crédito livre e não comprou no mês.
+  const nomeDia = new Date().toLocaleDateString('pt-BR', {weekday:'long'});
+  const escalados = [
+    ...s.agendamentosHoje.map(a => ({...a, motivo:'retorno'})),
+    ...s.clientesPotencial.filter(c => !s.agendamentosHoje.some(a => a.codigo === c.codigo)).map(c => ({...c, motivo:'credito'})),
+  ];
+  let escalacaoHTML;
+  if(!s.mesEhAtual){
+    escalacaoHTML = `<div class="pl-vazio"><b>Mês fechado</b>A escalação aparece só no mês atual. Volte para o mês atual no seletor acima.</div>`;
+  } else if(escalados.length === 0){
+    escalacaoHTML = `<div class="pl-vazio"><b>${s.hojeTotal ? 'Ninguém com retorno ou crédito livre hoje' : 'Sem lista para hoje'}</b>${s.hojeTotal ? 'Siga a lista completa em Contatos hoje.' : 'Fim de semana ou dia sem clientes fixos.'}</div>`;
+  } else {
+    escalacaoHTML = escalados.map((c, i) => `
+      <div class="pl-li">
+        <span class="pl-n">${String(i+1).padStart(2,'0')}</span>
+        <div class="client-info">
+          <div class="client-name client-name-link" data-codigo="${c.codigo}">${c.nome} <span class="client-num">Nº ${c.codigo}</span></div>
+          <div class="client-meta">
+            ${c.motivo==='credito' ? `<span>${c.diasSemContato===Infinity ? 'sem contato ainda' : `há ${c.diasSemContato}d sem contato`}</span>` : ''}
+            ${c.contato ? `<span>${c.contato}</span>` : ''}
+            ${c.telefone ? `<a href="tel:${c.telefone.replace(/\D/g,'')}">${c.telefone}</a>` : ''}
+          </div>
+          ${creditoLineByCodigo(c.codigo)}
+        </div>
+        <div class="pl-acoes">
+          ${c.motivo==='retorno' ? '<span class="status-badge status-danger">Retorno pra hoje</span>' : `<span class="status-badge status-ok">Disponível: ${fmtMoney(c.disponivel)}</span>`}
+          <button class="check-btn" data-codigo="${c.codigo}">Marcar contato</button>
+        </div>
+      </div>`).join('');
+  }
+
+  // Cartões que já existiam (campanha, promoção, containers, leads, inadimplência) continuam aqui.
+  const extras = `
+    ${campanhaCardVendedorHTML(STATE.session.codigo)}
+    ${promocaoCardHTML(STATE.session.codigo, s.mesChave)}
+    ${containersChegadosCardsHTML(s.mesChave, STATE.session.codigo)}
+    <div class="stat-card accent"><div class="num display">${lstats.captados}</div><div class="label">Leads captados</div></div>
+    <div class="stat-card ok"><div class="num display">${lstats.convertidos}</div><div class="label">Leads convertidos (viraram cliente e compraram)</div></div>
+    <button type="button" class="stat-card pl-amarelo" id="plCartaoAmarelo" title="Abrir a Financeira">
+      <span class="pl-cartao" aria-hidden="true"></span>
+      <span><span class="num display">${s.devedores} ${s.devedores===1?'devedor':'devedores'}</span>
+      <span class="label">${fmtMoney(inadStats.total)} em inadimplência na sua carteira</span></span>
+    </button>`;
+
   main.innerHTML = `
-    <div class="page-header" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
-      ${foto ? `<img src="${foto}" alt="${STATE.session.nome}" style="width:68px; height:68px; border-radius:50%; object-fit:cover; border:3px solid var(--surface); box-shadow:var(--shadow-soft); flex-shrink:0;">` : ''}
-      <div style="flex:1;">
-        <div class="eyebrow">Meta e desempenho · ${STATE.session.nome} · Nº ${vendorNumero(vendorObj)}</div>
-        <h2 style="text-transform:capitalize">Dashboard — ${mesNome}</h2>
+    <div class="page-header pl-topo">
+      <div class="pl-quem">
+        ${foto ? `<img src="${foto}" alt="${STATE.session.nome}" class="pl-foto">` : ''}
+        <div><h2>${STATE.session.nome}</h2><div class="pl-sub">Vendedor Nº ${vendorNumero(vendorObj)} · carteira de ${s.totalClientes} clientes</div></div>
       </div>
       ${mesSeletorHTML('seletorMesDashboard')}
     </div>
-    ${!s.mesEhAtual ? `<p class="hint" style="margin-bottom:16px;">Vendo dados de um mês passado — só os números retrospectivos aparecem aqui. Volte pro mês atual pra ver agenda, dicas e clientes com potencial.</p>` : ''}
 
-    <div class="progress-row meta-row">
-      ${metaCardHTML('Meta de contato', s.totalClientes, 'clientes', s.contatadosMes, s.pctMeta)}
-      ${metaCardHTML('Meta de vendas', fmtMoney(s.metaVendas), '', fmtMoney(s.valorVendas), s.pctMetaVendas, true)}
-      ${(() => { const pm = vendorObj.metaPositivacao||0; const alvo = pm ? Math.ceil(s.totalClientes*pm/100) : s.totalClientes; return metaCardHTML('Meta de positivação', alvo, pm ? `clientes (${pm}%)` : 'clientes', s.positivados, alvo ? Math.min(100, Math.round(s.positivados/alvo*100)) : 0); })()}
-      ${vendorObj.metaSkus ? metaCardHTML('Meta de SKUs distintos', vendorObj.metaSkus, 'SKUs', s.totalSkus, Math.round(s.totalSkus/vendorObj.metaSkus*100)) : metaCardHTML('SKUs distintos vendidos', s.totalSkus, 'SKUs', '—', 0)}
-      ${vendorObj.metaVolume ? metaCardHTML('Meta de volume', vendorObj.metaVolume.toLocaleString('pt-BR'), 'un.', s.totalUnidades.toLocaleString('pt-BR'), Math.round(s.totalUnidades/vendorObj.metaVolume*100)) : metaCardHTML('Volume vendido', s.totalUnidades.toLocaleString('pt-BR'), 'un.', '—', 0)}
-      ${s.mesEhAtual ? metaCardHTML('Contatos de hoje', s.hojeTotal, 'na agenda', s.hojeFeitos, s.hojeTotal ? Math.round(s.hojeFeitos/s.hojeTotal*100) : 0) : ''}
+    <div class="pl-board">
+      <div class="pl-clock ${bateu?'win':''}"><span class="s" style="text-transform:capitalize">${mesCurto}</span><span class="m">${minuto}'</span><span class="s">${tempo}</span></div>
+      <div class="pl-score" aria-label="Vendido ${fmtMoney(s.valorVendas)} de uma meta de ${fmtMoney(s.metaVendas)}">
+        <div class="lado esq"><span class="lab">Você</span><span class="val">${placarMil(s.valorVendas)}</span></div>
+        <span class="x" aria-hidden="true">×</span>
+        <div class="lado"><span class="lab">Meta</span><span class="val dim">${s.metaVendas ? placarMil(s.metaVendas) : 'sem meta'}</span></div>
+      </div>
+      <div class="pl-pace"><b class="${ritmoCls}">${ritmoTxt}</b><span class="dim">${ritmoSub}</span></div>
+    </div>
+    ${placarLinhaTempoHTML(anoSel, mesSel, diasNoMes, diaAtual, s.mesEhAtual, diasComVenda)}
+
+    ${s.mesEhAtual ? `
+      <div class="pl-dica">
+        <p>${p.mensagem}</p>
+        ${dicas.length ? `<details><summary>Dicas para hoje (${dicas.length})</summary><ul>${dicas.map(d => `<li>${d}</li>`).join('')}</ul></details>` : ''}
+      </div>` : `<p class="hint" style="margin-bottom:16px;">Vendo dados de um mês passado: só os números do mês aparecem aqui. Volte pro mês atual pra ver a escalação e as dicas.</p>`}
+
+    <div class="pl-cols">
+      <div class="pl-stack">
+        <section class="pl-painel">
+          <div class="pl-ph"><h3>Tabela de metas</h3><span>${s.mesEhAtual ? 'pts vs. ritmo do mês' : 'resultado do mês'}</span></div>
+          <table class="pl-goals"><thead><tr><th>Indicador</th><th>Feito</th><th>Meta</th><th class="pl-esconde">%</th><th>${s.mesEhAtual?'Ritmo':'Resultado'}</th></tr></thead><tbody>
+            ${linhas.map(l => `<tr>
+              <td>${l.nome}${l.sub?`<span class="pl-sm">${l.sub}</span>`:''}${l.pct!==null?`<span class="pl-meter"><i class="${l.pct>=100?'cheio':''}" style="width:${Math.min(100,l.pct)}%"></i></span>`:''}</td>
+              <td>${l.feito}</td><td>${l.meta!==null?l.meta:'<span class="pl-na">—</span>'}</td>
+              <td class="pl-esconde">${l.pct!==null?l.pct+'%':'—'}</td><td>${ritmoCel(l.pct)}</td></tr>`).join('')}
+          </tbody></table>
+        </section>
+        <div class="progress-row pl-extras">${extras}</div>
+      </div>
+      <section class="pl-painel pl-escalacao">
+        <div class="pl-ph"><h3>Escalação de hoje</h3><span>${s.mesEhAtual ? `${nomeDia} · ${s.hojeFeitos} de ${s.hojeTotal} feitos` : ''}</span></div>
+        ${escalacaoHTML}
+        ${s.mesEhAtual ? `<button type="button" class="pl-mais" id="plVerHoje">Ver todos os contatos de hoje</button>` : ''}
+      </section>
     </div>
 
-    <div class="progress-row">
-      ${campanhaCardVendedorHTML(STATE.session.codigo)}
-      ${promocaoCardHTML(STATE.session.codigo, s.mesChave)}
-      ${containersChegadosCardsHTML(s.mesChave, STATE.session.codigo)}
-      <div class="stat-card accent">
-        <div class="num display">${lstats.captados}</div>
-        <div class="label">Leads captados</div>
+    ${s.mesEhAtual && s.agendamentos.length>0 ? `
+    <div class="panel">
+      <h3>Retornos agendados</h3>
+      <p class="hint">Esses clientes saíram da lista de "Contatos hoje" até a data marcada.</p>
+      <div class="client-list">
+        ${s.agendamentos.map(a => `
+          <div class="client-row status-warn">
+            <div class="client-info"><div class="client-name client-name-link" data-codigo="${a.codigo}">${a.nome} <span class="client-num">Nº ${a.codigo}</span></div>${creditoLineByCodigo(a.codigo)}</div>
+            <span class="agenda-pill" data-codigo="${a.codigo}" title="Clique para cancelar o agendamento">Retorno ${fmtDatePt(a.data)} ✕</span>
+          </div>
+        `).join('')}
       </div>
-      <div class="stat-card ok">
-        <div class="num display">${lstats.convertidos}</div>
-        <div class="label">Leads convertidos (viraram cliente e compraram)</div>
-      </div>
-      <div class="stat-card" style="border-color:#111;">
-        <div class="num display" style="color:#111;">${s.devedores}</div>
-        <div class="label">Clientes devedores (inadimplentes)</div>
-      </div>
-      <div class="stat-card" style="border-color:#111;">
-        <div class="num display" style="color:#111;">${fmtMoney(inadStats.total)}</div>
-        <div class="label">Total em inadimplência da sua carteira</div>
-      </div>
+    </div>
+    ` : ''}
+
+    <p class="hint">Relatórios de SKU, vendas por estado, mais vendidos do ano e a atividade do mês estão na tela <a href="#" id="plIrRelatorios">Relatórios</a>.</p>
+  `;
+  document.getElementById('seletorMesDashboard').onchange = (e) => {
+    STATE.mesSelecionado = e.target.value;
+    renderVendorShell();
+  };
+  const irPara = (pagina) => { STATE.route = {page: pagina}; renderVendorShell(); try{ window.scrollTo(0,0); }catch(e){} };
+  const btnHoje = document.getElementById('plVerHoje'); if(btnHoje) btnHoje.onclick = () => irPara('hoje');
+  document.getElementById('plIrRelatorios').onclick = (e) => { e.preventDefault(); irPara('relatorios'); };
+  document.getElementById('plCartaoAmarelo').onclick = () => irPara('financeira');
+  bindClientNameLinks(main);
+  main.querySelectorAll('.agenda-pill').forEach(pill=>{
+    pill.onclick = async () => {
+      if(!(await confirmarAcao('Cancelar o retorno agendado para este cliente?'))) return;
+      await cancelarAgendamento(STATE.session.codigo, Number(pill.dataset.codigo));
+      renderVendorShell();
+    };
+  });
+  main.querySelectorAll('.check-btn').forEach(btn=>{
+    btn.onclick = () => openContatoModal(Number(btn.dataset.codigo));
+  });
+}
+
+// ---------------- RELATÓRIOS (vendedor) ----------------
+// Tela nova com os blocos que saíram do Dashboard, exatamente como eram antes.
+function renderVendorRelatorios(main){
+  const s = vendorMonthStats(STATE.session.codigo);
+  const [anoSel] = s.mesChave.split('-').map(Number);
+  main.innerHTML = `
+    <div class="page-header" style="display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap;">
+      <div><h2>Relatórios</h2></div>
+      ${mesSeletorHTML('seletorMesRelatorios')}
     </div>
 
     <div class="panel">
@@ -6183,94 +6542,6 @@ function renderVendorDashboard(main){
       </div>
     </div>
 
-    ${s.mesEhAtual && s.agendamentosHoje.length>0 ? `
-    <div class="panel" style="border-color:var(--accent);">
-      <h3>Agendado para hoje</h3>
-      <p class="hint">Clientes que pediram retorno especificamente para hoje.</p>
-      <div class="client-list">
-        ${s.agendamentosHoje.map(a => `
-          <div class="client-row status-warn">
-            <div class="client-info">
-              <div class="client-name client-name-link" data-codigo="${a.codigo}">${a.nome} <span class="client-num">Nº ${a.codigo}</span></div>
-              <div class="client-meta">
-                ${a.contato ? `<span>${a.contato}</span>` : ''}
-                ${a.telefone ? `<a href="tel:${a.telefone.replace(/\D/g,'')}">${a.telefone}</a>` : ''}
-              </div>
-              ${creditoLineByCodigo(a.codigo)}
-            </div>
-            <button class="check-btn" data-codigo="${a.codigo}">Marcar contato</button>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-    ` : ''}
-
-    ${s.mesEhAtual ? `
-    <div class="panel" style="border-left:4px solid var(--${p.tom});">
-      <h3>Como estamos no mês</h3>
-      <p class="hint">${p.mensagem}</p>
-    </div>
-    ` : ''}
-
-    ${s.mesEhAtual && s.clientesPotencial.length>0 ? `
-    <div class="panel">
-      <h3>Clientes com potencial hoje</h3>
-      <p class="hint">Têm limite de crédito disponível e ainda não compraram este mês — ordenados pelo maior valor disponível pra comprar.</p>
-      <div class="client-list">
-        ${s.clientesPotencial.map(c => `
-          <div class="client-row status-ok">
-            <div class="client-info">
-              <div class="client-name client-name-link" data-codigo="${c.codigo}">${c.nome} <span class="client-num">Nº ${c.codigo}</span></div>
-              <div class="client-meta">
-                ${c.contato ? `<span>${c.contato}</span>` : ''}
-                ${c.telefone ? `<a href="tel:${c.telefone.replace(/\D/g,'')}">${c.telefone}</a>` : ''}
-                <span>${c.diasSemContato===Infinity ? 'sem contato ainda' : `há ${c.diasSemContato}d sem contato`}</span>
-              </div>
-              ${creditoLineByCodigo(c.codigo)}
-            </div>
-            <span class="status-badge status-ok">Disponível: ${fmtMoney(c.disponivel)}</span>
-            <button class="check-btn" data-codigo="${c.codigo}">Marcar contato</button>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-    ` : ''}
-
-    ${s.mesEhAtual ? `
-    <div class="panel">
-      <h3>Dicas para hoje</h3>
-      <ul style="margin:0; padding-left:18px; display:flex; flex-direction:column; gap:8px;">
-        ${dicas.map(d => `<li style="font-size:13px; color:var(--ink-soft); line-height:1.5;">${d}</li>`).join('')}
-      </ul>
-    </div>
-    ` : ''}
-
-    <div class="panel">
-      <h3>Cobertura da carteira</h3>
-      <p class="hint">Cada cliente tem um dia fixo (segunda a sexta), então a carteira inteira é contatada uma vez por semana — comprar ou não comprar não tira ninguém da lista do dia. Só um agendamento de retorno faz o cliente sumir da lista até a data marcada. ${s.pctMeta<100 ? `${s.totalClientes - s.contatadosMes} cliente(s) não tiveram contato nesse mês.` : 'Toda a carteira teve contato nesse mês.'}</p>
-    </div>
-    <div class="panel">
-      <h3>Positivação de clientes</h3>
-      <p class="hint">Positivação é a % da carteira que comprou pelo menos uma vez no mês. ${s.pctPositivacao>=100 ? 'Toda a carteira comprou nesse mês.' : `${s.totalClientes - s.positivados} cliente(s) da carteira não compraram nesse mês.`}</p>
-    </div>
-    <div class="panel">
-      <h3>Meta de vendas</h3>
-      <p class="hint">${s.pctMetaVendas>=100 ? `Meta de ${fmtMoney(s.metaVendas)} batida nesse mês. Parabéns!` : `Faltaram ${fmtMoney(Math.max(0, s.metaVendas - s.valorVendas))} para bater a meta de ${fmtMoney(s.metaVendas)} nesse mês.`}</p>
-    </div>
-    ${s.mesEhAtual && s.agendamentos.length>0 ? `
-    <div class="panel">
-      <h3>Retornos agendados</h3>
-      <p class="hint">Esses clientes saíram da lista de "Contatos hoje" até a data marcada.</p>
-      <div class="client-list">
-        ${s.agendamentos.map(a => `
-          <div class="client-row status-warn">
-            <div class="client-info"><div class="client-name client-name-link" data-codigo="${a.codigo}">${a.nome} <span class="client-num">Nº ${a.codigo}</span></div>${creditoLineByCodigo(a.codigo)}</div>
-            <span class="agenda-pill" data-codigo="${a.codigo}" title="Clique para cancelar o agendamento">Retorno ${fmtDatePt(a.data)} ✕</span>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-    ` : ''}
     <div class="panel">
       <h3>Atividade do mês</h3>
       ${s.atividade.length===0 ? `<div class="empty-state">Nenhum contato registrado nesse mês.</div>` : `
@@ -6291,23 +6562,13 @@ function renderVendorDashboard(main){
       `}
     </div>
   `;
-  document.getElementById('seletorMesDashboard').onchange = (e) => {
+  document.getElementById('seletorMesRelatorios').onchange = (e) => {
     STATE.mesSelecionado = e.target.value;
     renderVendorShell();
   };
   document.getElementById('btnBaixarSkusVendidos').onclick = () => baixarPlanilhaSkusVendidos();
   document.getElementById('btnBaixarSkusNaoVendidos').onclick = () => baixarPlanilhaSkusNaoVendidos();
   bindClientNameLinks(main);
-  main.querySelectorAll('.agenda-pill').forEach(pill=>{
-    pill.onclick = async () => {
-      if(!(await confirmarAcao('Cancelar o retorno agendado para este cliente?'))) return;
-      await cancelarAgendamento(STATE.session.codigo, Number(pill.dataset.codigo));
-      renderVendorShell();
-    };
-  });
-  main.querySelectorAll('.check-btn').forEach(btn=>{
-    btn.onclick = () => openContatoModal(Number(btn.dataset.codigo));
-  });
 }
 
 async function renderVendorHoje(main){
@@ -6320,7 +6581,7 @@ async function renderVendorHoje(main){
   const clientesFinanceiro = await clientesFinanceiroDoVendedor(STATE.session.codigo);
   const cobrancaHoje = clientesFinanceiro.filter(c => c.cobranca && c.cobranca.agendadoPara === todayStr());
   const cobrancaPanelHTML = cobrancaHoje.length===0 ? '' : `
-    <div class="panel" style="border-color:#111;">
+    <div class="panel" style="border-color:var(--debt);">
       <h3>💰 Cobrança agendada pra hoje</h3>
       <p class="hint">Clientes inadimplentes com retorno de cobrança marcado pra hoje.</p>
       <div class="client-list">
@@ -7917,8 +8178,8 @@ function renderManagerOverview(main){
       <div class="stat-card"><div class="num display">${totalClientes}</div><div class="label">Clientes na base</div></div>
       <div class="stat-card danger"><div class="num display">${totalAtrasados}</div><div class="label">Atrasados (30+ dias)</div></div>
       ${mesEhAtual ? `<div class="stat-card accent"><div class="num display">${totalHojeFeitos}/${totalHoje}</div><div class="label">Contatados hoje</div></div>` : ''}
-      <div class="stat-card" style="border-color:#111;"><div class="num display" style="color:#111;">${totalDevedores}</div><div class="label">Clientes devedores (inadimplentes)</div></div>
-      <div class="stat-card" style="border-color:#111;"><div class="num display" style="color:#111; font-size:20px;">${fmtMoney(totalValorDevido)}</div><div class="label">Total em inadimplência (carteiras)</div></div>
+      <div class="stat-card" style="border-color:var(--debt);"><div class="num display" style="color:var(--debt);">${totalDevedores}</div><div class="label">Clientes devedores (inadimplentes)</div></div>
+      <div class="stat-card" style="border-color:var(--debt);"><div class="num display" style="color:var(--debt); font-size:20px;">${fmtMoney(totalValorDevido)}</div><div class="label">Total em inadimplência (carteiras)</div></div>
       <div class="stat-card"><div class="num display">${totalSkusVolume.totalSkus}</div><div class="label">SKUs diferentes vendidos (variedade, toda a equipe)</div></div>
       <div class="stat-card"><div class="num display">${totalSkusVolume.totalUnidades}</div><div class="label">Volume vendido (unidades, toda a equipe)</div></div>
       ${promocaoCardGeralHTML(STATE.mesSelecionado||currentMonthKey())}
@@ -7931,7 +8192,7 @@ function renderManagerOverview(main){
       ${distribuicaoUfHTML(vendVisiveis.map(v=>v.codigo), STATE.mesSelecionado||currentMonthKey())}
     </div>
 
-    <div class="panel" style="border-color:#111;">
+    <div class="panel" style="border-color:var(--debt);">
       <h3>Inadimplência por vendedor</h3>
       <p class="hint">Quanto cada vendedor tem de clientes devedores hoje, e o total em R$ que a carteira dele deve.</p>
       <table class="cred-table">
@@ -9117,7 +9378,7 @@ function renderManagerImportacoes(main){
       <div id="msgPromocao"></div>
     </div>
 
-    <div class="panel import-panel" style="border-left-color:#111;">
+    <div class="panel import-panel" style="border-left-color:var(--debt);">
       <div class="import-panel-title"><span class="import-badge" style="background:#111;">5</span><h3>Financeiro — títulos em aberto</h3></div>
       <p class="hint">Suba aqui o relatório de títulos em aberto <b>exatamente como ele sai do seu sistema</b>, sem precisar tratar nada antes — colunas fixas: Empresa, Prefixo, Número, Parcela, Número Pedido, Número Nota, Valor Original, Saldo, Dias em Atraso, Vencimento, Código, Nome Cliente, Status, Vendedor. Um cliente pode aparecer em várias linhas (um título por parcela em aberto) — o sistema junta tudo automaticamente: a cor de cada cliente na aba Financeira é definida pelo título mais atrasado dele, e o valor mostrado é a soma de todos os títulos em aberto.</p>
       <p class="hint">Isso alimenta a aba <b>"Financeira"</b> de cada vendedor. Clientes que não aparecerem mais numa próxima planilha voltam a ficar "em dia" automaticamente.</p>
@@ -9835,7 +10096,7 @@ async function renderGarantiaModulo(main, rerender){
       ${ui.periodo !== 'tudo' ? `
       <div style="display:flex; align-items:center; justify-content:center; gap:14px; margin:4px 0 18px;">
         <button class="ghost-btn" id="gMesAnt" style="padding:6px 12px;">‹</button>
-        <div style="font-family:'Space Grotesk'; font-size:18px; font-weight:600; min-width:190px; text-align:center;">${gNomeMes(ui.mes)}</div>
+        <div style="font-family:var(--font-display); font-size:18px; font-weight:600; min-width:190px; text-align:center;">${gNomeMes(ui.mes)}</div>
         <button class="ghost-btn" id="gMesProx" style="padding:6px 12px;">›</button>
       </div>` : ''}` : ''}
     ${ui.aba !== 'nova' ? `
@@ -9894,7 +10155,7 @@ function cardGarantiaHTML(g){
   const mostrarFormula = !preDecisao && (gConferente() || g.status === 'aguardando_mercadoria' || g.status === 'conferida');
   return `
     <div class="client-row status-${g.excluida ? 'danger' : st.cls} ${sac ? 'g-sac' : ''}" data-garantia="${g.numero}" style="cursor:pointer;">
-      <div style="font-family:'Space Grotesk'; font-weight:700; font-size:18px; min-width:62px; color:${sac ? '#7B4FC9' : 'var(--primary)'};">${sac ? '<span class="sac-badge">SAC</span><br>' : ''}${g.origem === 'campanha-cashback' ? '<span class="sac-badge" style="background:#1a7f37;">💰 CASHBACK</span><br>' : ''}${g.creditoFinanceiro ? '<span class="sac-badge" style="background:#B26A00;">💳 CRÉDITO</span><br>' : ''}Nº ${g.numero}</div>
+      <div style="font-family:var(--font-display); font-weight:700; font-size:18px; min-width:62px; color:${sac ? 'var(--sac)' : 'var(--primary)'};">${sac ? '<span class="sac-badge">SAC</span><br>' : ''}${g.origem === 'campanha-cashback' ? '<span class="sac-badge" style="background:#1a7f37;">💰 CASHBACK</span><br>' : ''}${g.creditoFinanceiro ? '<span class="sac-badge" style="background:#B26A00;">💳 CRÉDITO</span><br>' : ''}Nº ${g.numero}</div>
       <div class="client-info">
         <div class="client-name">${gEsc(g.clienteNome || 'Cliente')} <span class="client-num">Nº ${gEsc(g.clienteCodigo)}</span></div>
         <div class="client-meta">
@@ -9913,7 +10174,7 @@ function cardGarantiaHTML(g){
         ${mostrarFormula ? `<div class="client-meta" style="margin-top:5px; color:var(--ink);">${formulaGarantiaHTML(g, calc)}</div>` : ''}
       </div>
       <span class="status-badge status-${g.excluida ? 'danger' : st.cls}">${g.excluida ? 'Excluída' : st.label}</span>
-      <div style="font-family:'Space Grotesk'; font-weight:700; font-size:17px; white-space:nowrap;">${fmtMoney(preDecisao ? calc.total : calc.valorFinal)}</div>
+      <div style="font-family:var(--font-display); font-weight:700; font-size:17px; white-space:nowrap;">${fmtMoney(preDecisao ? calc.total : calc.valorFinal)}</div>
     </div>
   `;
 }
@@ -10717,7 +10978,7 @@ function renderRelatorioGarantias(el, garantias, redesenhar){
       ${ui.periodo === 'tudo' ? 'Todo o período' : 'No mês'}:
       ${['garantia','sac','credito','cashback'].map(t => {
         const lst = doMes.filter(g => gTipoRegistro(g) === t);
-        const cor = t==='sac' ? '#7B4FC9' : t==='credito' ? '#B26A00' : t==='cashback' ? '#1a7f37' : 'var(--ink)';
+        const cor = t==='sac' ? 'var(--sac)' : t==='credito' ? '#B26A00' : t==='cashback' ? '#1a7f37' : 'var(--ink)';
         return `<span style="color:${cor}; white-space:nowrap;">${G_TIPO_LABEL[t]} <b>${fmtMoney(gR2(lst.reduce((a,g) => a + calcularGarantia(g).valorFinal, 0)))}</b> (${lst.length})</span>`;
       }).join(' · ')}
       <br><span style="font-size:12px;">Use o filtro "Origem" acima para ver o relatório só de um tipo.</span>
@@ -10774,7 +11035,7 @@ function desenharBuscaItemGarantia(panel, base, redesenhar){
     <div class="form-row">
       <input type="text" id="gBuscaItem" placeholder="Código ou descrição do item" value="${gEsc(ui.relBusca)}" style="flex:3;">
       <button class="ghost-btn" id="gAnoAnt" style="flex:0; padding:9px 12px;">‹</button>
-      <div style="font-family:'Space Grotesk'; font-weight:600; font-size:16px; min-width:60px; text-align:center;">${ano}</div>
+      <div style="font-family:var(--font-display); font-weight:600; font-size:16px; min-width:60px; text-align:center;">${ano}</div>
       <button class="ghost-btn" id="gAnoProx" style="flex:0; padding:9px 12px;">›</button>
     </div>
     <div id="gBuscaResultado">

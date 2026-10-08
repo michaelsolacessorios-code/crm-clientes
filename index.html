@@ -12533,6 +12533,7 @@ async function renderSaidaModulo(main){
   const ui = STATE.sdUI;
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando saídas…</div>`;
   try{ await sdCarregar(); }catch(err){ main.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`; return; }
+  STATE.sdFrota = (await safeGet('crm:saida_frota')) || {motoristas:[], veiculos:[]};
   const abas = [{id:'nova',label:'+ Registrar saída'},{id:'dia',label:'Saídas do dia'},{id:'mes',label:'Relatório mensal'}];
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Estoque › Saída</div><h2>Controle de saída — coletas</h2></div>
@@ -12558,19 +12559,35 @@ function sdResolverNf(l, nfsTela){
 function sdRenderNova(c, main){
   const ui = STATE.sdUI;
   ui.linhas = ui.linhas || [sdLinhaVazia()];
-  ui.veic = ui.veic || {placa:'', transportadora:'', motorista:'', documento:''};
+  ui.veic = ui.veic || {modo:'transp', placa:'', transportadora:'', motorista:'', documento:''};
   const V = ui.veic, sd = STATE.sd;
+  const frota = STATE.sdFrota || {motoristas:[], veiculos:[]};
   const transps = [...new Set([...SD_TRANSP_PADRAO, ...sd.saidas.map(s=>s.transportadora)])].filter(Boolean).sort();
   c.innerHTML = `
     <div class="panel">
-      <h3>🚛 Quem está coletando</h3>
-      <p class="hint" style="margin-bottom:12px;">Data e hora entram sozinhas no momento em que você clicar em <b>Registrar saída</b>. Placa de um caminhão que já veio antes? Transportadora e motorista se preenchem sozinhos.</p>
-      <div class="sd-grid2">
+      <h3>🚛 Quem está levando</h3>
+      <div class="sd-crit" style="margin:4px 0 12px;">
+        <button data-modo="transp" class="${V.modo==='transp'?'on':''}">🚚 Transportadora</button>
+        <button data-modo="propria" class="${V.modo==='propria'?'on':''}">🚐 Entrega própria</button>
+        <button data-modo="retira" class="${V.modo==='retira'?'on':''}">🧍 Cliente retira</button>
+      </div>
+      <p class="hint" style="margin-bottom:12px;">Data e hora entram sozinhas no momento em que você clicar em <b>Registrar saída</b>.${V.modo==='transp'?' Placa de um caminhão que já veio antes? Transportadora e motorista se preenchem sozinhos.':''}</p>
+      ${V.modo==='transp' ? `<div class="sd-grid2">
         <label><span class="field-label">Placa *</span><input class="sd-input" id="sdPlaca" value="${gEsc(V.placa)}" placeholder="ABC-1D23" maxlength="8" style="text-transform:uppercase;"></label>
         <label><span class="field-label">Transportadora *</span><input class="sd-input" id="sdTransp" list="sdDlTransp" value="${gEsc(V.transportadora)}" placeholder="Ex.: BRASPRESS"></label>
         <label><span class="field-label">Motorista *</span><input class="sd-input" id="sdMot" value="${gEsc(V.motorista)}" placeholder="Nome do motorista"></label>
         <label><span class="field-label">Documento (opcional)</span><input class="sd-input" id="sdDoc" value="${gEsc(V.documento)}" placeholder="RG / CPF"></label>
+      </div>` : V.modo==='propria' ? `<div class="sd-grid2" style="grid-template-columns:repeat(2,minmax(0,1fr));">
+        <label><span class="field-label">Nosso motorista *</span>
+          <select class="sd-input" id="sdMotSel"><option value="">Escolha…</option>${frota.motoristas.map(m=>`<option ${m===V.motorista?'selected':''}>${gEsc(m)}</option>`).join('')}<option value="__novo">+ Cadastrar motorista</option></select></label>
+        <label><span class="field-label">Veículo *</span>
+          <select class="sd-input" id="sdVeicSel"><option value="">Escolha…</option>${frota.veiculos.map(v=>`<option value="${gEsc(v.placa)}" ${v.placa===V.placa?'selected':''}>${gEsc(v.placa)}${v.descricao?' — '+gEsc(v.descricao):''}</option>`).join('')}<option value="__novo">+ Cadastrar veículo</option></select></label>
       </div>
+      <div id="sdFrotaNovo"></div>` : `<div class="sd-grid2" style="grid-template-columns:2fr 1fr 1fr;">
+        <label><span class="field-label">Quem retirou *</span><input class="sd-input" id="sdMot" value="${gEsc(V.motorista)}" placeholder="Nome de quem veio buscar"></label>
+        <label><span class="field-label">Documento (opcional)</span><input class="sd-input" id="sdDoc" value="${gEsc(V.documento)}" placeholder="RG / CPF"></label>
+        <label><span class="field-label">Placa (opcional)</span><input class="sd-input" id="sdPlaca" value="${gEsc(V.placa)}" placeholder="ABC-1D23" maxlength="8" style="text-transform:uppercase;"></label>
+      </div>`}
       <datalist id="sdDlTransp">${transps.map(t=>`<option value="${gEsc(t)}">`).join('')}</datalist>
     </div>
     <div class="panel" style="margin-top:14px;">
@@ -12584,8 +12601,39 @@ function sdRenderNova(c, main){
         <button class="primary-btn" id="sdRegistrar">✔ Registrar saída</button>
       </div>
     </div>`;
-  const ligar = (id, k, up) => { const el = c.querySelector('#'+id); el.oninput = () => { if(up) el.value = el.value.toUpperCase(); V[k] = el.value; if(id==='sdPlaca') autoPlaca(); }; };
+  const ligar = (id, k, up) => { const el = c.querySelector('#'+id); if(!el) return; el.oninput = () => { if(up) el.value = el.value.toUpperCase(); V[k] = el.value; if(id==='sdPlaca' && V.modo==='transp') autoPlaca(); }; };
   ligar('sdPlaca','placa',true); ligar('sdTransp','transportadora',true); ligar('sdMot','motorista'); ligar('sdDoc','documento');
+  c.querySelectorAll('[data-modo]').forEach(b => b.onclick = () => {
+    if(V.modo === b.dataset.modo) return;
+    V.modo = b.dataset.modo; V.placa = ''; V.motorista = ''; V.documento = '';
+    V.transportadora = V.modo==='propria' ? 'ENTREGA PRÓPRIA' : V.modo==='retira' ? 'RETIRA' : '';
+    sdRenderNova(c, main);
+  });
+  // Entrega própria: escolhe da lista (ou cadastra novo motorista/veículo — fica salvo pra próxima vez)
+  const novoBox = c.querySelector('#sdFrotaNovo');
+  const cadastrar = (tipo) => {
+    novoBox.innerHTML = tipo==='mot'
+      ? `<div class="form-row" style="margin-top:10px; gap:8px;"><input class="sd-input" id="sdNovoMot" placeholder="Nome do motorista" style="flex:1;"><button class="primary-btn" id="sdNovoOk">Salvar motorista</button></div>`
+      : `<div class="form-row" style="margin-top:10px; gap:8px;"><input class="sd-input" id="sdNovoPlaca" placeholder="Placa" maxlength="8" style="width:130px; text-transform:uppercase;"><input class="sd-input" id="sdNovoDesc" placeholder="Descrição (ex.: Fiorino branca)" style="flex:1;"><button class="primary-btn" id="sdNovoOk">Salvar veículo</button></div>`;
+    novoBox.querySelector('#sdNovoOk').onclick = async () => {
+      const atual = (await safeGet('crm:saida_frota')) || {motoristas:[], veiculos:[]};
+      atual.motoristas = atual.motoristas || []; atual.veiculos = atual.veiculos || [];
+      if(tipo==='mot'){
+        const nome = novoBox.querySelector('#sdNovoMot').value.trim(); if(!nome) return;
+        if(!atual.motoristas.includes(nome)) atual.motoristas.push(nome);
+        V.motorista = nome;
+      } else {
+        const placa = novoBox.querySelector('#sdNovoPlaca').value.trim().toUpperCase(); if(!placa) return;
+        if(!atual.veiculos.some(v=>v.placa===placa)) atual.veiculos.push({placa, descricao:novoBox.querySelector('#sdNovoDesc').value.trim()});
+        V.placa = placa;
+      }
+      if(!(await safeSet('crm:saida_frota', atual))){ sdAviso(main, 'Não consegui salvar o cadastro. Tente de novo.', 'err'); return; }
+      STATE.sdFrota = atual; sdRenderNova(c, main);
+    };
+  };
+  const motSel = c.querySelector('#sdMotSel'), veicSel = c.querySelector('#sdVeicSel');
+  if(motSel) motSel.onchange = () => { if(motSel.value==='__novo'){ motSel.value=''; cadastrar('mot'); } else V.motorista = motSel.value; };
+  if(veicSel) veicSel.onchange = () => { if(veicSel.value==='__novo'){ veicSel.value=''; cadastrar('veic'); } else V.placa = veicSel.value; };
   function autoPlaca(){
     const p = V.placa.replace(/[^A-Z0-9]/g,''); if(p.length < 7) return;
     const ult = [...sd.saidas].sort((a,b)=>(a.registradoEm||'')<(b.registradoEm||'')?1:-1).find(s => (s.placa||'').replace(/[^A-Z0-9]/g,'')===p);
@@ -12640,9 +12688,14 @@ function sdRenderNova(c, main){
   c.querySelector('#sdLimpar').onclick = () => { ui.linhas = null; ui.veic = null; sdRenderNova(c, main); };
   c.querySelector('#sdRegistrar').onclick = async () => {
     const erros = [];
-    if(!V.placa.trim()) erros.push('Informe a placa.');
-    if(!V.transportadora.trim()) erros.push('Informe a transportadora.');
-    if(!V.motorista.trim()) erros.push('Informe o motorista.');
+    if(V.modo==='transp'){
+      if(!V.placa.trim()) erros.push('Informe a placa.');
+      if(!V.transportadora.trim()) erros.push('Informe a transportadora.');
+      if(!V.motorista.trim()) erros.push('Informe o motorista.');
+    } else if(V.modo==='propria'){
+      if(!V.motorista.trim()) erros.push('Escolha o motorista.');
+      if(!V.placa.trim()) erros.push('Escolha o veículo.');
+    } else if(!V.motorista.trim()) erros.push('Informe quem retirou.');
     const nfsTela = ui.linhas.map(x=>x.nf);
     ui.linhas.forEach((l,i) => {
       const n = i+1, r = sdResolverNf(l, nfsTela);
@@ -12733,7 +12786,7 @@ function sdRenderDia(c, main){
     ${sdCardsHTML(lista)}
     <h3 style="font-family:var(--font-display); font-size:19px; margin:6px 0 10px;">Coletas do dia (${coletas.length})</h3>
     ${coletas.length ? coletas.map(g => { const s0 = g.itens[0]; return `<div class="sd-coleta">
-      <div class="sd-coleta-h"><b>${s0.hora}</b><b>${gEsc(s0.transportadora)}</b><span>🧑 ${gEsc(s0.motorista)}</span><span>🚛 ${gEsc(s0.placa)}</span>
+      <div class="sd-coleta-h"><b>${s0.hora}</b><b>${s0.transportadora==='ENTREGA PRÓPRIA'?'🚐 ':s0.transportadora==='RETIRA'?'🧍 ':''}${gEsc(s0.transportadora)}</b><span>🧑 ${gEsc(s0.motorista)}</span>${s0.placa?`<span>🚛 ${gEsc(s0.placa)}</span>`:''}
         <span style="margin-left:auto;">${g.pedidos} NF · <b>${sdN(g.volumes)} vol</b> · ${fmtMoney(g.valor)}</span></div>
       <div style="overflow-x:auto;"><table class="sd-tab"><tbody>${g.itens.map(s=>`<tr>
         <td>NF <b>${s.nf}</b></td><td>${gEsc(s.clienteNome)}<div style="font-size:11.5px;color:var(--ink-soft)">${s.avulsa?'sem pedido no CRM':'Ped. '+gEsc(s.numeroPedido)+' · '+gEsc(sdVendNome(s.vendedorCodigo))}</div></td>

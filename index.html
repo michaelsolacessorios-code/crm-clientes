@@ -701,6 +701,48 @@
     /* Janelas (modais) ocupam a tela e rolam */
     .modal{max-width:100% !important; max-height:calc(100vh - 24px); overflow-y:auto; padding:20px 16px;}
   }
+  /* ---------- CONTROLE DE SAÍDA (Estoque › Saída / Informar NF) ---------- */
+  .sd-cards{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-bottom:18px;}
+  .sd-card{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px 18px; cursor:pointer; box-shadow:var(--shadow-soft); text-align:left; transition:box-shadow .15s, border-color .15s;}
+  .sd-card:hover{box-shadow:var(--shadow-hover); border-color:var(--primary);}
+  .sd-card .n{font-family:var(--font-display); font-size:30px; font-weight:700; line-height:1.1;}
+  .sd-card .l{font-size:13px; color:var(--ink-soft); margin-top:4px;}
+  .sd-card .d{font-size:11.5px; color:var(--primary); margin-top:6px; font-weight:600;}
+  .sd-grid2{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px;}
+  .sd-grid2 label{display:block;}
+  .sd-input{width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:9px; font-size:14px;}
+  .sd-input:focus{outline:none; border-color:var(--primary);}
+  .sd-nf{display:grid; grid-template-columns:120px 100px minmax(0,1fr) 34px; gap:8px; align-items:start; padding:10px; border:1px solid var(--border); border-radius:9px; margin-bottom:8px; background:var(--bg);}
+  .sd-ped-ok{font-size:12.5px; padding:8px 10px; border-radius:8px; background:var(--ok-soft); color:var(--ok);}
+  .msg.sd-warn{background:var(--warn-soft); color:var(--warn);}
+  .sd-x{border:1px solid var(--border); background:var(--surface); border-radius:8px; height:38px; cursor:pointer; color:var(--danger);}
+  .sd-total{display:flex; gap:18px; flex-wrap:wrap; font-size:14px; margin:12px 0;}
+  .sd-coleta{border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); margin-bottom:12px; overflow:hidden;}
+  .sd-coleta-h{padding:10px 14px; background:var(--bg); border-bottom:1px solid var(--border); color:var(--ink); display:flex; gap:12px; flex-wrap:wrap; align-items:center; font-size:13px;}
+  .sd-coleta-h b{font-size:14px;}
+  .sd-tab{width:100%; border-collapse:collapse; font-size:13px;}
+  .sd-tab th{text-align:left; font-size:11.5px; color:var(--ink-soft); font-weight:600; padding:8px 12px; border-bottom:1px solid var(--border);}
+  .sd-tab td{padding:8px 12px; border-bottom:1px solid var(--border);}
+  .sd-tab tr:last-child td{border-bottom:0;}
+  .sd-tab td.r, .sd-tab th.r{text-align:right; font-variant-numeric:tabular-nums;}
+  .sd-tab tr.click{cursor:pointer;} .sd-tab tr.click:hover td{background:var(--bg);}
+  .sd-cancel td{text-decoration:line-through; color:var(--ink-faint);}
+  .sd-bar{height:7px; background:var(--border); border-radius:4px; overflow:hidden; min-width:60px;}
+  .sd-bar i{display:block; height:100%; background:var(--primary);}
+  .sd-pos{font-family:var(--font-display); font-weight:700; font-size:16px; width:28px; color:var(--ink-soft);}
+  .sd-pos.p1{color:var(--primary);}
+  .sd-nav-dia{display:flex; gap:8px; align-items:center; margin-bottom:16px; flex-wrap:wrap;}
+  .client-row.sd-coletado{background:var(--ok-soft); border-color:var(--ok);}
+  .sd-crit{display:inline-flex; flex-wrap:wrap; border:1px solid var(--border); border-radius:8px; overflow:hidden;}
+  .sd-crit button{border:0; background:var(--surface); padding:6px 10px; font-size:12.5px; cursor:pointer; color:var(--ink-soft);}
+  .sd-crit button.on{background:var(--ink); color:var(--surface); font-weight:600;}
+  @media (max-width:760px){
+    .sd-cards{grid-template-columns:1fr;}
+    .sd-grid2{grid-template-columns:1fr 1fr;}
+    .sd-nf{grid-template-columns:1fr 1fr 34px;}
+    .sd-nf .sd-ped-wrap{grid-column:1 / 3;}
+    .sd-tab .hm{display:none;}
+  }
 </style>
 </head>
 <body>
@@ -5844,6 +5886,8 @@ function lerPlanilhaNumerosPedido(file){
 async function renderManagerPedidos(main){
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
   const todosPedidos = await pedidosDeTodosVendedores();
+  try{ await sdCarregar(); }catch(e){ STATE.sd = null; }
+  todosPedidos.forEach(p => { p._sit = sdSituacao(p); });
   const numerosNoCrm = new Set(todosPedidos.filter(p=>p.numeroPedido).map(p=>String(p.numeroPedido).trim()));
 
   main.innerHTML = `
@@ -5911,10 +5955,10 @@ async function renderManagerPedidos(main){
     PEDIDOS_ATUAIS = lista;
     document.getElementById('contagemPedidosGerente').textContent = `${lista.length} pedido(s)`;
     document.getElementById('listaPedidosGerente').innerHTML = lista.map(p => `
-      <div class="client-row" style="padding:10px 14px;">
+      <div class="client-row ${p._sit && p._sit.st==='coletado'?'sd-coletado':''}" style="padding:10px 14px;">
         <div class="client-info">
-          <div class="client-name" style="font-size:13.5px;">Pedido ${p.numeroPedidoExibicao} — ${p.clienteNome}</div>
-          <div class="client-meta">${p.vendedorNome} · ${fmtDatePt(p.data)} · ${fmtMoney(p.valor)}${p.uf?' · '+p.uf:''}</div>
+          <div class="client-name" style="font-size:13.5px;">Pedido ${p.numeroPedidoExibicao} — ${p.clienteNome}${sdBadgeHTML(p._sit)}</div>
+          <div class="client-meta">${p.vendedorNome} · ${fmtDatePt(p.data)} · ${fmtMoney(p.valor)}${p.uf?' · '+p.uf:''}${sdLinhaColetaHTML(p._sit)}</div>
         </div>
       </div>
     `).join('') || `<div class="empty-state">Nenhum pedido encontrado.</div>`;
@@ -5989,6 +6033,8 @@ function abrirTrocarClienteDoPedido(p, main){
 async function renderVendorPedidos(main){
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
   const pedidos = await pedidosDoVendedor(STATE.session.codigo);
+  try{ await sdCarregar(); }catch(e){ STATE.sd = null; }
+  pedidos.forEach(p => { p._sit = sdSituacao(p, STATE.session.codigo); });
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Pedidos</div><h2>Todos os seus pedidos</h2></div>
     <p style="font-size:13px; color:var(--ink-soft); margin-bottom:16px;">Clique num pedido pra ver os detalhes completos (itens, SKUs, volume).</p>
@@ -6000,6 +6046,12 @@ async function renderVendorPedidos(main){
         <option value="valor_desc">Maior valor primeiro</option>
         <option value="valor_asc">Menor valor primeiro</option>
         <option value="numero_asc">Número do pedido (A-Z)</option>
+      </select>
+      <select class="filter-select" id="filtroColetaPedidos">
+        <option value="">Todas as situações</option>
+        <option value="sem_nf">📝 Aguardando NF</option>
+        <option value="nf_emitida">⏳ Aguardando coleta</option>
+        <option value="coletado">🚚 Coletados</option>
       </select>
       <button class="ghost-btn" id="btnExportarPedidos">⬇️ Exportar Excel</button>
     </div>
@@ -6038,7 +6090,9 @@ async function renderVendorPedidos(main){
   function pedidosFiltrados(){
     const q = document.getElementById('buscaPedido').value.trim().toLowerCase();
     const ordem = document.getElementById('ordenarPedidos').value;
+    const fCol = document.getElementById('filtroColetaPedidos').value;
     let filtrados = pedidos.filter(p => !q || p.numeroPedidoExibicao.toLowerCase().includes(q));
+    if(fCol) filtrados = filtrados.filter(p => p._sit && p._sit.st === fCol);
     const cmp = {
       data_desc: (a,b) => a.data < b.data ? 1 : -1,
       data_asc: (a,b) => a.data < b.data ? -1 : 1,
@@ -6056,10 +6110,10 @@ async function renderVendorPedidos(main){
     const lista = document.getElementById('listaPedidos');
     if(filtrados.length===0){ lista.innerHTML = `<div class="empty-state">Nenhum pedido encontrado.</div>`; return; }
     lista.innerHTML = filtrados.map(p => `
-      <div class="client-row status-ok" data-id="${p.id}" style="cursor:pointer; flex-wrap:wrap;">
+      <div class="client-row status-ok ${p._sit && p._sit.st==='coletado'?'sd-coletado':''}" data-id="${p.id}" style="cursor:pointer; flex-wrap:wrap;">
         <div class="client-info">
-          <div class="client-name">Pedido nº ${p.numeroPedidoExibicao}</div>
-          <div class="client-meta">${p.clienteNome} <span class="client-num">Nº ${p.clienteCodigo}</span></div>
+          <div class="client-name">Pedido nº ${p.numeroPedidoExibicao}${sdBadgeHTML(p._sit)}</div>
+          <div class="client-meta">${p.clienteNome} <span class="client-num">Nº ${p.clienteCodigo}</span>${sdLinhaColetaHTML(p._sit)}</div>
         </div>
         <span class="status-badge status-ok">${fmtMoney(p.valor)}</span>
         <div class="day-pill">${fmtDatePt(p.data)}</div>
@@ -6095,6 +6149,7 @@ async function renderVendorPedidos(main){
 
   document.getElementById('buscaPedido').oninput = draw;
   document.getElementById('ordenarPedidos').onchange = draw;
+  document.getElementById('filtroColetaPedidos').onchange = draw;
   document.getElementById('btnExportarPedidos').onclick = () => {
     const filtrados = pedidosFiltrados();
     const linhas = filtrados.map(p => ({
@@ -6106,6 +6161,11 @@ async function renderVendorPedidos(main){
       'UF': p.uf,
       'Qtd. SKUs': p.qtdSkus,
       'Qtd. unidades': p.qtdUnidades,
+      'Situação': p._sit ? SD_STATUS[p._sit.st].label.replace(/^\S+\s/,'') : '',
+      'NF': p._sit && p._sit.link ? p._sit.link.nf : '',
+      'Saída': p._sit && p._sit.saida ? fmtDatePt(p._sit.saida.data)+' '+p._sit.saida.hora : '',
+      'Transportadora': p._sit && p._sit.saida ? p._sit.saida.transportadora : '',
+      'Volumes': p._sit && p._sit.saida ? p._sit.saida.volumes : '',
     }));
     const ws = XLSX.utils.json_to_sheet(linhas);
     const wb = XLSX.utils.book_new();
@@ -6126,6 +6186,7 @@ function abrirDetalhePedido(p){
         ${p.clienteNome} <span class="client-num">Nº ${p.clienteCodigo}</span><br>
         ${fmtDatePt(p.data)}${p.uf ? ' · UF: '+p.uf : ''}
       </p>
+      ${sdDetalheHTML(p._sit || sdSituacao(p, p.vendedorCodigo ?? (STATE.session||{}).codigo))}
       <div class="client-row status-ok" style="margin-bottom:14px;">
         <div class="client-info"><div class="client-name">Valor total</div></div>
         <span class="status-badge status-ok" style="font-size:14px;">${fmtMoney(p.valor)}</span>
@@ -8329,7 +8390,7 @@ async function renderManagerShell(){
     {page:'elaboracao-metas', label:'Elaboração de Metas'},
     {page:'financeira', label:'Financeira'},
     {page:'compras-estoque', label:'Compras'},
-    {group:'estoque', label:'Estoque', children:[ {page:'garantia', label:'Garantia'}, {page:'sac', label:'SAC'} ]},
+    {group:'estoque', label:'Estoque', children:[ {page:'garantia', label:'Garantia'}, {page:'sac', label:'SAC'}, {page:'informar-nf', label:'🧾 Informar NF'}, {page:'saida', label:'🚚 Saída'} ]},
     {page:'credenciais', label:'Configurações'},
   ];
   if(campanhaAtivaNoMenu()) items.splice(1, 0, {page:'campanha', label:'🧰 Campanha'});
@@ -8348,6 +8409,8 @@ async function renderManagerShell(){
   else if(STATE.route.page==='compras-estoque') await renderComprasModulo(main, renderManagerShell);
   else if(STATE.route.page==='garantia') await renderGarantiaModulo(main, renderManagerShell);
   else if(STATE.route.page==='sac') await renderSacModulo(main);
+  else if(STATE.route.page==='informar-nf') await renderInformarNf(main);
+  else if(STATE.route.page==='saida') await renderSaidaModulo(main);
   else await renderConfiguracoes(main);
 }
 
@@ -12262,12 +12325,14 @@ async function renderNovoSac(el, aoConcluir){
 
 // Usuário Estoque: vê o módulo Estoque inteiro (Garantia + SAC).
 async function renderEstoqueShell(){
-  const items = [{group:'estoque', label:'Estoque', children:[ {page:'garantia', label:'Garantia'}, {page:'sac', label:'SAC'} ]}];
-  if(!STATE.route || !['garantia','sac'].includes(STATE.route.page)) STATE.route = {page:'sac'};
+  const items = [{group:'estoque', label:'Estoque', children:[ {page:'garantia', label:'Garantia'}, {page:'sac', label:'SAC'}, {page:'informar-nf', label:'🧾 Informar NF'}, {page:'saida', label:'🚚 Saída'} ]}];
+  if(!STATE.route || !['garantia','sac','informar-nf','saida'].includes(STATE.route.page)) STATE.route = {page:'sac'};
   app.innerHTML = `<div class="shell">${sidebarHTML(items)}<div class="main" id="main"></div></div>`;
   bindSidebar(renderEstoqueShell);
   const main = document.getElementById('main');
   if(STATE.route.page === 'sac') await renderSacModulo(main);
+  else if(STATE.route.page === 'informar-nf') await renderInformarNf(main);
+  else if(STATE.route.page === 'saida') await renderSaidaModulo(main);
   else await renderGarantiaModulo(main, renderEstoqueShell);
 }
 
@@ -12312,6 +12377,432 @@ async function blocoGarantiasDoClienteHTML(codigo){
         }).join('')}
       </div>` : ''}
   `;
+}
+
+
+// =====================================================================================
+// ---------------- CONTROLE DE SAÍDA (Estoque › Informar NF e Estoque › Saída) ----------------
+// 1) Faturamento (Val) informa o nº da NF no pedido do vendedor  → linha "crm:nf:<nf>"
+// 2) Estoque registra a coleta: placa, transportadora, motorista + NF e volumes → "crm:saida:<nf>:<carimbo>"
+//    A NF digitada acha sozinha o pedido (cliente, vendedor, valor). Data/hora vêm do servidor.
+// 3) Na tela Pedidos do vendedor/gerente o pedido aparece: Aguardando NF → Aguardando coleta → Coletado.
+// Tudo passa pela /api/saida (uma linha por registro, nada é apagado: troca vira "substituida",
+// desfazer vira "cancelada" com motivo).
+// =====================================================================================
+const SD_TRANSP_PADRAO = ['BRASPRESS','JAMEF','CAIAPÓ','ACEVILLE','PB EXPRESS','EMBORCAÇÃO','CAMILO DOS SANTOS','EXCARGO','RETIRA'];
+const SD_MESES = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+const SD_STATUS = {
+  sem_nf:     {label:'📝 Aguardando NF', cls:'status-warn'},
+  nf_emitida: {label:'⏳ NF emitida — aguardando coleta', cls:'status-info'},
+  coletado:   {label:'🚚 Coletado', cls:'status-ok'},
+};
+
+function sdHoje(){
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {timeZone:'America/Sao_Paulo', year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(new Date()).map(x=>[x.type,x.value]));
+  return `${p.year}-${p.month}-${p.day}`;
+}
+function sdAddDias(iso, n){ const d = new Date(iso+'T12:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
+function sdN(n){ return (n||0).toLocaleString('pt-BR'); }
+function sdNf(v){ return String(v==null?'':v).replace(/\D/g,'').replace(/^0+(?=\d)/,''); }
+function sdNum(v){ if(typeof v==='number') return v; return parseFloat(String(v||'').replace(/\./g,'').replace(',','.'))||0; }
+
+async function sdApi(corpo){
+  const res = await fetch('/api/saida', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...corpo, por:(STATE.session||{}).nome||''})});
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok) throw new Error(data.error || 'Não consegui salvar. Tente de novo.');
+  return data;
+}
+// Carrega NFs e saídas (sempre fresco do banco) e monta os índices.
+async function sdCarregar(){
+  const res = await fetch('/api/saida?acao=listar');
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok) throw new Error(data.error || 'Não consegui carregar as saídas.');
+  const nfs = data.nfs || [], saidas = data.saidas || [];
+  const nfAtivaPorPedido = new Map(), nfAtiva = new Map(), saidaAtivaPorNf = new Map();
+  nfs.filter(l => l.status==='ativa').forEach(l => { nfAtivaPorPedido.set(l.chavePedido, l); nfAtiva.set(l.nf, l); });
+  saidas.filter(s => s.status==='ativa').forEach(s => saidaAtivaPorNf.set(s.nf, s));
+  STATE.sd = {nfs, saidas, nfAtivaPorPedido, nfAtiva, saidaAtivaPorNf, ativas: saidas.filter(s=>s.status==='ativa')};
+  return STATE.sd;
+}
+// Situação de um pedido (p.vendedorCodigo opcional — na tela do vendedor vem da sessão).
+function sdSituacao(p, vendedorCodigo){
+  const sd = STATE.sd; if(!sd) return null;
+  const link = sd.nfAtivaPorPedido.get(`${vendedorCodigo ?? p.vendedorCodigo}|${p.id}`) || null;
+  const saida = link ? (sd.saidaAtivaPorNf.get(link.nf) || null) : null;
+  return {st: saida ? 'coletado' : (link ? 'nf_emitida' : 'sem_nf'), link, saida};
+}
+function sdBadgeHTML(sit){ if(!sit) return ''; const S = SD_STATUS[sit.st]; return `<span class="status-badge ${S.cls}" style="margin-left:6px;">${S.label}</span>`; }
+function sdLinhaColetaHTML(sit){
+  if(!sit) return '';
+  if(sit.saida){ const s = sit.saida; return ` · NF ${s.nf} · <b style="color:var(--ok)">saiu ${fmtDatePt(s.data).slice(0,5)} às ${s.hora} · ${gEsc(s.transportadora)} · ${s.volumes} vol</b>`; }
+  if(sit.link) return ` · NF ${sit.link.nf}`;
+  return '';
+}
+function sdDetalheHTML(sit){
+  if(!sit) return '';
+  const l = sit.link, s = sit.saida;
+  return `<div style="display:flex; flex-direction:column; gap:5px; margin:0 0 14px; font-size:13px;">
+    <div style="${l?'':'color:var(--ink-faint)'}">${l?'✔':'○'} NF emitida ${l?`— <b>${l.nf}</b> (${gEsc(l.informadoPor||'')}, ${fmtDatePt((l.informadoEm||'').slice(0,10))})`:'— aguardando o faturamento'}</div>
+    <div style="${s?'':'color:var(--ink-faint)'}">${s?'✔':'○'} Coletado ${s?`— ${fmtDatePt(s.data)} às ${s.hora}`:'— aguardando a transportadora'}</div>
+    ${s?`<div class="client-row sd-coletado" style="display:block; padding:10px 12px;"><b>🚚 Dados da coleta</b>
+      <table class="sd-tab" style="margin-top:6px;"><tr><td>Volumes</td><td class="r">${s.volumes}</td></tr><tr><td>Transportadora</td><td class="r">${gEsc(s.transportadora)}</td></tr><tr><td>Motorista</td><td class="r">${gEsc(s.motorista)}</td></tr><tr><td>Placa</td><td class="r">${gEsc(s.placa)}</td></tr></table></div>`:''}
+  </div>`;
+}
+function sdModal(titulo, html, largura){
+  const b = document.createElement('div'); b.className = 'modal-backdrop';
+  b.innerHTML = `<div class="modal" style="max-width:${largura||640}px; width:100%; max-height:86vh; overflow-y:auto;">
+    <h3>${titulo}</h3><div>${html}</div>
+    <div class="modal-actions" style="margin-top:16px;"><button class="ghost-btn sdFechar">Fechar</button></div></div>`;
+  document.body.appendChild(b);
+  b.onclick = e => { if(e.target===b) b.remove(); };
+  b.querySelector('.sdFechar').onclick = () => b.remove();
+  return b;
+}
+function sdAviso(main, txt, tipo){ const m = main.querySelector('#sdMsg'); if(m){ m.innerHTML = `<div class="msg ${tipo||'ok'}" style="white-space:pre-line;">${txt}</div>`; m.scrollIntoView({block:'nearest'}); } }
+
+// ---------------- Estoque › Informar NF (faturamento) ----------------
+async function renderInformarNf(main){
+  STATE.sdNfUI = STATE.sdNfUI || {filtro:'sem_nf', busca:'', vendedor:''};
+  const ui = STATE.sdNfUI;
+  main.innerHTML = `<div class="loading" style="min-height:200px">Carregando pedidos…</div>`;
+  let pedidos;
+  try{ [pedidos] = await Promise.all([pedidosDeTodosVendedores(), sdCarregar()]); }
+  catch(err){ main.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`; return; }
+  pedidos.forEach(p => { p._sit = sdSituacao(p); });
+  pedidos.sort((a,b) => a.data < b.data ? 1 : -1);
+  const cont = k => pedidos.filter(p => p._sit.st===k).length;
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Estoque › Informar NF</div><h2>Informar NF no pedido</h2></div>
+    <p class="hint" style="margin-bottom:14px;">Emitiu a nota? Digite o nº da NF no pedido e salve (Enter também salva). Na coleta, o estoque só digita a NF e o sistema já sabe qual pedido saiu.</p>
+    <div id="sdMsg"></div>
+    <div class="toolbar" style="flex-wrap:wrap;">
+      <div class="sd-crit">${[['sem_nf',`📝 Sem NF (${cont('sem_nf')})`],['nf_emitida',`⏳ Com NF, aguardando coleta (${cont('nf_emitida')})`],['coletado',`🚚 Coletados (${cont('coletado')})`],['todos','Todos']].map(([k,l])=>`<button data-f="${k}" class="${ui.filtro===k?'on':''}">${l}</button>`).join('')}</div>
+      <select class="filter-select" id="sdNfVend"><option value="">Todos os vendedores</option>${STATE.vendors.map(v=>`<option value="${v.codigo}" ${String(v.codigo)===ui.vendedor?'selected':''}>${gEsc(v.nome)}</option>`).join('')}</select>
+      <input class="search-input" id="sdNfBusca" value="${gEsc(ui.busca)}" placeholder="Buscar pedido, cliente ou NF…">
+    </div>
+    <div class="client-list" id="sdNfLista"></div>
+    <div id="sdNfMais" class="hint" style="margin-top:8px;"></div>`;
+  const desenhar = () => {
+    const q = ui.busca.trim().toLowerCase();
+    const lista = pedidos.filter(p => ui.filtro==='todos' || p._sit.st===ui.filtro)
+      .filter(p => !ui.vendedor || String(p.vendedorCodigo)===ui.vendedor)
+      .filter(p => !q || String(p.numeroPedidoExibicao).toLowerCase().includes(q) || (p.clienteNome||'').toLowerCase().includes(q) || (p._sit.link && p._sit.link.nf.includes(q)));
+    const box = main.querySelector('#sdNfLista');
+    box.innerHTML = lista.slice(0,100).map((p,i) => { const s = p._sit; return `
+      <div class="client-row ${s.st==='coletado'?'sd-coletado':''}" data-i="${i}" style="flex-wrap:wrap; gap:10px;">
+        <div class="client-info" style="min-width:200px;">
+          <div class="client-name">Pedido nº ${gEsc(p.numeroPedidoExibicao)}</div>
+          <div class="client-meta">${gEsc(p.clienteNome)} <span class="client-num">Nº ${gEsc(p.clienteCodigo)}</span> · ${gEsc(p.vendedorNome)} · ${fmtDatePt(p.data)} · <b>${fmtMoney(p.valor)}</b></div>
+        </div>
+        ${s.st==='coletado'
+          ? `<span class="status-badge status-ok">🚚 NF ${s.link.nf} — já saiu</span>`
+          : `<div style="display:flex; gap:6px; align-items:center;">
+               <input class="sd-input sdNfInp" inputmode="numeric" value="${s.link?gEsc(s.link.nf):''}" placeholder="Nº da NF" style="width:120px; padding:8px 10px;">
+               <button class="primary-btn sdNfSalvar" style="padding:8px 12px;">${s.link?'Alterar':'Salvar NF'}</button>
+             </div>`}
+      </div>`; }).join('') || '<div class="empty-state">Nenhum pedido nesse filtro.</div>';
+    main.querySelector('#sdNfMais').textContent = lista.length > 100 ? `Mostrando 100 de ${lista.length} — use a busca ou o filtro de vendedor.` : '';
+    box.querySelectorAll('.client-row[data-i]').forEach(row => {
+      const inp = row.querySelector('.sdNfInp'); if(!inp) return;
+      const p = lista[Number(row.dataset.i)];
+      inp.oninput = () => { inp.value = inp.value.replace(/\D/g,''); };
+      const salvar = async () => {
+        const nf = sdNf(inp.value);
+        if(!nf){ sdAviso(main, 'Digite o número da NF.', 'err'); inp.focus(); return; }
+        if(p._sit.link && p._sit.link.nf === nf) return;
+        const btn = row.querySelector('.sdNfSalvar'); btn.disabled = true; btn.textContent = 'Salvando…';
+        try{
+          await sdApi({acao:'vincular-nf', nf, pedido:{pedidoId:p.id, vendedorCodigo:p.vendedorCodigo, numeroPedido:p.numeroPedidoExibicao, clienteCodigo:p.clienteCodigo, clienteNome:p.clienteNome, valor:p.valor, data:p.data}});
+          await renderInformarNf(main);
+          sdAviso(main, `✔ NF ${nf} gravada no pedido ${gEsc(p.numeroPedidoExibicao)} (${gEsc(p.clienteNome)}).`);
+        }catch(err){ sdAviso(main, gEsc(err.message), 'err'); btn.disabled = false; btn.textContent = p._sit.link?'Alterar':'Salvar NF'; inp.focus(); }
+      };
+      row.querySelector('.sdNfSalvar').onclick = salvar;
+      inp.onkeydown = e => { if(e.key==='Enter') salvar(); };
+    });
+  };
+  main.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { ui.filtro = b.dataset.f; renderInformarNf(main); });
+  main.querySelector('#sdNfVend').onchange = e => { ui.vendedor = e.target.value; desenhar(); };
+  main.querySelector('#sdNfBusca').oninput = e => { ui.busca = e.target.value; desenhar(); };
+  desenhar();
+}
+
+// ---------------- Estoque › Saída ----------------
+async function renderSaidaModulo(main){
+  STATE.sdUI = STATE.sdUI || {aba:'nova', dia:sdHoje(), mes:sdHoje().slice(0,7), crit:'volumes'};
+  const ui = STATE.sdUI;
+  main.innerHTML = `<div class="loading" style="min-height:200px">Carregando saídas…</div>`;
+  try{ await sdCarregar(); }catch(err){ main.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`; return; }
+  const abas = [{id:'nova',label:'+ Registrar saída'},{id:'dia',label:'Saídas do dia'},{id:'mes',label:'Relatório mensal'}];
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Estoque › Saída</div><h2>Controle de saída — coletas</h2></div>
+    <div class="tabs" style="flex-wrap:wrap;">${abas.map(a=>`<button class="tab-btn ${ui.aba===a.id?'active':''}" data-aba="${a.id}">${a.label}</button>`).join('')}</div>
+    <div id="sdMsg"></div><div id="sdConteudo"></div>`;
+  main.querySelectorAll('.tab-btn[data-aba]').forEach(b => b.onclick = () => { ui.aba = b.dataset.aba; renderSaidaModulo(main); });
+  const c = main.querySelector('#sdConteudo');
+  if(ui.aba==='nova') sdRenderNova(c, main);
+  else if(ui.aba==='dia') sdRenderDia(c, main);
+  else sdRenderMes(c, main);
+}
+
+function sdLinhaVazia(){ return {nf:'', volumes:'', avulsa:false, clienteNome:'', valor:''}; }
+function sdResolverNf(l, nfsTela){
+  const sd = STATE.sd;
+  if(!l.nf) return {tipo:'vazio'};
+  const ja = sd.saidaAtivaPorNf.get(l.nf);
+  if(ja) return {tipo:'erro', msg:`A NF ${l.nf} já saiu em ${fmtDatePt(ja.data)} às ${ja.hora} (${gEsc(ja.transportadora)}).`};
+  if(nfsTela.filter(n => n===l.nf).length > 1) return {tipo:'erro', msg:`NF ${l.nf} repetida nesta coleta.`};
+  const link = sd.nfAtiva.get(l.nf);
+  return link ? {tipo:'ok', link} : {tipo:'semPedido'};
+}
+function sdRenderNova(c, main){
+  const ui = STATE.sdUI;
+  ui.linhas = ui.linhas || [sdLinhaVazia()];
+  ui.veic = ui.veic || {placa:'', transportadora:'', motorista:'', documento:''};
+  const V = ui.veic, sd = STATE.sd;
+  const transps = [...new Set([...SD_TRANSP_PADRAO, ...sd.saidas.map(s=>s.transportadora)])].filter(Boolean).sort();
+  c.innerHTML = `
+    <div class="panel">
+      <h3>🚛 Quem está coletando</h3>
+      <p class="hint" style="margin-bottom:12px;">Data e hora entram sozinhas no momento em que você clicar em <b>Registrar saída</b>. Placa de um caminhão que já veio antes? Transportadora e motorista se preenchem sozinhos.</p>
+      <div class="sd-grid2">
+        <label><span class="field-label">Placa *</span><input class="sd-input" id="sdPlaca" value="${gEsc(V.placa)}" placeholder="ABC-1D23" maxlength="8" style="text-transform:uppercase;"></label>
+        <label><span class="field-label">Transportadora *</span><input class="sd-input" id="sdTransp" list="sdDlTransp" value="${gEsc(V.transportadora)}" placeholder="Ex.: BRASPRESS"></label>
+        <label><span class="field-label">Motorista *</span><input class="sd-input" id="sdMot" value="${gEsc(V.motorista)}" placeholder="Nome do motorista"></label>
+        <label><span class="field-label">Documento (opcional)</span><input class="sd-input" id="sdDoc" value="${gEsc(V.documento)}" placeholder="RG / CPF"></label>
+      </div>
+      <datalist id="sdDlTransp">${transps.map(t=>`<option value="${gEsc(t)}">`).join('')}</datalist>
+    </div>
+    <div class="panel" style="margin-top:14px;">
+      <h3>📄 Notas fiscais que estão saindo</h3>
+      <p class="hint" style="margin-bottom:12px;">Digite o nº da NF e os volumes. O sistema acha sozinho o pedido onde o faturamento informou essa NF. Ao salvar, o pedido fica <b>coletado</b> pro vendedor.</p>
+      <div id="sdLinhas"></div>
+      <button class="ghost-btn" id="sdAddNf">+ Adicionar outra NF</button>
+      <div class="sd-total" id="sdTotal"></div>
+      <div style="display:flex; gap:8px; justify-content:flex-end;">
+        <button class="ghost-btn" id="sdLimpar">Limpar</button>
+        <button class="primary-btn" id="sdRegistrar">✔ Registrar saída</button>
+      </div>
+    </div>`;
+  const ligar = (id, k, up) => { const el = c.querySelector('#'+id); el.oninput = () => { if(up) el.value = el.value.toUpperCase(); V[k] = el.value; if(id==='sdPlaca') autoPlaca(); }; };
+  ligar('sdPlaca','placa',true); ligar('sdTransp','transportadora',true); ligar('sdMot','motorista'); ligar('sdDoc','documento');
+  function autoPlaca(){
+    const p = V.placa.replace(/[^A-Z0-9]/g,''); if(p.length < 7) return;
+    const ult = [...sd.saidas].sort((a,b)=>(a.registradoEm||'')<(b.registradoEm||'')?1:-1).find(s => (s.placa||'').replace(/[^A-Z0-9]/g,'')===p);
+    if(!ult) return;
+    if(!V.transportadora){ V.transportadora = ult.transportadora; c.querySelector('#sdTransp').value = ult.transportadora; }
+    if(!V.motorista){ V.motorista = ult.motorista; c.querySelector('#sdMot').value = ult.motorista; }
+  }
+  const box = c.querySelector('#sdLinhas');
+  const statusHTML = l => {
+    const r = sdResolverNf(l, ui.linhas.map(x=>x.nf));
+    if(r.tipo==='vazio') return `<div class="hint" style="padding-top:9px;">Digite a NF — o pedido aparece aqui sozinho.</div>`;
+    if(r.tipo==='erro') return `<div class="msg err" style="margin:0; padding:8px 10px;">${r.msg}</div>`;
+    if(r.tipo==='ok'){ const k = r.link; const v = STATE.vendors.find(x=>x.codigo===k.vendedorCodigo); return `<div class="sd-ped-ok">✔ Pedido <b>${gEsc(k.numeroPedido)}</b> · ${gEsc(k.clienteNome)} · ${gEsc(v?v.nome:'')} · <b>${fmtMoney(k.valor)}</b></div>`; }
+    if(!l.avulsa) return `<div class="msg sd-warn" style="margin:0; padding:8px 10px; font-size:12.5px;">Nenhum pedido tem a NF ${l.nf}. Confira o número ou peça pro faturamento informar a NF no pedido.
+        <a href="#" class="sdAvulsa" style="display:block; margin-top:4px; color:var(--info);">Lançar mesmo assim, sem pedido →</a></div>`;
+    return `<div style="display:grid; grid-template-columns:1fr 120px; gap:6px;">
+        <input class="sd-input sdCli" value="${gEsc(l.clienteNome)}" placeholder="Nome do cliente">
+        <input class="sd-input sdVal" inputmode="decimal" value="${gEsc(l.valor)}" placeholder="Valor R$"></div>
+        <span class="hint">Saída avulsa: não marca nenhum pedido como coletado.</span>`;
+  };
+  const ligarStatus = (row, l) => {
+    const a = row.querySelector('.sdAvulsa'); if(a) a.onclick = e => { e.preventDefault(); l.avulsa = true; atualizar(row, l); };
+    const cli = row.querySelector('.sdCli'); if(cli) cli.oninput = e => { l.clienteNome = e.target.value; };
+    const val = row.querySelector('.sdVal'); if(val) val.oninput = e => { l.valor = e.target.value; totais(); };
+  };
+  const atualizar = (row, l) => { row.querySelector('.sdSt').innerHTML = statusHTML(l); ligarStatus(row, l); };
+  function desenhar(){
+    box.innerHTML = ui.linhas.map((l,i) => `<div class="sd-nf" data-i="${i}">
+        <label><span class="field-label">Nº NF *</span><input class="sd-input sdNfL" inputmode="numeric" value="${gEsc(l.nf)}" placeholder="22346"></label>
+        <label><span class="field-label">Volumes *</span><input class="sd-input sdVolL" type="number" min="1" inputmode="numeric" value="${gEsc(l.volumes)}" placeholder="0"></label>
+        <div class="sd-ped-wrap"><span class="field-label">Pedido</span><div class="sdSt">${statusHTML(l)}</div></div>
+        <button class="sd-x sdDel" title="Tirar essa NF" style="margin-top:21px;">✕</button>
+      </div>`).join('');
+    box.querySelectorAll('.sd-nf').forEach(row => {
+      const i = Number(row.dataset.i), l = ui.linhas[i];
+      const nfEl = row.querySelector('.sdNfL'), volEl = row.querySelector('.sdVolL');
+      nfEl.oninput = () => { l.nf = sdNf(nfEl.value); nfEl.value = l.nf; l.avulsa = false; box.querySelectorAll('.sd-nf').forEach(r2 => atualizar(r2, ui.linhas[Number(r2.dataset.i)])); totais(); };
+      nfEl.onkeydown = e => { if(e.key==='Enter'){ e.preventDefault(); volEl.focus(); } };
+      volEl.oninput = () => { l.volumes = volEl.value; totais(); };
+      volEl.onkeydown = e => { if(e.key==='Enter'){ e.preventDefault(); c.querySelector('#sdAddNf').click(); } };
+      row.querySelector('.sdDel').onclick = () => { ui.linhas.splice(i,1); if(!ui.linhas.length) ui.linhas.push(sdLinhaVazia()); desenhar(); };
+      ligarStatus(row, l);
+    });
+    totais();
+  }
+  function totais(){
+    const vol = ui.linhas.reduce((s,l)=>s+(Number(l.volumes)||0),0);
+    const val = ui.linhas.reduce((s,l)=>{ const k = sd.nfAtiva.get(l.nf); return s + (k ? (k.valor||0) : (l.avulsa ? sdNum(l.valor) : 0)); },0);
+    c.querySelector('#sdTotal').innerHTML = `<span><b>${ui.linhas.length}</b> NF(s)</span><span><b>${sdN(vol)}</b> volumes</span><span><b>${fmtMoney(val)}</b></span>`;
+  }
+  c.querySelector('#sdAddNf').onclick = () => { ui.linhas.push(sdLinhaVazia()); desenhar(); const ins = box.querySelectorAll('.sdNfL'); ins[ins.length-1].focus(); };
+  c.querySelector('#sdLimpar').onclick = () => { ui.linhas = null; ui.veic = null; sdRenderNova(c, main); };
+  c.querySelector('#sdRegistrar').onclick = async () => {
+    const erros = [];
+    if(!V.placa.trim()) erros.push('Informe a placa.');
+    if(!V.transportadora.trim()) erros.push('Informe a transportadora.');
+    if(!V.motorista.trim()) erros.push('Informe o motorista.');
+    const nfsTela = ui.linhas.map(x=>x.nf);
+    ui.linhas.forEach((l,i) => {
+      const n = i+1, r = sdResolverNf(l, nfsTela);
+      if(r.tipo==='vazio') erros.push(`Linha ${n}: falta o nº da NF.`);
+      if(r.tipo==='erro') erros.push(`Linha ${n}: ${r.msg}`);
+      if(r.tipo==='semPedido' && !l.avulsa) erros.push(`Linha ${n}: NF ${l.nf} sem pedido — confira ou clique em "Lançar mesmo assim".`);
+      if(r.tipo==='semPedido' && l.avulsa && !l.clienteNome.trim()) erros.push(`Linha ${n}: informe o cliente.`);
+      if(!(Number(l.volumes) > 0)) erros.push(`Linha ${n}: informe a quantidade de volumes.`);
+    });
+    if(erros.length){ sdAviso(main, erros.join('<br>'), 'err'); return; }
+    const btn = c.querySelector('#sdRegistrar'); btn.disabled = true; btn.textContent = 'Registrando…';
+    try{
+      const r = await sdApi({acao:'registrar', coleta:V, itens:ui.linhas.map(l => ({nf:l.nf, volumes:Number(l.volumes), avulsa:l.avulsa && !sd.nfAtiva.get(l.nf), clienteNome:l.clienteNome, valor:sdNum(l.valor)}))});
+      const qtd = r.saidas.length, s0 = r.saidas[0];
+      ui.linhas = null; ui.veic = null; ui.aba = 'dia'; ui.dia = s0.data;
+      await renderSaidaModulo(main);
+      sdAviso(main, `✔ Saída registrada: ${qtd} NF(s) com ${gEsc(s0.transportadora)} às ${s0.hora}. Os pedidos já aparecem como coletados pro vendedor.`);
+    }catch(err){ sdAviso(main, gEsc(err.message), 'err'); btn.disabled = false; btn.textContent = '✔ Registrar saída'; }
+  };
+  desenhar();
+}
+
+function sdAgrupar(lista, chave){
+  const m = new Map();
+  lista.forEach(s => { const k = chave(s); const g = m.get(k) || {chave:k, volumes:0, pedidos:0, valor:0, coletas:new Set(), itens:[]}; g.volumes+=s.volumes||0; g.pedidos++; g.valor+=s.valor||0; g.coletas.add(s.coletaId); g.itens.push(s); m.set(k,g); });
+  return [...m.values()].map(g => ({...g, coletas:g.coletas.size}));
+}
+function sdVendNome(c){ const v = STATE.vendors.find(x=>x.codigo===c); return v ? v.nome : ''; }
+function sdCardsHTML(lista){
+  const vol = lista.reduce((a,s)=>a+(s.volumes||0),0), val = lista.reduce((a,s)=>a+(s.valor||0),0);
+  return `<div class="sd-cards">
+    <button class="sd-card" data-card="volumes"><div class="n">${sdN(vol)}</div><div class="l">Volumes que saíram</div><div class="d">ver clientes e volumes ›</div></button>
+    <button class="sd-card" data-card="pedidos"><div class="n">${sdN(lista.length)}</div><div class="l">Pedidos (NFs) que saíram</div><div class="d">ver clientes ›</div></button>
+    <button class="sd-card" data-card="valor"><div class="n" style="font-size:26px;">${fmtMoney(val)}</div><div class="l">Valor que saiu</div><div class="d">ver ranking de pedidos ›</div></button>
+  </div>`;
+}
+function sdLigarCards(c, lista, periodo, mostraDia){
+  c.querySelectorAll('[data-card]').forEach(b => b.onclick = () => {
+    const tipo = b.dataset.card;
+    if(!lista.length){ sdModal('Nada por aqui', `<p class="hint">Nenhuma saída ${periodo}.</p>`); return; }
+    const pedTxt = s => `${s.numeroPedido?'Ped. '+gEsc(s.numeroPedido)+' · ':''}NF ${s.nf}`;
+    if(tipo==='volumes'){
+      const g = sdAgrupar(lista, s=>s.clienteNome).sort((a,b)=>b.volumes-a.volumes);
+      sdModal(`📦 Volumes ${periodo} — ${sdN(lista.reduce((a,s)=>a+s.volumes,0))}`, `<div style="overflow-x:auto;"><table class="sd-tab"><thead><tr><th>Cliente</th><th class="hm">NF(s)</th><th class="hm">Transportadora</th><th class="r">Volumes</th></tr></thead><tbody>
+        ${g.map(x=>`<tr><td><b>${gEsc(x.chave)}</b></td><td class="hm">${x.itens.map(s=>s.nf).join(', ')}</td><td class="hm">${[...new Set(x.itens.map(s=>gEsc(s.transportadora)))].join(', ')}</td><td class="r"><b>${sdN(x.volumes)}</b></td></tr>`).join('')}
+      </tbody></table></div>`);
+    } else if(tipo==='pedidos'){
+      const ord = [...lista].sort((a,b)=> (a.data+a.hora) < (b.data+b.hora) ? -1 : 1);
+      sdModal(`🧾 Pedidos que saíram ${periodo} — ${lista.length}`, `<div style="overflow-x:auto;"><table class="sd-tab"><thead><tr><th>Cliente</th><th>Pedido / NF</th><th class="hm">Vendedor</th><th class="hm">Saída</th></tr></thead><tbody>
+        ${ord.map(s=>`<tr><td><b>${gEsc(s.clienteNome)}</b></td><td>${s.avulsa?'<i style="color:var(--ink-faint)">sem pedido</i> · NF '+s.nf:pedTxt(s)}</td><td class="hm">${gEsc(sdVendNome(s.vendedorCodigo))||'—'}</td><td class="hm">${mostraDia?fmtDatePt(s.data).slice(0,5)+' ':''}${s.hora} · ${gEsc(s.transportadora)}</td></tr>`).join('')}
+      </tbody></table></div>`, 720);
+    } else {
+      const ord = [...lista].sort((a,b)=>b.valor-a.valor); const max = ord[0].valor||1;
+      sdModal(`💰 Ranking de valor ${periodo}`, `<div style="overflow-x:auto;"><table class="sd-tab"><thead><tr><th></th><th>Cliente</th><th class="hm">Pedido / NF</th><th class="hm"></th><th class="r">Valor</th></tr></thead><tbody>
+        ${ord.map((s,i)=>`<tr><td class="sd-pos ${i===0?'p1':''}">${i+1}º</td><td><b>${gEsc(s.clienteNome)}</b><div style="font-size:11.5px;color:var(--ink-soft)">${gEsc(sdVendNome(s.vendedorCodigo))}</div></td><td class="hm">${pedTxt(s)}</td><td class="hm" style="width:90px"><div class="sd-bar"><i style="width:${Math.round((s.valor||0)/max*100)}%"></i></div></td><td class="r"><b>${fmtMoney(s.valor)}</b></td></tr>`).join('')}
+      </tbody></table></div>`, 720);
+    }
+  });
+}
+function sdRankingHTML(lista){
+  const crit = STATE.sdUI.crit;
+  const g = sdAgrupar(lista, s=>s.transportadora).sort((a,b)=>b[crit]-a[crit]);
+  if(!g.length) return '';
+  const max = g[0][crit] || 1;
+  return `<div class="panel" style="margin-top:18px; overflow-x:auto;">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+      <h3 style="margin:0;">🏆 Ranking de transportadoras</h3>
+      <div class="sd-crit">${[['volumes','Volumes'],['pedidos','Pedidos'],['coletas','Coletas'],['valor','Valor']].map(([k,l])=>`<button data-crit="${k}" class="${crit===k?'on':''}">${l}</button>`).join('')}</div>
+    </div>
+    <table class="sd-tab"><thead><tr><th></th><th>Transportadora</th><th class="hm"></th><th class="r hm">Coletas</th><th class="r hm">Pedidos</th><th class="r">Volumes</th><th class="r">Valor</th></tr></thead><tbody>
+      ${g.map((x,i)=>`<tr><td class="sd-pos ${i===0?'p1':''}">${i+1}º</td><td><b>${gEsc(x.chave)}</b></td><td class="hm" style="width:22%"><div class="sd-bar"><i style="width:${Math.round(x[crit]/max*100)}%"></i></div></td><td class="r hm">${sdN(x.coletas)}</td><td class="r hm">${sdN(x.pedidos)}</td><td class="r">${sdN(x.volumes)}</td><td class="r">${fmtMoney(x.valor)}</td></tr>`).join('')}
+    </tbody></table></div>`;
+}
+function sdLigarCrit(c, redesenhar){ c.querySelectorAll('[data-crit]').forEach(b => b.onclick = () => { STATE.sdUI.crit = b.dataset.crit; redesenhar(); }); }
+
+function sdRenderDia(c, main){
+  const ui = STATE.sdUI, sd = STATE.sd, hoje = sdHoje(), ehHoje = ui.dia===hoje;
+  const lista = sd.ativas.filter(s => s.data===ui.dia);
+  const canceladas = sd.saidas.filter(s => s.data===ui.dia && s.status==='cancelada');
+  const coletas = sdAgrupar(lista, s=>s.coletaId).sort((a,b)=> a.itens[0].hora < b.itens[0].hora ? 1 : -1);
+  c.innerHTML = `
+    <div class="sd-nav-dia">
+      <button class="ghost-btn" id="sdAnt">◀</button>
+      <input type="date" class="sd-input" id="sdDiaSel" value="${ui.dia}" max="${hoje}" style="width:170px;">
+      <button class="ghost-btn" id="sdProx" ${ehHoje?'disabled':''}>▶</button>
+      ${ehHoje?'<span class="status-badge status-ok">Hoje</span>':`<button class="ghost-btn" id="sdIrHoje">Ir pra hoje</button>`}
+    </div>
+    ${sdCardsHTML(lista)}
+    <h3 style="font-family:var(--font-display); font-size:19px; margin:6px 0 10px;">Coletas do dia (${coletas.length})</h3>
+    ${coletas.length ? coletas.map(g => { const s0 = g.itens[0]; return `<div class="sd-coleta">
+      <div class="sd-coleta-h"><b>${s0.hora}</b><b>${gEsc(s0.transportadora)}</b><span>🧑 ${gEsc(s0.motorista)}</span><span>🚛 ${gEsc(s0.placa)}</span>
+        <span style="margin-left:auto;">${g.pedidos} NF · <b>${sdN(g.volumes)} vol</b> · ${fmtMoney(g.valor)}</span></div>
+      <div style="overflow-x:auto;"><table class="sd-tab"><tbody>${g.itens.map(s=>`<tr>
+        <td>NF <b>${s.nf}</b></td><td>${gEsc(s.clienteNome)}<div style="font-size:11.5px;color:var(--ink-soft)">${s.avulsa?'sem pedido no CRM':'Ped. '+gEsc(s.numeroPedido)+' · '+gEsc(sdVendNome(s.vendedorCodigo))}</div></td>
+        <td class="r">${sdN(s.volumes)} vol</td><td class="r hm">${fmtMoney(s.valor)}</td>
+        <td class="r" style="width:40px;"><button class="ghost-btn sdCanc" data-key="${gEsc(s.key)}" title="Cancelar essa saída (fica registrado)" style="padding:4px 8px; font-size:11.5px;">✕</button></td></tr>`).join('')}</tbody></table></div>
+    </div>`; }).join('') : `<div class="empty-state">Nenhuma saída registrada nesse dia.</div>`}
+    ${canceladas.length ? `<details style="margin-top:10px;"><summary class="hint" style="cursor:pointer;">${canceladas.length} saída(s) cancelada(s) nesse dia</summary>
+      <div style="overflow-x:auto;"><table class="sd-tab">${canceladas.map(s=>`<tr class="sd-cancel"><td>NF ${s.nf}</td><td>${gEsc(s.clienteNome)}</td><td>${gEsc(s.transportadora)}</td><td class="r">${s.volumes} vol</td></tr><tr><td colspan="4" class="hint" style="padding-top:0;">Cancelada por ${gEsc(s.canceladoPor||'')} — ${gEsc(s.motivoCancelamento||'')}</td></tr>`).join('')}</table></div></details>` : ''}
+    ${sdRankingHTML(lista)}`;
+  const ir = d => { ui.dia = d; sdRenderDia(c, main); };
+  c.querySelector('#sdAnt').onclick = () => ir(sdAddDias(ui.dia,-1));
+  c.querySelector('#sdProx').onclick = () => { if(!ehHoje) ir(sdAddDias(ui.dia,1)); };
+  c.querySelector('#sdDiaSel').onchange = e => { if(e.target.value) ir(e.target.value); };
+  const h = c.querySelector('#sdIrHoje'); if(h) h.onclick = () => ir(hoje);
+  sdLigarCards(c, lista, ehHoje ? 'hoje' : 'em '+fmtDatePt(ui.dia), false);
+  sdLigarCrit(c, () => sdRenderDia(c, main));
+  c.querySelectorAll('.sdCanc').forEach(b => b.onclick = () => {
+    const s = sd.saidas.find(x=>x.key===b.dataset.key); if(!s) return;
+    const m = sdModal(`Cancelar saída da NF ${s.nf}?`, `<p class="hint" style="margin-bottom:10px;">Nada é apagado: a saída fica marcada como cancelada, com o motivo, e o pedido volta a "aguardando coleta" pro vendedor.</p>
+      <label class="field-label">Motivo *</label><input class="sd-input" id="sdMotivo" placeholder="Ex.: NF digitada errada / caminhão não levou">
+      <div id="sdMsgCanc"></div>
+      <div style="text-align:right; margin-top:10px;"><button class="primary-btn" id="sdOkCanc">Cancelar saída</button></div>`, 460);
+    m.querySelector('#sdOkCanc').onclick = async () => {
+      const mot = m.querySelector('#sdMotivo').value.trim(); if(!mot){ m.querySelector('#sdMotivo').focus(); return; }
+      const ok = m.querySelector('#sdOkCanc'); ok.disabled = true;
+      try{ await sdApi({acao:'cancelar', key:s.key, motivo:mot}); m.remove(); await renderSaidaModulo(main); sdAviso(main, `Saída da NF ${s.nf} cancelada.`); }
+      catch(err){ m.querySelector('#sdMsgCanc').innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`; ok.disabled = false; }
+    };
+  });
+}
+
+function sdRenderMes(c, main){
+  const ui = STATE.sdUI, sd = STATE.sd;
+  const mesNum = Number(ui.mes.slice(5));
+  const lista = sd.ativas.filter(s => (s.data||'').slice(0,7)===ui.mes);
+  const dias = sdAgrupar(lista, s=>s.data).sort((a,b)=>a.chave<b.chave?-1:1);
+  const maxVol = Math.max(1, ...dias.map(d=>d.volumes));
+  const porVend = sdAgrupar(lista.filter(s=>s.vendedorCodigo!=null), s=>sdVendNome(s.vendedorCodigo)||('Nº '+s.vendedorCodigo)).sort((a,b)=>b.valor-a.valor);
+  const meses = []; const base = new Date(sdHoje()+'T12:00:00'); base.setDate(1);
+  for(let i=0;i<12;i++){ const d = new Date(base); d.setMonth(base.getMonth()-i); meses.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')); }
+  c.innerHTML = `
+    <div class="sd-nav-dia">
+      <select class="sd-input" id="sdMesSel" style="width:200px;">${meses.map(m=>`<option value="${m}" ${m===ui.mes?'selected':''}>${SD_MESES[Number(m.slice(5))-1]} / ${m.slice(0,4)}</option>`).join('')}</select>
+      <span class="hint">${dias.length} dia(s) com saída · ${sdAgrupar(lista,s=>s.coletaId).length} coletas</span>
+      <button class="ghost-btn" id="sdXls" style="margin-left:auto;">⬇️ Exportar Excel</button>
+    </div>
+    ${sdCardsHTML(lista)}
+    <div class="panel" style="overflow-x:auto;">
+      <h3>Dia a dia</h3>
+      <p class="hint" style="margin-bottom:8px;">Clique num dia pra abrir as saídas dele.</p>
+      ${dias.length ? `<table class="sd-tab"><thead><tr><th>Dia</th><th class="hm"></th><th class="r hm">Coletas</th><th class="r">Pedidos</th><th class="r">Volumes</th><th class="r">Valor</th></tr></thead><tbody>
+        ${dias.map(d=>`<tr class="click" data-dia="${d.chave}"><td><b>${fmtDatePt(d.chave).slice(0,5)}</b> <span class="hint">${['dom','seg','ter','qua','qui','sex','sáb'][new Date(d.chave+'T12:00').getDay()]}</span></td><td class="hm" style="width:25%"><div class="sd-bar"><i style="width:${Math.round(d.volumes/maxVol*100)}%"></i></div></td><td class="r hm">${d.coletas}</td><td class="r">${d.pedidos}</td><td class="r"><b>${sdN(d.volumes)}</b></td><td class="r">${fmtMoney(d.valor)}</td></tr>`).join('')}
+      </tbody></table>` : `<div class="empty-state">Nenhuma saída nesse mês.</div>`}
+    </div>
+    ${sdRankingHTML(lista)}
+    ${porVend.length ? `<div class="panel" style="margin-top:18px; overflow-x:auto;"><h3>Por vendedor</h3><table class="sd-tab"><thead><tr><th>Vendedor</th><th class="r">Pedidos</th><th class="r">Volumes</th><th class="r">Valor</th></tr></thead><tbody>
+      ${porVend.map(v=>`<tr><td><b>${gEsc(v.chave)}</b></td><td class="r">${v.pedidos}</td><td class="r">${sdN(v.volumes)}</td><td class="r">${fmtMoney(v.valor)}</td></tr>`).join('')}</tbody></table></div>` : ''}`;
+  c.querySelector('#sdMesSel').onchange = e => { ui.mes = e.target.value; sdRenderMes(c, main); };
+  c.querySelectorAll('tr[data-dia]').forEach(tr => tr.onclick = () => { ui.dia = tr.dataset.dia; ui.aba = 'dia'; renderSaidaModulo(main); });
+  sdLigarCards(c, lista, `em ${SD_MESES[mesNum-1]}`, true);
+  sdLigarCrit(c, () => sdRenderMes(c, main));
+  c.querySelector('#sdXls').onclick = () => {
+    if(typeof XLSX==='undefined'){ sdAviso(main, 'Biblioteca de planilha não carregou. Recarregue a página.', 'err'); return; }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lista.slice().sort((a,b)=>(a.data+a.hora)<(b.data+b.hora)?-1:1).map(s=>({'Data':fmtDatePt(s.data),'Hora':s.hora,'Transportadora':s.transportadora,'Motorista':s.motorista,'Placa':s.placa,'Documento':s.documento||'','NF':s.nf,'Volumes':s.volumes,'Cliente':s.clienteNome,'Nº cliente':s.clienteCodigo||'','Pedido':s.numeroPedido||'','Vendedor':sdVendNome(s.vendedorCodigo),'Valor':s.valor,'Lançado por':s.registradoPor||''}))), 'Saídas');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dias.map(d=>({'Dia':fmtDatePt(d.chave),'Coletas':d.coletas,'Pedidos':d.pedidos,'Volumes':d.volumes,'Valor':d.valor}))), 'Dia a dia');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sdAgrupar(lista,s=>s.transportadora).sort((a,b)=>b.volumes-a.volumes).map(t=>({'Transportadora':t.chave,'Coletas':t.coletas,'Pedidos':t.pedidos,'Volumes':t.volumes,'Valor':t.valor}))), 'Transportadoras');
+    XLSX.writeFile(wb, `saidas_${ui.mes}.xlsx`);
+  };
 }
 
 

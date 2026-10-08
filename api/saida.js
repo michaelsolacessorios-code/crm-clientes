@@ -3,7 +3,8 @@
 //
 // Cada registro é uma linha própria da tabela crm_kv, então duas pessoas lançando ao mesmo
 // tempo nunca sobrescrevem o trabalho uma da outra:
-//   "crm:nf:<nf>"              -> NF informada no pedido pelo faturamento (liga NF ↔ pedido)
+//   "crm:nf:<nf>:<vend>-<id>"  -> NF informada no pedido pelo faturamento (liga NF ↔ pedido).
+//                                 Uma NF pode faturar mais de um pedido do mesmo cliente.
 //   "crm:saida:<nf>:<carimbo>" -> uma NF que saiu numa coleta (transportadora, motorista, placa, volumes)
 // Nada é apagado: NF trocada vira "substituida", saída desfeita vira "cancelada" (com motivo e histórico).
 //
@@ -15,6 +16,7 @@
 const PREFIXO_NF = 'crm:nf:';
 const PREFIXO_SAIDA = 'crm:saida:';
 
+function chaveLink(nf, chavePedido) { return `${PREFIXO_NF}${nf}:${String(chavePedido).replace('|', '-')}`; }
 function soDigitos(v) { return String(v == null ? '' : v).replace(/\D/g, '').replace(/^0+(?=\d)/, ''); }
 
 // Data e hora de Brasília, do servidor (ninguém consegue lançar com data errada).
@@ -59,6 +61,9 @@ export default async function handler(req, res) {
     });
     if (!r.ok) throw new Error('Falha ao salvar no banco.');
   }
+  async function linksAtivosDaNf(nf) {
+    return (await listarPrefixo(PREFIXO_NF + nf + ':', '&value->>status=eq.ativa')).map(x => x.value);
+  }
   async function saidaAtivaDaNf(nf) {
     const rows = await listarPrefixo(PREFIXO_SAIDA + nf + ':', '&value->>status=eq.ativa');
     return rows.length ? rows[0].value : null;
@@ -87,12 +92,16 @@ export default async function handler(req, res) {
       if (!p.pedidoId || !p.vendedorCodigo) return res.status(400).json({ error: 'Pedido inválido.' });
       const chavePedido = `${p.vendedorCodigo}|${p.pedidoId}`;
 
-      const existente = await lerLinha(PREFIXO_NF + nf);
-      if (existente && existente.status === 'ativa' && existente.chavePedido !== chavePedido) {
-        return res.status(409).json({ error: `A NF ${nf} já está no pedido ${existente.numeroPedido || ''} (${existente.clienteNome || ''}). Confira o número.` });
+      const daNf = await linksAtivosDaNf(nf);
+      if (daNf.some(l => l.chavePedido === chavePedido)) {
+        return res.status(200).json({ ok: true, link: daNf.find(l => l.chavePedido === chavePedido) });
       }
-      if (existente && existente.status === 'ativa' && existente.chavePedido === chavePedido) {
-        return res.status(200).json({ ok: true, link: existente });
+      const outroCliente = daNf.find(l => String(l.clienteCodigo) !== String(p.clienteCodigo || ''));
+      if (outroCliente) {
+        return res.status(409).json({ error: `A NF ${nf} já está no pedido ${outroCliente.numeroPedido || ''} de outro cliente (${outroCliente.clienteNome || ''}). Confira o número.` });
+      }
+      if (await saidaAtivaDaNf(nf)) {
+        return res.status(409).json({ error: `A NF ${nf} já saiu. Não dá para incluir mais pedidos nela.` });
       }
 
       // Se esse pedido já tinha outra NF: só deixa trocar se ela ainda não saiu; a antiga vira "substituida".
@@ -103,7 +112,7 @@ export default async function handler(req, res) {
         }
       }
       const linhas = antigas.map(a => ({
-        key: PREFIXO_NF + a.nf,
+        key: chaveLink(a.nf, chavePedido),
         value: { ...a, status: 'substituida', historico: [...(a.historico || []), { em: agoraIso, por, acao: `substituída pela NF ${nf}` }] },
       }));
       const link = {
@@ -112,9 +121,9 @@ export default async function handler(req, res) {
         numeroPedido: String(p.numeroPedido || ''), clienteCodigo: String(p.clienteCodigo || ''),
         clienteNome: String(p.clienteNome || ''), valor: Number(p.valor) || 0, dataPedido: String(p.data || ''),
         informadoPor: por, informadoEm: agoraIso,
-        historico: [...((existente && existente.historico) || []), { em: agoraIso, por, acao: 'NF informada no pedido' }],
+        historico: [{ em: agoraIso, por, acao: 'NF informada no pedido' }],
       };
-      linhas.push({ key: PREFIXO_NF + nf, value: link });
+      linhas.push({ key: chaveLink(nf, chavePedido), value: link });
       await gravar(linhas, true);
       return res.status(200).json({ ok: true, link });
     }
@@ -142,8 +151,8 @@ export default async function handler(req, res) {
         if (volumes <= 0) { erros.push(`NF ${nf}: informe os volumes.`); continue; }
         const ja = await saidaAtivaDaNf(nf);
         if (ja) { erros.push(`A NF ${nf} já saiu em ${ja.data.split('-').reverse().join('/')} às ${ja.hora} (${ja.transportadora}).`); continue; }
-        const link = await lerLinha(PREFIXO_NF + nf);
-        const ativo = link && link.status === 'ativa' ? link : null;
+        const links = await linksAtivosDaNf(nf);
+        const ativo = links.length ? links : null;
         if (!ativo && !it.avulsa) { erros.push(`NF ${nf} não está ligada a nenhum pedido.`); continue; }
         if (!ativo && !String(it.clienteNome || '').trim()) { erros.push(`NF ${nf}: informe o cliente.`); continue; }
         prontos.push({ nf, volumes, ativo, it });
@@ -158,13 +167,14 @@ export default async function handler(req, res) {
           nf, volumes, status: 'ativa', coletaId, data, hora,
           transportadora, motorista, placa, documento,
           avulsa: !ativo,
-          chavePedido: ativo ? ativo.chavePedido : null,
-          vendedorCodigo: ativo ? ativo.vendedorCodigo : null,
-          pedidoId: ativo ? ativo.pedidoId : null,
-          numeroPedido: ativo ? ativo.numeroPedido : '',
-          clienteCodigo: ativo ? ativo.clienteCodigo : '',
-          clienteNome: ativo ? ativo.clienteNome : String(it.clienteNome).trim(),
-          valor: ativo ? (Number(ativo.valor) || 0) : (Number(it.valor) || 0),
+          pedidos: ativo ? ativo.map(l => ({ chavePedido: l.chavePedido, vendedorCodigo: l.vendedorCodigo, pedidoId: l.pedidoId, numeroPedido: l.numeroPedido, valor: Number(l.valor) || 0 })) : [],
+          chavePedido: ativo ? ativo[0].chavePedido : null,
+          vendedorCodigo: ativo ? ativo[0].vendedorCodigo : null,
+          pedidoId: ativo ? ativo[0].pedidoId : null,
+          numeroPedido: ativo ? [...new Set(ativo.map(l => l.numeroPedido))].join(', ') : '',
+          clienteCodigo: ativo ? ativo[0].clienteCodigo : '',
+          clienteNome: ativo ? ativo[0].clienteNome : String(it.clienteNome).trim(),
+          valor: ativo ? Math.round(ativo.reduce((t, l) => t + (Number(l.valor) || 0), 0) * 100) / 100 : (Number(it.valor) || 0),
           registradoPor: por, registradoEm: agoraIso,
           historico: [{ em: agoraIso, por, acao: 'saída registrada' }],
         };

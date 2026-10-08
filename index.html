@@ -7184,14 +7184,16 @@ async function renderVendorHoje(main){
   let hoje = meusClientes.filter(c => {
     const ag = contatos[c.codigo]?.agendadoPara;
     if(ag === todayStr()) return true; // retorno marcado exatamente para hoje, foge do dia normal
-    if(ag && ag > todayStr()) return false; // retorno futuro, some da lista até lá
+    // Retorno futuro: some da lista até lá — MAS se o vendedor falou com ele hoje e só reagendou,
+    // continua na lista de hoje marcado como contatado (com a data do retorno ao lado).
+    if(ag && ag > todayStr()) return c.diaSemana === wd && contatos[c.codigo]?.ultimoContato === todayStr();
     return c.diaSemana === wd;
   });
   hoje = hoje.map(c => ({...c, status: statusFor(contatos[c.codigo]?.ultimoContato), ultimoContato: contatos[c.codigo]?.ultimoContato, agendadoPara: contatos[c.codigo]?.agendadoPara}));
   hoje.sort((a,b) => daysBetween(b.ultimoContato) - daysBetween(a.ultimoContato));
   const feitos = hoje.filter(c => c.ultimoContato === todayStr()).length;
   const pct = hoje.length ? Math.round(feitos/hoje.length*100) : 0;
-  const adiados = meusClientes.filter(c => c.diaSemana === wd && isAgendadoFuturo(contatos, c.codigo)).length;
+  const adiados = meusClientes.filter(c => c.diaSemana === wd && isAgendadoFuturo(contatos, c.codigo) && contatos[c.codigo]?.ultimoContato !== todayStr()).length;
 
   main.innerHTML = `
     <div class="page-header">

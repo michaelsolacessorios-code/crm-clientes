@@ -12419,7 +12419,7 @@ async function sdCarregar(){
   if(!res.ok) throw new Error(data.error || 'Não consegui carregar as saídas.');
   const nfs = data.nfs || [], saidas = data.saidas || [];
   const nfAtivaPorPedido = new Map(), nfAtiva = new Map(), saidaAtivaPorNf = new Map();
-  nfs.filter(l => l.status==='ativa').forEach(l => { nfAtivaPorPedido.set(l.chavePedido, l); nfAtiva.set(l.nf, l); });
+  nfs.filter(l => l.status==='ativa').forEach(l => { nfAtivaPorPedido.set(l.chavePedido, l); if(!nfAtiva.has(l.nf)) nfAtiva.set(l.nf, []); nfAtiva.get(l.nf).push(l); });
   saidas.filter(s => s.status==='ativa').forEach(s => saidaAtivaPorNf.set(s.nf, s));
   STATE.sd = {nfs, saidas, nfAtivaPorPedido, nfAtiva, saidaAtivaPorNf, ativas: saidas.filter(s=>s.status==='ativa')};
   return STATE.sd;
@@ -12552,8 +12552,8 @@ function sdResolverNf(l, nfsTela){
   const ja = sd.saidaAtivaPorNf.get(l.nf);
   if(ja) return {tipo:'erro', msg:`A NF ${l.nf} já saiu em ${fmtDatePt(ja.data)} às ${ja.hora} (${gEsc(ja.transportadora)}).`};
   if(nfsTela.filter(n => n===l.nf).length > 1) return {tipo:'erro', msg:`NF ${l.nf} repetida nesta coleta.`};
-  const link = sd.nfAtiva.get(l.nf);
-  return link ? {tipo:'ok', link} : {tipo:'semPedido'};
+  const links = sd.nfAtiva.get(l.nf);
+  return links && links.length ? {tipo:'ok', links} : {tipo:'semPedido'};
 }
 function sdRenderNova(c, main){
   const ui = STATE.sdUI;
@@ -12598,7 +12598,7 @@ function sdRenderNova(c, main){
     const r = sdResolverNf(l, ui.linhas.map(x=>x.nf));
     if(r.tipo==='vazio') return `<div class="hint" style="padding-top:9px;">Digite a NF — o pedido aparece aqui sozinho.</div>`;
     if(r.tipo==='erro') return `<div class="msg err" style="margin:0; padding:8px 10px;">${r.msg}</div>`;
-    if(r.tipo==='ok'){ const k = r.link; const v = STATE.vendors.find(x=>x.codigo===k.vendedorCodigo); return `<div class="sd-ped-ok">✔ Pedido <b>${gEsc(k.numeroPedido)}</b> · ${gEsc(k.clienteNome)} · ${gEsc(v?v.nome:'')} · <b>${fmtMoney(k.valor)}</b></div>`; }
+    if(r.tipo==='ok'){ const ks = r.links, k = ks[0]; const v = STATE.vendors.find(x=>x.codigo===k.vendedorCodigo); const tot = ks.reduce((t,x)=>t+(x.valor||0),0); return `<div class="sd-ped-ok">✔ ${ks.length>1?'Pedidos':'Pedido'} <b>${[...new Set(ks.map(x=>gEsc(x.numeroPedido)))].join(', ')}</b> · ${gEsc(k.clienteNome)} · ${gEsc(v?v.nome:'')} · <b>${fmtMoney(tot)}</b></div>`; }
     if(!l.avulsa) return `<div class="msg sd-warn" style="margin:0; padding:8px 10px; font-size:12.5px;">Nenhum pedido tem a NF ${l.nf}. Confira o número ou peça pro faturamento informar a NF no pedido.
         <a href="#" class="sdAvulsa" style="display:block; margin-top:4px; color:var(--info);">Lançar mesmo assim, sem pedido →</a></div>`;
     return `<div style="display:grid; grid-template-columns:1fr 120px; gap:6px;">
@@ -12633,7 +12633,7 @@ function sdRenderNova(c, main){
   }
   function totais(){
     const vol = ui.linhas.reduce((s,l)=>s+(Number(l.volumes)||0),0);
-    const val = ui.linhas.reduce((s,l)=>{ const k = sd.nfAtiva.get(l.nf); return s + (k ? (k.valor||0) : (l.avulsa ? sdNum(l.valor) : 0)); },0);
+    const val = ui.linhas.reduce((s,l)=>{ const ks = sd.nfAtiva.get(l.nf); return s + (ks ? ks.reduce((t,x)=>t+(x.valor||0),0) : (l.avulsa ? sdNum(l.valor) : 0)); },0);
     c.querySelector('#sdTotal').innerHTML = `<span><b>${ui.linhas.length}</b> NF(s)</span><span><b>${sdN(vol)}</b> volumes</span><span><b>${fmtMoney(val)}</b></span>`;
   }
   c.querySelector('#sdAddNf').onclick = () => { ui.linhas.push(sdLinhaVazia()); desenhar(); const ins = box.querySelectorAll('.sdNfL'); ins[ins.length-1].focus(); };

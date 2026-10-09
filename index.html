@@ -12880,13 +12880,13 @@ function sdRenderMes(c, main){
 // Saída avulsa = NF que saiu sem pedido no CRM. O gerente sobe o PDF do pedido (a IA lê nº, cliente e valor)
 // ou preenche à mão. O valor entra só no relatório de saída — não vai pra meta de nenhum vendedor.
 function sdRenderPendencias(c, main){
-  const sd = STATE.sd;
+  const sd = STATE.sd, ui = STATE.sdUI;
   const pend = sd.ativas.filter(sdPendente).sort((a,b)=>(a.data+a.hora)<(b.data+b.hora)?-1:1);
-  const feitas = sd.ativas.filter(s=>s.avulsa && s.pedidoAnexado).sort((a,b)=>(a.pedidoAnexadoEm||'')<(b.pedidoAnexadoEm||'')?1:-1).slice(0,30);
+  const feitas = sd.ativas.filter(s=>s.avulsa && s.pedidoAnexado).sort((a,b)=>(a.pedidoAnexadoEm||'')<(b.pedidoAnexadoEm||'')?1:-1);
   const linha = (s, ok) => `<div class="client-row" style="flex-wrap:wrap; gap:10px;">
       <div class="client-info" style="min-width:220px;">
         <div class="client-name">NF ${s.nf} · ${gEsc(s.clienteNome)}${s.clienteCodigo?` <span class="client-num">Nº ${gEsc(s.clienteCodigo)}</span>`:''}</div>
-        <div class="client-meta">Saiu ${fmtDatePt(s.data)} às ${s.hora} · 🚚 <b>${gEsc(s.transportadora)}</b> · 🧑 ${gEsc(s.motorista)}${s.placa?` · 🚛 ${gEsc(s.placa)}`:''}${s.documento?` · doc ${gEsc(s.documento)}`:''} · <b>${sdN(s.volumes)} vol</b> · lançado por ${gEsc(s.registradoPor||'')}
+        <div class="client-meta">Saiu ${fmtDatePt(s.data)}${s.hora?' às '+s.hora:''} · 🚚 <b>${gEsc(s.transportadora)}</b> · 🧑 ${gEsc(s.motorista)}${s.placa?` · 🚛 ${gEsc(s.placa)}`:''}${s.documento?` · doc ${gEsc(s.documento)}`:''} · <b>${sdN(s.volumes)} vol</b> · lançado por ${gEsc(s.registradoPor||'')}
           ${ok?`<br>Ped. <b>${gEsc(s.numeroPedido||'s/ nº')}</b> · <b>${fmtMoney(s.valor)}</b> · por ${gEsc(s.pedidoAnexadoPor||'')}`:''}</div>
       </div>
       <div style="display:flex; gap:6px; margin-left:auto;">
@@ -12896,12 +12896,24 @@ function sdRenderPendencias(c, main){
   c.innerHTML = `
     <p class="hint" style="margin-bottom:12px;">NFs que saíram sem pedido no CRM. Suba o PDF do pedido (a IA lê nº, cliente e valor) ou preencha à mão. O valor entra no relatório de saída — <b>não conta pra nenhum vendedor</b>.</p>
     <input type="file" id="sdPdfFile" accept="application/pdf" style="display:none;">
-    <div class="client-list">${pend.map(s=>linha(s,false)).join('') || '<div class="empty-state">✔ Nenhuma pendência. Toda saída avulsa já tem pedido.</div>'}</div>
-    ${feitas.length ? `<details style="margin-top:16px;"><summary class="hint" style="cursor:pointer;">Avulsas já resolvidas (${feitas.length})</summary><div class="client-list" style="margin-top:8px;">${feitas.map(s=>linha(s,true)).join('')}</div></details>` : ''}`;
+    <div class="toolbar"><input class="search-input" id="sdPendBusca" value="${gEsc(ui.pendBusca||'')}" placeholder="🔎 Buscar NF, cliente, transportadora, placa, motorista, data (dd/mm)…" style="flex:1;"></div>
+    <div id="sdPendCont" class="hint" style="margin:-4px 0 8px;"></div>
+    <div id="sdPendLista"></div>`;
   const fileInp = c.querySelector('#sdPdfFile');
   let alvo = null;
-  c.querySelectorAll('.sdPdf').forEach(b => b.onclick = () => { alvo = sd.saidas.find(x=>x.key===b.dataset.key); fileInp.value = ''; fileInp.click(); });
-  c.querySelectorAll('.sdManual').forEach(b => b.onclick = () => { const s = sd.saidas.find(x=>x.key===b.dataset.key); if(s) sdModalPedidoAvulsa(main, s, null, null); });
+  const norm = t => String(t||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const bate = (s, q) => !q || norm([s.nf, s.clienteNome, s.clienteCodigo, s.numeroPedido, s.transportadora, s.placa, (s.placa||'').replace(/[^A-Z0-9]/gi,''), s.motorista, s.documento, s.registradoPor, fmtDatePt(s.data)].join(' ')).includes(q);
+  const desenhar = () => {
+    const q = norm((ui.pendBusca||'').trim());
+    const p = pend.filter(s=>bate(s,q)), f = feitas.filter(s=>bate(s,q));
+    c.querySelector('#sdPendCont').textContent = q ? `${p.length} de ${pend.length} pendência(s)` : `${pend.length} pendência(s)`;
+    c.querySelector('#sdPendLista').innerHTML = `<div class="client-list">${p.map(s=>linha(s,false)).join('') || `<div class="empty-state">${q?'Nada encontrado nas pendências.':'✔ Nenhuma pendência. Toda saída avulsa já tem pedido.'}</div>`}</div>
+      ${f.length ? `<details style="margin-top:16px;" ${q?'open':''}><summary class="hint" style="cursor:pointer;">Avulsas já resolvidas (${f.length})</summary><div class="client-list" style="margin-top:8px;">${f.map(s=>linha(s,true)).join('')}</div></details>` : ''}`;
+    c.querySelectorAll('.sdPdf').forEach(b => b.onclick = () => { alvo = sd.saidas.find(x=>x.key===b.dataset.key); fileInp.value = ''; fileInp.click(); });
+    c.querySelectorAll('.sdManual').forEach(b => b.onclick = () => { const s = sd.saidas.find(x=>x.key===b.dataset.key); if(s) sdModalPedidoAvulsa(main, s, null, null); });
+  };
+  c.querySelector('#sdPendBusca').oninput = e => { ui.pendBusca = e.target.value; desenhar(); };
+  desenhar();
   fileInp.onchange = async () => {
     const f = fileInp.files[0]; if(!f || !alvo) return;
     const m = sdModal(`Lendo o pedido da NF ${alvo.nf}…`, `<div class="loading" style="min-height:120px">🤖 Lendo ${gEsc(f.name)}…</div>`, 460);
@@ -12914,7 +12926,7 @@ function sdModalPedidoAvulsa(main, s, ped, arquivo){
   const cliBase = cod => STATE.roster.find(x => String(x.codigo) === String(cod).trim());
   const c0 = cliBase(cod0);
   const m = sdModal(`📄 Pedido da NF ${s.nf}`, `
-    <p class="hint" style="margin-bottom:10px;">Saiu ${fmtDatePt(s.data)} às ${s.hora} · 🚚 <b>${gEsc(s.transportadora)}</b> · 🧑 ${gEsc(s.motorista)}${s.placa?` · 🚛 ${gEsc(s.placa)}`:''} · ${sdN(s.volumes)} vol. ${ped?'Confira o que a IA leu:':'Preencha os dados do pedido:'}</p>
+    <p class="hint" style="margin-bottom:10px;">Saiu ${fmtDatePt(s.data)}${s.hora?' às '+s.hora:''} · 🚚 <b>${gEsc(s.transportadora)}</b> · 🧑 ${gEsc(s.motorista)}${s.placa?` · 🚛 ${gEsc(s.placa)}`:''} · ${sdN(s.volumes)} vol. ${ped?'Confira o que a IA leu:':'Preencha os dados do pedido:'}</p>
     <div class="sd-grid2" style="grid-template-columns:1fr 1fr;">
       <label><span class="field-label">Nº do pedido</span><input class="sd-input" id="apNum" value="${gEsc((ped&&ped.numeroPedido)||s.numeroPedido||'')}"></label>
       <label><span class="field-label">Valor do pedido (R$) *</span><input class="sd-input" id="apVal" inputmode="decimal" value="${ped&&ped.valorTotal?String(ped.valorTotal).replace('.',','):(s.valor?String(s.valor).replace('.',','):'')}"></label>

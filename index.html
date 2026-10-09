@@ -12433,6 +12433,13 @@ function sdSituacao(p, vendedorCodigo){
   const saida = link ? (sd.saidaAtivaPorNf.get(link.nf) || null) : null;
   return {st: saida ? 'coletado' : (link ? 'nf_emitida' : 'sem_nf'), link, saida};
 }
+// Saída avulsa (NF sem pedido no CRM) que ainda espera o gerente subir o pedido.
+function sdPendente(s){ return s.status==='ativa' && s.avulsa && !s.pedidoAnexado; }
+function sdSubTxt(s){
+  if(!s.avulsa) return 'Ped. '+gEsc(s.numeroPedido)+' · '+gEsc(sdVendNome(s.vendedorCodigo));
+  if(sdPendente(s)) return '<b style="color:var(--warn,#b26a00)">⚠️ pendente: subir pedido</b>';
+  return 'Ped. '+gEsc(s.numeroPedido||'s/ nº')+' · fora do CRM';
+}
 function sdBadgeHTML(sit){ if(!sit) return ''; const S = SD_STATUS[sit.st]; return `<span class="status-badge ${S.cls}" style="margin-left:6px;">${S.label}</span>`; }
 function sdLinhaColetaHTML(sit){
   if(!sit) return '';
@@ -12536,15 +12543,22 @@ async function renderSaidaModulo(main){
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando saídas…</div>`;
   try{ await sdCarregar(); }catch(err){ main.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`; return; }
   STATE.sdFrota = (await safeGet('crm:saida_frota')) || {motoristas:[], veiculos:[]};
+  const ehGer = STATE.session.tipo === 'gerente';
+  const nPend = STATE.sd.ativas.filter(sdPendente).length;
   const abas = [{id:'nova',label:'+ Registrar saída'},{id:'dia',label:'Saídas do dia'},{id:'mes',label:'Relatório mensal'}];
+  if(ehGer) abas.push({id:'pend', label:`⚠️ Pendências${nPend?` (${nPend})`:''}`});
+  if(ui.aba==='pend' && !ehGer) ui.aba = 'nova';
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Estoque › Saída</div><h2>Controle de saída — coletas</h2></div>
     <div class="tabs" style="flex-wrap:wrap;">${abas.map(a=>`<button class="tab-btn ${ui.aba===a.id?'active':''}" data-aba="${a.id}">${a.label}</button>`).join('')}</div>
+    ${ehGer && nPend && ui.aba!=='pend' ? `<div class="msg sd-warn" style="margin:0 0 12px;">⚠️ ${nPend} saída(s) avulsa(s) sem pedido. <a href="#" id="sdIrPend" style="color:var(--info);">Subir pedido →</a></div>` : ''}
     <div id="sdMsg"></div><div id="sdConteudo"></div>`;
+  const irPend = main.querySelector('#sdIrPend'); if(irPend) irPend.onclick = e => { e.preventDefault(); ui.aba = 'pend'; renderSaidaModulo(main); };
   main.querySelectorAll('.tab-btn[data-aba]').forEach(b => b.onclick = () => { ui.aba = b.dataset.aba; renderSaidaModulo(main); });
   const c = main.querySelector('#sdConteudo');
   if(ui.aba==='nova') sdRenderNova(c, main);
   else if(ui.aba==='dia') sdRenderDia(c, main);
+  else if(ui.aba==='pend') sdRenderPendencias(c, main);
   else sdRenderMes(c, main);
 }
 
@@ -12651,10 +12665,8 @@ function sdRenderNova(c, main){
     if(r.tipo==='ok'){ const ks = r.links, k = ks[0]; const v = STATE.vendors.find(x=>x.codigo===k.vendedorCodigo); const tot = ks.reduce((t,x)=>t+(x.valor||0),0); return `<div class="sd-ped-ok">✔ ${ks.length>1?'Pedidos':'Pedido'} <b>${[...new Set(ks.map(x=>gEsc(x.numeroPedido)))].join(', ')}</b> · ${gEsc(k.clienteNome)} · ${gEsc(v?v.nome:'')} · <b>${fmtMoney(tot)}</b></div>`; }
     if(!l.avulsa) return `<div class="msg sd-warn" style="margin:0; padding:8px 10px; font-size:12.5px;">Nenhum pedido tem a NF ${l.nf}. Confira o número ou peça pro faturamento informar a NF no pedido.
         <a href="#" class="sdAvulsa" style="display:block; margin-top:4px; color:var(--info);">Lançar mesmo assim, sem pedido →</a></div>`;
-    return `<div style="display:grid; grid-template-columns:1fr 120px; gap:6px;">
-        <input class="sd-input sdCli" value="${gEsc(l.clienteNome)}" placeholder="Nome do cliente">
-        <input class="sd-input sdVal" inputmode="decimal" value="${gEsc(l.valor)}" placeholder="Valor R$"></div>
-        <span class="hint">Saída avulsa: não marca nenhum pedido como coletado.</span>`;
+    return `<input class="sd-input sdCli" value="${gEsc(l.clienteNome)}" placeholder="Nome do cliente">
+        <span class="hint">Saída avulsa: fica pendente até o gerente subir o pedido (o valor vem de lá).</span>`;
   };
   const ligarStatus = (row, l) => {
     const a = row.querySelector('.sdAvulsa'); if(a) a.onclick = e => { e.preventDefault(); l.avulsa = true; atualizar(row, l); };
@@ -12747,7 +12759,7 @@ function sdLigarCards(c, lista, periodo, mostraDia){
     } else if(tipo==='pedidos'){
       const ord = [...lista].sort((a,b)=> (a.data+a.hora) < (b.data+b.hora) ? -1 : 1);
       sdModal(`🧾 Pedidos que saíram ${periodo} — ${lista.length}`, `<div style="overflow-x:auto;"><table class="sd-tab"><thead><tr><th>Cliente</th><th>Pedido / NF</th><th class="hm">Vendedor</th><th class="hm">Saída</th></tr></thead><tbody>
-        ${ord.map(s=>`<tr><td><b>${gEsc(s.clienteNome)}</b></td><td>${s.avulsa?'<i style="color:var(--ink-faint)">sem pedido</i> · NF '+s.nf:pedTxt(s)}</td><td class="hm">${gEsc(sdVendNome(s.vendedorCodigo))||'—'}</td><td class="hm">${mostraDia?fmtDatePt(s.data).slice(0,5)+' ':''}${s.hora} · ${gEsc(s.transportadora)}</td></tr>`).join('')}
+        ${ord.map(s=>`<tr><td><b>${gEsc(s.clienteNome)}</b></td><td>${sdPendente(s)?'<i style="color:var(--ink-faint)">sem pedido</i> · NF '+s.nf:pedTxt(s)}</td><td class="hm">${gEsc(sdVendNome(s.vendedorCodigo))||'—'}</td><td class="hm">${mostraDia?fmtDatePt(s.data).slice(0,5)+' ':''}${s.hora} · ${gEsc(s.transportadora)}</td></tr>`).join('')}
       </tbody></table></div>`, 720);
     } else {
       const ord = [...lista].sort((a,b)=>b.valor-a.valor); const max = ord[0].valor||1;
@@ -12791,7 +12803,7 @@ function sdRenderDia(c, main){
       <div class="sd-coleta-h"><b>${s0.hora}</b><b>${s0.transportadora==='ENTREGA PRÓPRIA'?'🚐 ':s0.transportadora==='RETIRA'?'🧍 ':''}${gEsc(s0.transportadora)}</b><span>🧑 ${gEsc(s0.motorista)}</span>${s0.placa?`<span>🚛 ${gEsc(s0.placa)}</span>`:''}
         <span style="margin-left:auto;">${g.pedidos} NF · <b>${sdN(g.volumes)} vol</b> · ${fmtMoney(g.valor)}</span></div>
       <div style="overflow-x:auto;"><table class="sd-tab"><tbody>${g.itens.map(s=>`<tr>
-        <td>NF <b>${s.nf}</b></td><td>${gEsc(s.clienteNome)}<div style="font-size:11.5px;color:var(--ink-soft)">${s.avulsa?'sem pedido no CRM':'Ped. '+gEsc(s.numeroPedido)+' · '+gEsc(sdVendNome(s.vendedorCodigo))}</div></td>
+        <td>NF <b>${s.nf}</b></td><td>${gEsc(s.clienteNome)}<div style="font-size:11.5px;color:var(--ink-soft)">${sdSubTxt(s)}</div></td>
         <td class="r">${sdN(s.volumes)} vol</td><td class="r hm">${fmtMoney(s.valor)}</td>
         <td class="r" style="width:40px;"><button class="ghost-btn sdCanc" data-key="${gEsc(s.key)}" title="Cancelar essa saída (fica registrado)" style="padding:4px 8px; font-size:11.5px;">✕</button></td></tr>`).join('')}</tbody></table></div>
     </div>`; }).join('') : `<div class="empty-state">Nenhuma saída registrada nesse dia.</div>`}
@@ -12827,6 +12839,8 @@ function sdRenderMes(c, main){
   const dias = sdAgrupar(lista, s=>s.data).sort((a,b)=>a.chave<b.chave?-1:1);
   const maxVol = Math.max(1, ...dias.map(d=>d.volumes));
   const porVend = sdAgrupar(lista.filter(s=>s.vendedorCodigo!=null), s=>sdVendNome(s.vendedorCodigo)||('Nº '+s.vendedorCodigo)).sort((a,b)=>b.valor-a.valor);
+  const avs = lista.filter(s=>s.vendedorCodigo==null);
+  const foraCrm = {pedidos:avs.length, volumes:avs.reduce((t,s)=>t+(s.volumes||0),0), valor:avs.reduce((t,s)=>t+(s.valor||0),0), pend:avs.filter(sdPendente).length};
   const meses = []; const base = new Date(sdHoje()+'T12:00:00'); base.setDate(1);
   for(let i=0;i<12;i++){ const d = new Date(base); d.setMonth(base.getMonth()-i); meses.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')); }
   c.innerHTML = `
@@ -12844,8 +12858,9 @@ function sdRenderMes(c, main){
       </tbody></table>` : `<div class="empty-state">Nenhuma saída nesse mês.</div>`}
     </div>
     ${sdRankingHTML(lista)}
-    ${porVend.length ? `<div class="panel" style="margin-top:18px; overflow-x:auto;"><h3>Por vendedor</h3><table class="sd-tab"><thead><tr><th>Vendedor</th><th class="r">Pedidos</th><th class="r">Volumes</th><th class="r">Valor</th></tr></thead><tbody>
-      ${porVend.map(v=>`<tr><td><b>${gEsc(v.chave)}</b></td><td class="r">${v.pedidos}</td><td class="r">${sdN(v.volumes)}</td><td class="r">${fmtMoney(v.valor)}</td></tr>`).join('')}</tbody></table></div>` : ''}`;
+    ${porVend.length || foraCrm.pedidos ? `<div class="panel" style="margin-top:18px; overflow-x:auto;"><h3>Por vendedor</h3><table class="sd-tab"><thead><tr><th>Vendedor</th><th class="r">Pedidos</th><th class="r">Volumes</th><th class="r">Valor</th></tr></thead><tbody>
+      ${porVend.map(v=>`<tr><td><b>${gEsc(v.chave)}</b></td><td class="r">${v.pedidos}</td><td class="r">${sdN(v.volumes)}</td><td class="r">${fmtMoney(v.valor)}</td></tr>`).join('')}
+      ${foraCrm.pedidos ? `<tr style="color:var(--ink-soft)"><td><i>Fora do CRM (avulsas — não conta pra ninguém)</i>${foraCrm.pend?` <span class="hint">· ${foraCrm.pend} sem pedido</span>`:''}</td><td class="r">${foraCrm.pedidos}</td><td class="r">${sdN(foraCrm.volumes)}</td><td class="r">${fmtMoney(foraCrm.valor)}</td></tr>` : ''}</tbody></table></div>` : ''}`;
   c.querySelector('#sdMesSel').onchange = e => { ui.mes = e.target.value; sdRenderMes(c, main); };
   c.querySelectorAll('tr[data-dia]').forEach(tr => tr.onclick = () => { ui.dia = tr.dataset.dia; ui.aba = 'dia'; renderSaidaModulo(main); });
   sdLigarCards(c, lista, `em ${SD_MESES[mesNum-1]}`, true);
@@ -12853,13 +12868,76 @@ function sdRenderMes(c, main){
   c.querySelector('#sdXls').onclick = () => {
     if(typeof XLSX==='undefined'){ sdAviso(main, 'Biblioteca de planilha não carregou. Recarregue a página.', 'err'); return; }
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lista.slice().sort((a,b)=>(a.data+a.hora)<(b.data+b.hora)?-1:1).map(s=>({'Data':fmtDatePt(s.data),'Hora':s.hora,'Transportadora':s.transportadora,'Motorista':s.motorista,'Placa':s.placa,'Documento':s.documento||'','NF':s.nf,'Volumes':s.volumes,'Cliente':s.clienteNome,'Nº cliente':s.clienteCodigo||'','Pedido':s.numeroPedido||'','Vendedor':sdVendNome(s.vendedorCodigo),'Valor':s.valor,'Lançado por':s.registradoPor||''}))), 'Saídas');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lista.slice().sort((a,b)=>(a.data+a.hora)<(b.data+b.hora)?-1:1).map(s=>({'Data':fmtDatePt(s.data),'Hora':s.hora,'Transportadora':s.transportadora,'Motorista':s.motorista,'Placa':s.placa,'Documento':s.documento||'','NF':s.nf,'Volumes':s.volumes,'Cliente':s.clienteNome,'Nº cliente':s.clienteCodigo||'','Pedido':s.numeroPedido||'','Vendedor':s.avulsa?'Fora do CRM':sdVendNome(s.vendedorCodigo),'Valor':s.valor,'Situação':sdPendente(s)?'Pendente: subir pedido':'OK','Lançado por':s.registradoPor||''}))), 'Saídas');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dias.map(d=>({'Dia':fmtDatePt(d.chave),'Coletas':d.coletas,'Pedidos':d.pedidos,'Volumes':d.volumes,'Valor':d.valor}))), 'Dia a dia');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sdAgrupar(lista,s=>s.transportadora).sort((a,b)=>b.volumes-a.volumes).map(t=>({'Transportadora':t.chave,'Coletas':t.coletas,'Pedidos':t.pedidos,'Volumes':t.volumes,'Valor':t.valor}))), 'Transportadoras');
     XLSX.writeFile(wb, `saidas_${ui.mes}.xlsx`);
   };
 }
 
+
+// ---------------- Estoque › Saída › Pendências (só gerente) ----------------
+// Saída avulsa = NF que saiu sem pedido no CRM. O gerente sobe o PDF do pedido (a IA lê nº, cliente e valor)
+// ou preenche à mão. O valor entra só no relatório de saída — não vai pra meta de nenhum vendedor.
+function sdRenderPendencias(c, main){
+  const sd = STATE.sd;
+  const pend = sd.ativas.filter(sdPendente).sort((a,b)=>(a.data+a.hora)<(b.data+b.hora)?-1:1);
+  const feitas = sd.ativas.filter(s=>s.avulsa && s.pedidoAnexado).sort((a,b)=>(a.pedidoAnexadoEm||'')<(b.pedidoAnexadoEm||'')?1:-1).slice(0,30);
+  const linha = (s, ok) => `<div class="client-row" style="flex-wrap:wrap; gap:10px;">
+      <div class="client-info" style="min-width:220px;">
+        <div class="client-name">NF ${s.nf} · ${gEsc(s.clienteNome)}${s.clienteCodigo?` <span class="client-num">Nº ${gEsc(s.clienteCodigo)}</span>`:''}</div>
+        <div class="client-meta">Saiu ${fmtDatePt(s.data)} às ${s.hora} · 🚚 <b>${gEsc(s.transportadora)}</b> · 🧑 ${gEsc(s.motorista)}${s.placa?` · 🚛 ${gEsc(s.placa)}`:''}${s.documento?` · doc ${gEsc(s.documento)}`:''} · <b>${sdN(s.volumes)} vol</b> · lançado por ${gEsc(s.registradoPor||'')}
+          ${ok?`<br>Ped. <b>${gEsc(s.numeroPedido||'s/ nº')}</b> · <b>${fmtMoney(s.valor)}</b> · por ${gEsc(s.pedidoAnexadoPor||'')}`:''}</div>
+      </div>
+      <div style="display:flex; gap:6px; margin-left:auto;">
+        <button class="primary-btn sdPdf" data-key="${gEsc(s.key)}" style="padding:8px 12px;">📄 ${ok?'Trocar pedido':'Subir pedido (PDF)'}</button>
+        <button class="ghost-btn sdManual" data-key="${gEsc(s.key)}" style="padding:8px 12px;">✍️ À mão</button>
+      </div></div>`;
+  c.innerHTML = `
+    <p class="hint" style="margin-bottom:12px;">NFs que saíram sem pedido no CRM. Suba o PDF do pedido (a IA lê nº, cliente e valor) ou preencha à mão. O valor entra no relatório de saída — <b>não conta pra nenhum vendedor</b>.</p>
+    <input type="file" id="sdPdfFile" accept="application/pdf" style="display:none;">
+    <div class="client-list">${pend.map(s=>linha(s,false)).join('') || '<div class="empty-state">✔ Nenhuma pendência. Toda saída avulsa já tem pedido.</div>'}</div>
+    ${feitas.length ? `<details style="margin-top:16px;"><summary class="hint" style="cursor:pointer;">Avulsas já resolvidas (${feitas.length})</summary><div class="client-list" style="margin-top:8px;">${feitas.map(s=>linha(s,true)).join('')}</div></details>` : ''}`;
+  const fileInp = c.querySelector('#sdPdfFile');
+  let alvo = null;
+  c.querySelectorAll('.sdPdf').forEach(b => b.onclick = () => { alvo = sd.saidas.find(x=>x.key===b.dataset.key); fileInp.value = ''; fileInp.click(); });
+  c.querySelectorAll('.sdManual').forEach(b => b.onclick = () => { const s = sd.saidas.find(x=>x.key===b.dataset.key); if(s) sdModalPedidoAvulsa(main, s, null, null); });
+  fileInp.onchange = async () => {
+    const f = fileInp.files[0]; if(!f || !alvo) return;
+    const m = sdModal(`Lendo o pedido da NF ${alvo.nf}…`, `<div class="loading" style="min-height:120px">🤖 Lendo ${gEsc(f.name)}…</div>`, 460);
+    try{ const ped = await extrairPedidoDoPdf(f); m.remove(); sdModalPedidoAvulsa(main, alvo, ped, f.name); }
+    catch(err){ m.remove(); sdAviso(main, `Não consegui ler o PDF: ${gEsc(err.message)} — use "À mão".`, 'err'); }
+  };
+}
+function sdModalPedidoAvulsa(main, s, ped, arquivo){
+  const cod0 = (ped && ped.clienteCodigo) || s.clienteCodigo || '';
+  const cliBase = cod => STATE.roster.find(x => String(x.codigo) === String(cod).trim());
+  const c0 = cliBase(cod0);
+  const m = sdModal(`📄 Pedido da NF ${s.nf}`, `
+    <p class="hint" style="margin-bottom:10px;">Saiu ${fmtDatePt(s.data)} às ${s.hora} · 🚚 <b>${gEsc(s.transportadora)}</b> · 🧑 ${gEsc(s.motorista)}${s.placa?` · 🚛 ${gEsc(s.placa)}`:''} · ${sdN(s.volumes)} vol. ${ped?'Confira o que a IA leu:':'Preencha os dados do pedido:'}</p>
+    <div class="sd-grid2" style="grid-template-columns:1fr 1fr;">
+      <label><span class="field-label">Nº do pedido</span><input class="sd-input" id="apNum" value="${gEsc((ped&&ped.numeroPedido)||s.numeroPedido||'')}"></label>
+      <label><span class="field-label">Valor do pedido (R$) *</span><input class="sd-input" id="apVal" inputmode="decimal" value="${ped&&ped.valorTotal?String(ped.valorTotal).replace('.',','):(s.valor?String(s.valor).replace('.',','):'')}"></label>
+      <label><span class="field-label">Nº do cliente</span><input class="sd-input" id="apCod" inputmode="numeric" value="${gEsc(cod0)}"></label>
+      <label><span class="field-label">Cliente</span><input class="sd-input" id="apNome" value="${gEsc(c0?c0.nome:s.clienteNome)}"></label>
+    </div>
+    ${ped && ped.itens && ped.itens.length ? `<p class="hint" style="margin-top:6px;">${ped.itens.length} item(ns) lido(s) no PDF.</p>` : ''}
+    <p class="hint" style="margin-top:6px;">O valor entra só no relatório de saída — não vai pra nenhum vendedor.</p>
+    <div id="apMsg"></div>
+    <div style="text-align:right; margin-top:10px;"><button class="primary-btn" id="apOk">✔ Salvar pedido</button></div>`, 560);
+  const codEl = m.querySelector('#apCod'), nomeEl = m.querySelector('#apNome');
+  codEl.oninput = () => { codEl.value = codEl.value.replace(/\D/g,''); const c = cliBase(codEl.value); if(c) nomeEl.value = c.nome; };
+  m.querySelector('#apOk').onclick = async () => {
+    const valor = sdNum(m.querySelector('#apVal').value);
+    if(!(valor > 0)){ m.querySelector('#apMsg').innerHTML = '<div class="msg err">Informe o valor do pedido.</div>'; m.querySelector('#apVal').focus(); return; }
+    const ok = m.querySelector('#apOk'); ok.disabled = true; ok.textContent = 'Salvando…';
+    try{
+      await sdApi({acao:'completar-avulsa', key:s.key, pedido:{numeroPedido:m.querySelector('#apNum').value.trim(), valor, clienteCodigo:codEl.value.trim(), clienteNome:nomeEl.value.trim(), origem:ped?'pdf':'manual', arquivo:arquivo||''}});
+      m.remove(); STATE.sdUI.aba = 'pend'; await renderSaidaModulo(main);
+      sdAviso(main, `✔ Pedido da NF ${s.nf} salvo: ${fmtMoney(valor)} no relatório de saída.`);
+    }catch(err){ m.querySelector('#apMsg').innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`; ok.disabled = false; ok.textContent = '✔ Salvar pedido'; }
+  };
+}
 
 (async function init(){
   try{

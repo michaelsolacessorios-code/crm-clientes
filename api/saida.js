@@ -12,6 +12,7 @@
 // POST /api/saida { acao:'vincular-nf', nf, pedido, por }        -> { ok, link }   (409 se a NF já é de outro pedido)
 // POST /api/saida { acao:'registrar', coleta, itens, por }       -> { ok, saidas } (409 se alguma NF já saiu)
 // POST /api/saida { acao:'cancelar', key, motivo, por }          -> { ok, saida }
+// POST /api/saida { acao:'completar-avulsa', key, pedido, por }  -> { ok, saida }  (gerente sobe o pedido da saída avulsa)
 
 const PREFIXO_NF = 'crm:nf:';
 const PREFIXO_SAIDA = 'crm:saida:';
@@ -184,6 +185,34 @@ export default async function handler(req, res) {
       });
       await gravar(linhas, false);
       return res.status(200).json({ ok: true, saidas: linhas.map(l => ({ ...l.value, key: l.key })) });
+    }
+
+    // ---------- Gerente sobe o pedido de uma saída avulsa (pendência) ----------
+    // Completa valor / nº pedido / cliente. Não liga a nenhum vendedor: o valor só entra no relatório de saída.
+    if (body.acao === 'completar-avulsa') {
+      const key = String(body.key || '');
+      const p = body.pedido || {};
+      if (!key.startsWith(PREFIXO_SAIDA)) return res.status(400).json({ error: 'Saída inválida.' });
+      const valor = Math.round((Number(p.valor) || 0) * 100) / 100;
+      if (!(valor > 0)) return res.status(400).json({ error: 'Informe o valor do pedido.' });
+      const s = await lerLinha(key);
+      if (!s) return res.status(404).json({ error: 'Saída não encontrada.' });
+      if (s.status !== 'ativa') return res.status(409).json({ error: 'Essa saída está cancelada.' });
+      if (!s.avulsa) return res.status(409).json({ error: 'Essa saída já está ligada a um pedido do CRM.' });
+      const numeroPedido = String(p.numeroPedido || '').trim().slice(0, 40);
+      const clienteCodigo = String(p.clienteCodigo || '').trim().slice(0, 20);
+      const clienteNome = String(p.clienteNome || '').trim().slice(0, 120) || s.clienteNome;
+      const acao = s.pedidoAnexado
+        ? `pedido trocado (antes: ${s.numeroPedido || 's/ nº'} · R$ ${s.valor})`
+        : 'pedido anexado';
+      const nova = {
+        ...s, valor, numeroPedido, clienteCodigo, clienteNome,
+        pedidoAnexado: true, pedidoAnexadoPor: por, pedidoAnexadoEm: agoraIso,
+        pedidoOrigem: String(p.origem || 'manual').slice(0, 20), pedidoArquivo: String(p.arquivo || '').slice(0, 120),
+        historico: [...(s.historico || []), { em: agoraIso, por, acao: `${acao}: ${numeroPedido || 's/ nº'} · R$ ${valor}` }],
+      };
+      await gravar([{ key, value: nova }], true);
+      return res.status(200).json({ ok: true, saida: { ...nova, key } });
     }
 
     // ---------- Desfazer uma saída (fica registrada como cancelada) ----------

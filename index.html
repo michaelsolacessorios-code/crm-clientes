@@ -6726,10 +6726,16 @@ function gnBindImportPanel(){
 // Importar de novo NUNCA apaga: venda que já existe tem a situação atualizada, venda nova é adicionada.
 const EC_PLATAFORMAS = [
   {id:'ml', nome:'Mercado Livre', ativa:true, contas:['PHG','MILLS','LIMS','BPS','QVARI']},
-  {id:'shopee', nome:'Shopee', ativa:false, contas:['PHG','LP','MILS','QVARI']},
-  {id:'amazon', nome:'Amazon', ativa:false, contas:['LIMS']},
-  {id:'tiktok', nome:'TikTok', ativa:false, contas:['BPS','MILS']},
+  {id:'shopee', nome:'Shopee', ativa:true, contas:['PHG','LP','MILS','QVARI','LIMS']},
+  {id:'amazon', nome:'Amazon', ativa:true, contas:['LIMS']},
+  {id:'tiktok', nome:'TikTok', ativa:true, contas:['BPS','MILS']},
+  {id:'magalu', nome:'Magalu', ativa:true, contas:['PHG']},
+  {id:'drop', nome:'🚚 Dropship', ativa:true, contas:['TUDO ELETRO','MSL','JRY','STG','GOIAS','MULTFIFA']},
 ];
+// Planilha de controle da equipe (Google Sheets "Controle de devoluções"), sincronizada pelo /api/ecom-planilha.
+// Fica em chaves próprias (crm:ecom:pl:<AAAA-MM>) — nunca mexe no que veio da exportação do ML.
+const EC_PL_CAMPOS = ['id','venda','data','dataCompra','cliente','loja','plat','conta','canal','frete','sku','un','valor','reclamacao','motivoContato','estadoProduto','mediacao','status','reputacao','destino','ganho','ganhoML','erroNosso','conferencia','obs','categoria','tipo','dataAjustada','dataOriginal','linha'];
+const EC_PL_EXTRAS = ['cliente','status','mediacao','reputacao','destino','ganho','ganhoML','erroNosso','categoria','estadoProduto','reclamacao','obs','conferencia','frete','dataCompra','dataAjustada','dataOriginal','linha','loja'];
 const EC_TIPOS = ['Devolução','Mediação','Reclamação','Cancelamento','Não entregue','Outros'];
 const EC_COR = {'Devolução':'var(--primary)','Mediação':'var(--sac)','Reclamação':'var(--accent)','Cancelamento':'var(--warn)','Não entregue':'var(--info)','Outros':'var(--info)'};
 const EC_CAMPOS = ['venda','data','estado','tipo','motivo','un','valor','sku','titulo'];
@@ -6846,15 +6852,84 @@ async function ecCarregar(){
   if(STATE.ecom) return STATE.ecom;
   const index = (await safeGet('crm:ecom:index')) || {chaves:[], importacoes:[]};
   const regs = [];
-  const partes = await Promise.all(index.chaves.map(k => safeGet(k).then(v => ({k, v}))));
+  const partes = await Promise.all((index.chaves||[]).map(k => safeGet(k).then(v => ({k, v}))));
   partes.forEach(({k, v}) => {
     const [, , plat, conta] = k.split(':');
     ecExpandir(v && v.regs).forEach(r => regs.push({...r, plataforma: plat, conta}));
   });
+  // Planilha de controle: junta com a exportação do ML pelo nº do pedido + SKU (só na tela; nada é regravado).
+  const partesPl = await Promise.all((index.chavesPlanilha||[]).map(k => safeGet(k)));
+  const porVenda = new Map();
+  regs.forEach(r => { if(r.plataforma !== 'ml') return; const k = String(r.venda); if(!porVenda.has(k)) porVenda.set(k, []); porVenda.get(k).push(r); });
+  partesPl.forEach(v => ecPlExpandir(v).forEach(p => {
+    const cands = (porVenda.get(String(p.venda)) || []).filter(r => !r.controle &&
+      (String(r.sku||'').toUpperCase() === p.sku || ((!p.sku || !r.sku) && porVenda.get(String(p.venda)).length === 1)));
+    if(p.plat === 'ml' && p.venda && cands.length){
+      const r = cands[0];
+      EC_PL_EXTRAS.forEach(k => { if(p[k] !== undefined && p[k] !== '') r[k] = p[k]; });
+      r.controle = true; r.idPlanilha = p.id;
+      return;
+    }
+    const cat = reclBuscarItem(p.sku);
+    regs.push({
+      ...p, plataforma: p.plat, controle: true, idPlanilha: p.id,
+      estado: p.status || '—', motivo: ecMotivo(p.reclamacao) || p.motivoContato || '', titulo: cat ? cat.descricao : '',
+    });
+  }));
   STATE.ecom = {index, regs};
   return STATE.ecom;
 }
-function ecGanhou(r){ return /Te demos o dinheiro|liberamos o (dinheiro|valor)|Creditamos|n[ãa]o foi sua responsabilidade/i.test(r.estado+' '+r.motivo); }
+function ecPlExpandir(v){ return ((v && v.regs) || []).map(a => { if(!Array.isArray(a)) return a; const r = {}; EC_PL_CAMPOS.forEach((k,i) => { if(a[i] !== null && a[i] !== undefined) r[k] = a[i]; }); return r; }); }
+function ecPlCompactar(regs){ return regs.map(r => EC_PL_CAMPOS.map(k => (r[k] === undefined || r[k] === '') ? null : r[k])); }
+
+// Lê a planilha do Google Sheets (em partes) e grava por mês, juntando com o que já existe. Nunca apaga.
+async function ecSincronizarPlanilha(progresso){
+  const regs = []; let avisos = [], partes = 1;
+  for(let p = 0; p < partes; p++){
+    progresso && progresso(`Lendo a planilha do Google… parte ${p+1}${partes>1?' de '+partes:''}`);
+    const res = await fetch('/api/ecom-planilha?parte=' + p);
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok) throw new Error(data.error || 'Não consegui ler a planilha do Google.');
+    partes = data.partes || 1;
+    regs.push(...(data.regs||[]));
+    if(p === 0) avisos = data.avisos || [];
+  }
+  if(!regs.length) throw new Error('A planilha veio vazia.');
+  const grupos = {};
+  regs.forEach(r => { const k = 'crm:ecom:pl:' + String(r.data).slice(0,7); (grupos[k] = grupos[k] || []).push(r); });
+  const index = (await safeGetCritico('crm:ecom:index')) || {chaves:[], importacoes:[]};
+  index.chavesPlanilha = index.chavesPlanilha || [];
+  // Cada mês gravado = linhas atuais da planilha daquele mês + linhas antigas que não estão mais na planilha
+  // (essas ficam guardadas, nunca são apagadas). Linha que mudou de mês sai do mês antigo e entra no novo.
+  const idsAtuais = new Set(regs.map(r => r.id));
+  const jaGravados = new Set();
+  let novos = 0, atualizados = 0, n = 0;
+  const chaves = Array.from(new Set([...Object.keys(grupos), ...index.chavesPlanilha])).sort();
+  const antes = new Map();
+  for(const k of index.chavesPlanilha){ progresso && progresso(`Conferindo o que já está gravado… ${++n} de ${index.chavesPlanilha.length}`); antes.set(k, ecPlExpandir(await safeGetCritico(k))); }
+  antes.forEach(lista => lista.forEach(r => jaGravados.add(r.id)));
+  regs.forEach(r => { if(jaGravados.has(r.id)) atualizados++; else novos++; });
+  n = 0;
+  for(const k of chaves){
+    progresso && progresso(`Gravando ${++n} de ${chaves.length} mês(es)…`);
+    const guardados = (antes.get(k) || []).filter(r => !idsAtuais.has(r.id));
+    const lista = guardados.concat(grupos[k] || []);
+    const antigo = antes.get(k) || [];
+    if(!grupos[k] && lista.length === antigo.length) continue; // nada mudou nesse mês
+    if(!(await safeSet(k, {formato:2, regs: ecPlCompactar(lista)}))) throw new Error(`Falha ao gravar ${k}. O que já foi gravado continua salvo; tente de novo.`);
+    if(!index.chavesPlanilha.includes(k)) index.chavesPlanilha.push(k);
+  }
+  index.chavesPlanilha.sort();
+  index.ultimaSinc = {em: new Date().toISOString(), por: STATE.session && STATE.session.nome, total: regs.length, novos, atualizados, avisos: avisos.slice(0, 300), qtdAvisos: avisos.length};
+  if(!(await safeSet('crm:ecom:index', index))) throw new Error('Falha ao gravar o índice do e-commerce. Tente de novo.');
+  STATE.ecom = null;
+  return index.ultimaSinc;
+}
+function ecGanhou(r){
+  if(/^ganho$/i.test(String(r.status||'').trim())) return true;
+  if(/^perdido$/i.test(String(r.status||'').trim())) return false;
+  return /Te demos o dinheiro|liberamos o (dinheiro|valor)|Creditamos|n[ãa]o foi sua responsabilidade/i.test(r.estado+' '+r.motivo);
+}
 function ecChaveProduto(r){ return ecSkuValido(r.sku) ? r.sku.toUpperCase() : r.titulo; }
 function ecBarras(mapa, cor){
   const arr = Object.entries(mapa).sort((a,b)=>b[1]-a[1]).slice(0,8); const mx = arr[0] ? arr[0][1] : 1;
@@ -6863,6 +6938,36 @@ function ecBarras(mapa, cor){
 function ecDataBR(d){ return d ? d.split('-').reverse().join('/') : ''; }
 function ecProdutoHTML(sku, titulo){ return `<td class="ec-prod">${ecSkuValido(sku)?`<b>${ecEsc(sku)}</b>`:''}<small>${ecEsc(titulo)}</small></td>`; }
 function ecTagHTML(tipo){ return `<span class="ec-tag" style="--c:${EC_COR[tipo]||'var(--ok)'}">${ecEsc(tipo)}</span>`; }
+
+// Bloco "Controle da equipe": só aparece quando há linhas da planilha de controle no filtro atual.
+function ecControleHTML(b){
+  const c = b.filter(r => r.controle);
+  if(!c.length) return '';
+  const conta = (f) => c.filter(f).length;
+  const pct = (n) => c.length ? Math.round(n / c.length * 100) + '%' : '0%';
+  const ganho = c.reduce((s,r) => s + (Number(r.ganho)||0), 0), ganhoML = c.reduce((s,r) => s + (Number(r.ganhoML)||0), 0);
+  const mapa = (campo) => { const m = {}; c.forEach(r => { const k = String(r[campo]||'').trim() || '(não preenchido)'; m[k] = (m[k]||0)+1; }); return m; };
+  const aguard = conta(r => /aguardando/i.test(r.status||'')), erro = conta(r => r.erroNosso === 'SIM'), rep = conta(r => r.reputacao === 'Sim');
+  const medG = conta(r => /^ganho$/i.test(r.status||'')), medP = conta(r => /^perdido$/i.test(r.status||''));
+  const kpi = (t, v, s, cor) => `<div class="ec-kpi" style="--c:${cor}"><div class="ec-kt">${t}</div><div class="ec-kv">${v}</div><div class="ec-ks">${s}</div></div>`;
+  return `
+    <section class="panel">
+      <h3>Controle da equipe</h3><p class="hint">Dados da planilha "Controle de devoluções" (${c.length} ocorrência(s) no filtro).</p>
+      <div class="ec-kpis">
+        ${kpi('Aguardando resolução', aguard, 'ainda em aberto', 'var(--warn)')}
+        ${kpi('Mediações', medG + medP, `${medG} ganhas · ${medP} perdidas`, EC_COR['Mediação'])}
+        ${kpi('Reputação afetada', rep, pct(rep) + ' das ocorrências', 'var(--danger)')}
+        ${kpi('Erro nosso', erro, 'marcadas como SIM', 'var(--danger)')}
+        ${kpi('Ganho / perdido', fmtMoney(ganho + ganhoML), `planilha ${fmtMoney(ganho)} · ML ${fmtMoney(ganhoML)}`, (ganho + ganhoML) < 0 ? 'var(--danger)' : 'var(--ok)')}
+      </div>
+      <div class="ec-2col">
+        <div><h4 style="margin:6px 0;">Categoria</h4><div class="ec-barras">${ecBarras(mapa('categoria'), 'var(--info)')}</div></div>
+        <div><h4 style="margin:6px 0;">Destino do produto</h4><div class="ec-barras">${ecBarras(mapa('destino'), 'var(--ok)')}</div></div>
+        <div><h4 style="margin:6px 0;">Estado do produto</h4><div class="ec-barras">${ecBarras(mapa('estadoProduto'), 'var(--accent)')}</div></div>
+        <div><h4 style="margin:6px 0;">Status</h4><div class="ec-barras">${ecBarras(mapa('status'), 'var(--sac)')}</div></div>
+      </div>
+    </section>`;
+}
 
 async function renderEcommerce(main){
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
@@ -6874,6 +6979,8 @@ async function renderEcommerce(main){
   if(ui.mes === null) ui.mes = meses[0] || '';
   const contas = Array.from(new Set(plat.contas.concat(regsPlat.map(r => r.conta))));
   const ultImp = (dados.index.importacoes||[]).slice(-1)[0];
+  const ultSinc = dados.index.ultimaSinc;
+  const fmtQuando = (iso) => new Date(iso).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
   const nomeMes = (k) => { const [a,m] = k.split('-').map(Number); const s = new Date(a,m-1,1).toLocaleDateString('pt-BR',{month:'long', year:'numeric'}); return s.charAt(0).toUpperCase()+s.slice(1); };
 
   main.innerHTML = `
@@ -6889,9 +6996,16 @@ async function renderEcommerce(main){
         <select id="ecMes">${meses.map(m => `<option value="${m}" ${m===ui.mes?'selected':''}>${nomeMes(m)}</option>`).join('')}<option value="" ${ui.mes===''?'selected':''}>Todos os meses</option></select>
         <label>Conta</label>
         <div class="ec-chips">${['',...contas].map(c => `<span class="ec-chip ${ui.conta===c?'on':''}" data-conta="${c}">${c||'Todas'}</span>`).join('')}</div>
-        <label class="ghost-btn ec-imp" style="margin-left:auto; cursor:pointer;">⬆ Importar planilha ${plat.nome}<input type="file" id="ecArquivo" accept=".xlsx,.xls" style="display:none"></label>
+        <span style="margin-left:auto; display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="ghost-btn" id="ecSinc" style="border-color:var(--ok); color:var(--ok); font-weight:600;">🔄 Sincronizar com a planilha</button>
+          ${plat.id === 'ml' ? `<label class="ghost-btn ec-imp" style="cursor:pointer;">⬆ Importar exportação do ML<input type="file" id="ecArquivo" accept=".xlsx,.xls" style="display:none"></label>` : ''}
+        </span>
       </div>
-      <div id="ecMsg">${ultImp ? `<p class="hint">Última importação: ${new Date(ultImp.em).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})} · ${ecEsc(ultImp.arquivo||'')} · ${ultImp.novos} nova(s), ${ultImp.atualizados} atualizada(s).</p>` : `<p class="hint">Nenhuma planilha importada ainda. Use "Importar planilha" — cada aba da planilha vira uma conta.</p>`}</div>
+      <div id="ecMsg">
+        ${ultSinc ? `<p class="hint" style="margin:0 0 4px;">Planilha da equipe sincronizada em ${fmtQuando(ultSinc.em)}${ultSinc.por?' por '+ecEsc(ultSinc.por):''} · ${ultSinc.total} linha(s)${ultSinc.qtdAvisos ? ` · <a href="#" id="ecVerAvisos">${ultSinc.qtdAvisos} com data corrigida</a>` : ''}</p>` : `<p class="hint" style="margin:0 0 4px;">A planilha "Controle de devoluções" ainda não foi sincronizada. Clique em "🔄 Sincronizar com a planilha".</p>`}
+        ${plat.id === 'ml' ? (ultImp ? `<p class="hint">Última exportação do ML: ${fmtQuando(ultImp.em)} · ${ecEsc(ultImp.arquivo||'')} · ${ultImp.novos} nova(s), ${ultImp.atualizados} atualizada(s).</p>` : `<p class="hint">Nenhuma exportação do ML importada ainda.</p>`) : ''}
+      </div>
+      <div id="ecAvisos"></div>
       <div id="ecPainel"></div>
     </section>
     <section id="ecAbaBusca" style="${ui.aba==='busca'?'':'display:none'}">
@@ -6912,7 +7026,7 @@ async function renderEcommerce(main){
     const P = {};
     nc.forEach(r => { const k = ecChaveProduto(r); const p = P[k] || (P[k] = {k, titulo:r.titulo, sku: ecSkuValido(r.sku)?r.sku:'', n:0, v:0, contas:new Set(), mot:{}}); p.n++; p.v += r.valor||0; p.contas.add(r.conta); p.mot[r.motivo] = (p.mot[r.motivo]||0)+1; });
     const tx = (ui.texto||'').toLowerCase();
-    const lista = b.filter(r => (!ui.tipo || r.tipo === ui.tipo) && (!tx || `${r.sku} ${r.titulo} ${r.venda} ${r.motivo} ${r.estado}`.toLowerCase().includes(tx))).sort((x,y) => y.data.localeCompare(x.data));
+    const lista = b.filter(r => (!ui.tipo || r.tipo === ui.tipo) && (!tx || `${r.sku} ${r.titulo} ${r.venda} ${r.motivo} ${r.estado} ${r.cliente||''} ${r.categoria||''}`.toLowerCase().includes(tx))).sort((x,y) => y.data.localeCompare(x.data));
     const kpi = (t, v, s, c) => `<div class="ec-kpi" style="--c:${c}"><div class="ec-kt">${t}</div><div class="ec-kv">${v}</div><div class="ec-ks">${s}</div></div>`;
     document.getElementById('ecPainel').innerHTML = `
       <div class="ec-kpis">
@@ -6926,6 +7040,7 @@ async function renderEcommerce(main){
         <section class="panel"><h3>Motivo / desfecho</h3><p class="hint">Devoluções, mediações e reclamações.</p><div class="ec-barras">${ecBarras(m1, 'var(--primary)')}</div></section>
         <section class="panel"><h3>Motivo dos cancelamentos</h3><p class="hint">Por que o comprador cancelou.</p><div class="ec-barras">${ecBarras(m2, 'var(--warn)')}</div></section>
       </div>
+      ${ecControleHTML(b)}
       <section class="panel">
         <h3>Produtos que mais voltam</h3><p class="hint">Sem contar cancelamentos. Clique no produto para ver todas as devoluções dele (garantia + e-commerce).</p>
         <div style="overflow-x:auto"><table class="ec-tab"><thead><tr><th>Produto</th><th class="n">Ocorrências</th><th class="n">Valor</th><th>Contas</th><th>Motivo mais comum</th></tr></thead><tbody>
@@ -6944,10 +7059,10 @@ async function renderEcommerce(main){
         <h3>Todas as ocorrências</h3>
         <div class="ec-filtros" style="margin:8px 0 12px; padding:8px 10px;">
           <label>Tipo</label><div class="ec-chips">${['',...EC_TIPOS].map(t => `<span class="ec-chip ${ui.tipo===t?'on':''}" data-tipo="${t}">${t||'Todos'}</span>`).join('')}</div>
-          <input type="search" id="ecTexto" value="${ecEsc(ui.texto)}" placeholder="Filtrar por produto, SKU ou nº da venda" style="flex:1; min-width:200px;">
+          <input type="search" id="ecTexto" value="${ecEsc(ui.texto)}" placeholder="Filtrar por produto, SKU, nº da venda ou cliente" style="flex:1; min-width:200px;">
         </div>
         <div style="overflow-x:auto"><table class="ec-tab"><thead><tr><th>Data</th><th>Conta</th><th>Venda</th><th>Produto</th><th class="n">Un.</th><th class="n">Valor</th><th>Tipo</th><th>Situação / motivo</th></tr></thead><tbody>
-          ${lista.slice(0, ui.lim).map(r => `<tr><td>${ecDataBR(r.data)}</td><td>${ecEsc(r.conta)}</td><td>${ecEsc(r.venda)}</td>${ecProdutoHTML(r.sku, r.titulo)}<td class="n">${r.un}</td><td class="n">${fmtMoney(r.valor)}</td><td>${ecTagHTML(r.tipo)}</td><td class="ec-mot"><b>${ecEsc(r.estado)}</b><br>${ecEsc(r.motivo)}</td></tr>`).join('') || '<tr><td colspan="8" class="hint">Nada encontrado.</td></tr>'}
+          ${lista.slice(0, ui.lim).map(r => `<tr><td>${ecDataBR(r.data)}${r.dataAjustada ? ` <span title="Data corrigida automaticamente (na planilha: ${ecEsc(r.dataOriginal||'vazia')}, linha ${r.linha||'?'})" style="color:var(--warn); cursor:help;">⚠</span>` : ''}</td><td>${ecEsc(r.conta)}</td><td>${ecEsc(r.venda)}${r.cliente ? `<br><small class="hint">${ecEsc(r.cliente)}</small>` : ''}</td>${ecProdutoHTML(r.sku, r.titulo)}<td class="n">${r.un}</td><td class="n">${fmtMoney(r.valor)}</td><td>${ecTagHTML(r.tipo)}</td><td class="ec-mot"><b>${ecEsc(r.estado)}</b><br>${ecEsc(r.motivo)}${r.controle ? `<br><small class="hint">${[r.destino && 'Destino: '+ecEsc(r.destino), r.erroNosso === 'SIM' && '<b style="color:var(--danger)">Erro nosso</b>', r.reputacao === 'Sim' && 'Reputação afetada', r.obs && ecEsc(r.obs)].filter(Boolean).join(' · ')}</small>` : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="hint">Nada encontrado.</td></tr>'}
         </tbody></table></div>
         ${lista.length > ui.lim ? `<button class="ghost-btn" id="ecMais" style="margin-top:10px;">Ver mais (${lista.length - ui.lim})</button>` : ''}
       </section>`;
@@ -7009,8 +7124,33 @@ async function renderEcommerce(main){
   let tBusca = null;
   const inpBusca = document.getElementById('ecBusca');
   inpBusca.oninput = () => { ui.busca = inpBusca.value; clearTimeout(tBusca); tBusca = setTimeout(desenharBusca, 250); };
+  const btnSinc = document.getElementById('ecSinc');
+  btnSinc.onclick = async () => {
+    const msg = document.getElementById('ecMsg');
+    btnSinc.disabled = true;
+    try{
+      const r = await ecSincronizarPlanilha(t => { btnSinc.textContent = '⏳ ' + t; });
+      ui.mes = null;
+      await renderEcommerce(main);
+      document.getElementById('ecMsg').insertAdjacentHTML('afterbegin', `<div class="msg ok">Planilha sincronizada: ${r.total} linha(s) — ${r.novos} nova(s), ${r.atualizados} atualizada(s).${r.qtdAvisos ? ` ${r.qtdAvisos} linha(s) estavam sem data válida e receberam a data da linha mais próxima.` : ''}</div>`);
+    }catch(err){
+      btnSinc.disabled = false; btnSinc.textContent = '🔄 Sincronizar com a planilha';
+      msg.insertAdjacentHTML('afterbegin', `<div class="msg err">${ecEsc(err.message)}</div>`);
+    }
+  };
+  const verAv = document.getElementById('ecVerAvisos');
+  if(verAv) verAv.onclick = (ev) => {
+    ev.preventDefault();
+    const box = document.getElementById('ecAvisos');
+    if(box.innerHTML){ box.innerHTML = ''; return; }
+    const av = (ultSinc && ultSinc.avisos) || [];
+    box.innerHTML = `<section class="panel"><h3>Linhas com data corrigida</h3><p class="hint">Na planilha a data estava vazia ou inválida; o CRM usou a data da linha mais próxima. Corrija na planilha e sincronize de novo.</p>
+      <div style="overflow-x:auto"><table class="ec-tab"><thead><tr><th class="n">Linha</th><th>Pedido</th><th>Cliente</th><th>Data na planilha</th><th>Data usada</th></tr></thead><tbody>
+      ${av.map(a => `<tr><td class="n">${a.linha}</td><td>${ecEsc(a.pedido)}</td><td>${ecEsc(a.cliente)}</td><td>${ecEsc(a.dataOriginal||'(vazia)')}</td><td>${ecDataBR(a.usada)}</td></tr>`).join('')}
+      </tbody></table></div>${ultSinc.qtdAvisos > av.length ? `<p class="hint">Mostrando ${av.length} de ${ultSinc.qtdAvisos}.</p>` : ''}</section>`;
+  };
   const arq = document.getElementById('ecArquivo');
-  arq.onchange = async () => {
+  if(arq) arq.onchange = async () => {
     const file = arq.files[0]; if(!file) return;
     const msg = document.getElementById('ecMsg');
     msg.innerHTML = `<div class="hint">Lendo planilha…</div>`;

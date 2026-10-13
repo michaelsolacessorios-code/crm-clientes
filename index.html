@@ -780,6 +780,45 @@
   .gn-tag.fat{background:var(--ok-soft); color:var(--ok);} .gn-tag.pr{background:var(--info-soft); color:var(--info);}
   .gn-aviso{font-size:12.5px; color:var(--ink-faint); margin-top:12px;}
   @media (max-width:860px){ .gn-placar{grid-template-columns:1fr; padding:20px;} .gn-total{font-size:44px;} .gn-2col{grid-template-columns:1fr;} }
+
+  /* ===== E-commerce ===== */
+  .ec-subabas{display:flex; gap:6px; margin-bottom:16px; flex-wrap:wrap;}
+  .ec-subaba{padding:9px 16px; border-radius:9px; border:1px solid var(--border); background:var(--surface); font:inherit; font-size:14px; font-weight:600; color:var(--ink-soft); cursor:pointer;}
+  .ec-subaba.active{background:var(--ink); color:var(--surface); border-color:var(--ink);}
+  .ec-plats{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;}
+  .ec-plat{padding:7px 14px; border-radius:20px; font-size:13.5px; font-weight:600; border:1px solid var(--border); background:var(--surface); cursor:pointer;}
+  .ec-plat.on{background:#FFE600; color:#2D3277; border-color:#FFE600;}
+  .ec-plat.off{opacity:.5; cursor:default;}
+  .ec-filtros{display:flex; gap:10px; flex-wrap:wrap; align-items:center; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:12px 14px; margin-bottom:12px;}
+  .ec-filtros > label:not(.ghost-btn){font-size:12px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.3px;}
+  .ec-filtros select, .ec-filtros input[type=search]{font:inherit; font-size:14px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--ink);}
+  .ec-chips{display:flex; gap:6px; flex-wrap:wrap;}
+  .ec-chip{padding:6px 12px; border-radius:20px; border:1px solid var(--border); font-size:13px; font-weight:600; cursor:pointer; background:var(--bg); color:var(--ink-soft);}
+  .ec-chip.on{background:var(--ink); color:var(--surface); border-color:var(--ink);}
+  .ec-kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin-bottom:16px;}
+  .ec-kpi{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; box-shadow:var(--shadow-soft); border-top:4px solid var(--c);}
+  .ec-kt{font-size:12px; font-weight:700; text-transform:uppercase; color:var(--ink-soft); letter-spacing:.3px;}
+  .ec-kv{font-family:var(--font-display); font-size:30px; font-weight:700; margin-top:4px; font-variant-numeric:tabular-nums;}
+  .ec-ks{font-size:12.5px; color:var(--ink-soft);}
+  .ec-2col{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px;}
+  .ec-l{display:grid; grid-template-columns:minmax(0,1fr) 54px; gap:4px 10px; align-items:center; margin-bottom:10px; font-size:13.5px;}
+  .ec-tx{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .ec-n{text-align:right; font-weight:700; font-variant-numeric:tabular-nums;}
+  .ec-b{grid-column:1/-1; height:7px; background:var(--border); border-radius:4px; overflow:hidden;}
+  .ec-b span{display:block; height:100%; border-radius:4px;}
+  .ec-tab{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-numeric:tabular-nums;}
+  .ec-tab th{text-align:left; font-size:11.5px; text-transform:uppercase; letter-spacing:.4px; color:var(--ink-soft); padding:8px; border-bottom:1px solid var(--border); white-space:nowrap;}
+  .ec-tab td{padding:8px; border-bottom:1px solid var(--border); vertical-align:top;}
+  .ec-tab .n{text-align:right; white-space:nowrap;}
+  .ec-click{cursor:pointer;} .ec-click:hover{background:var(--bg);}
+  .ec-prod{max-width:380px;} .ec-prod small{display:block; color:var(--ink-faint); font-size:12px;}
+  .ec-mot{color:var(--ink-soft); font-size:12.5px; max-width:360px;}
+  .ec-tag{font-size:11px; font-weight:700; padding:2px 8px; border-radius:20px; white-space:nowrap; display:inline-block; color:var(--c); background:color-mix(in srgb, var(--c) 14%, transparent);}
+  .ec-busca{margin-bottom:16px;} .ec-busca input{width:100%; font:inherit; font-size:17px; padding:13px 16px; border-radius:10px; border:1px solid var(--border); background:var(--surface); color:var(--ink);}
+  .ec-fontes{display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px;}
+  .ec-fonte{flex:1; min-width:200px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; border-left:5px solid var(--c);}
+  .ec-fv{font-family:var(--font-display); font-size:28px; font-weight:700;} .ec-fv span{font-size:16px;}
+  @media (max-width:900px){ .ec-2col{grid-template-columns:1fr;} }
 </style>
 </head>
 <body>
@@ -5945,6 +5984,326 @@ function gnBindImportPanel(){
 }
 // ================= FIM MEU GANHO =================
 
+// ================= E-COMMERCE (devoluções / reclamações dos marketplaces) =================
+// Importa a planilha de devoluções do Mercado Livre (uma aba por conta: PHG, MILLS, LIMS, BPS, QVARI...).
+// Grava em crm:ecom:ml:<CONTA>:<AAAA-MM> e mantém um índice em crm:ecom:index.
+// Importar de novo NUNCA apaga: venda que já existe tem a situação atualizada, venda nova é adicionada.
+const EC_PLATAFORMAS = [
+  {id:'ml', nome:'Mercado Livre', ativa:true, contas:['PHG','MILLS','LIMS','BPS','QVARI']},
+  {id:'shopee', nome:'Shopee', ativa:false, contas:['PHG','LP','MILS','QVARI']},
+  {id:'amazon', nome:'Amazon', ativa:false, contas:['LIMS']},
+  {id:'tiktok', nome:'TikTok', ativa:false, contas:['BPS','MILS']},
+];
+const EC_TIPOS = ['Devolução','Mediação','Reclamação','Cancelamento','Não entregue','Outros'];
+const EC_COR = {'Devolução':'var(--primary)','Mediação':'var(--sac)','Reclamação':'var(--accent)','Cancelamento':'var(--warn)','Não entregue':'var(--info)','Outros':'var(--info)'};
+const EC_CAMPOS = ['venda','data','estado','tipo','motivo','un','valor','sku','titulo'];
+const EC_MESES = {janeiro:1,fevereiro:2,'março':3,marco:3,abril:4,maio:5,junho:6,julho:7,agosto:8,setembro:9,outubro:10,novembro:11,dezembro:12};
+
+function ecEsc(s){ return String(s===null||s===undefined?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function ecTxt(v){ return (v===null||v===undefined) ? '' : String(v).trim(); }
+function ecDataML(v){
+  if(v instanceof Date && !isNaN(v)) return `${v.getFullYear()}-${String(v.getMonth()+1).padStart(2,'0')}-${String(v.getDate()).padStart(2,'0')}`;
+  const s = ecTxt(v).toLowerCase();
+  let m = s.match(/(\d{1,2}) de ([a-zç]+) de (\d{4})/);
+  if(m && EC_MESES[m[2]]) return `${m[3]}-${String(EC_MESES[m[2]]).padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if(m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m) return `${m[1]}-${m[2]}-${m[3]}`;
+  return '';
+}
+function ecTipo(estado){
+  const e = ecTxt(estado);
+  if(/^Cancelad|Pacote cancelado/i.test(e)) return 'Cancelamento';
+  if(/Media[çc][ãa]o/i.test(e)) return 'Mediação';
+  if(/Reclama[çc][ãa]o/i.test(e)) return 'Reclamação';
+  if(/Devolu|Devolvido|Troca|devolveram|Reembolsamos/i.test(e)) return 'Devolução';
+  if(/n[ãa]o entregue|Recusado/i.test(e)) return 'Não entregue';
+  return 'Outros';
+}
+// Tira datas e "chegou dia tal" do texto, pra textos iguais caírem no mesmo motivo.
+function ecMotivo(desc){
+  const D = '(segunda|terça|quarta|quinta|sexta)-feira|sábado|domingo';
+  const M = '(janeiro|fevereiro|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)';
+  let s = ecTxt(desc);
+  s = s.replace(/\s*(O pacote chegou|Chegou|Chegaram)[^.]*\.?/gi, '');
+  s = s.replace(new RegExp('(,\\s*)?(em|no dia|até|dia)?\\s*('+D+')?,?\\s*\\d{1,2} de '+M+'( de \\d{4})?', 'gi'), '');
+  return s.replace(/\s+/g,' ').replace(/^[\s.,]+|[\s.,]+$/g,'');
+}
+function ecNum(v){ if(typeof v==='number') return isFinite(v)?v:0; let s=ecTxt(v).replace(/[R$\s]/g,''); if(s.includes(',')) s=s.replace(/\./g,'').replace(',','.'); const n=Number(s); return isFinite(n)?n:0; }
+function ecSkuValido(s){ return /\d/.test(s||'') && !/^MLB\d+$/i.test(s||''); }
+
+// Lê TODAS as abas da planilha do ML. Nome da aba = conta.
+function ecLerPlanilhaML(file){
+  return new Promise((resolve, reject) => {
+    if(typeof XLSX === 'undefined'){ reject(new Error('Biblioteca de planilha não carregou. Tente recarregar a página.')); return; }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Falha ao ler o arquivo.'));
+    reader.onload = () => {
+      try{
+        const wb = XLSX.read(new Uint8Array(reader.result), {type:'array', cellDates:true});
+        const porConta = {};
+        const avisos = [];
+        wb.SheetNames.forEach(nome => {
+          const ws = wb.Sheets[nome];
+          // Algumas abas vêm "formatadas" até a linha 1 milhão: corta o intervalo na última linha com dado de verdade.
+          let ultima = 0;
+          Object.keys(ws).forEach(k => { if(k[0] === '!') return; const c = ws[k]; if(c && c.v !== undefined && c.v !== null && String(c.v).trim() !== ''){ const r = XLSX.utils.decode_cell(k).r; if(r > ultima) ultima = r; } });
+          if(ws['!ref']){ const rg = XLSX.utils.decode_range(ws['!ref']); rg.e.r = Math.min(rg.e.r, ultima); ws['!ref'] = XLSX.utils.encode_range(rg); }
+          const linhas = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
+          if(!linhas.length) return;
+          const cab = (linhas.shift()||[]).map(h => ecTxt(h).toLowerCase());
+          const col = (re) => cab.findIndex(h => re.test(h));
+          const iVenda = col(/^n\.?º? de venda|n.mero de venda|^venda/), iData = col(/^data de venda/), iEstado = col(/^estado$/), iDesc = col(/descri..o do status/);
+          const iUn = col(/^unidades$/), iSku = col(/^sku$/), iTit = col(/t.tulo do an.ncio/), iPreco = col(/^pre.o unit/);
+          if(iVenda<0 || iData<0 || iEstado<0){ avisos.push(`Aba "${nome}" ignorada: não achei as colunas N.º de venda / Data de venda / Estado.`); return; }
+          const conta = ecTxt(nome).toUpperCase();
+          const regs = [];
+          let semPreco = 0;
+          linhas.forEach(r => {
+            const venda = ecTxt(r[iVenda]); if(!venda) return;
+            const estado = ecTxt(r[iEstado]);
+            if(/^Pacote de \d+ produtos?/i.test(estado)) return; // linha-resumo do pacote; os produtos vêm em linhas próprias
+            const data = ecDataML(r[iData]); if(!data) return;
+            const un = ecNum(iUn>=0 ? r[iUn] : 1) || 0;
+            const preco = iPreco>=0 ? ecNum(r[iPreco]) : 0;
+            if(!preco) semPreco++;
+            regs.push({
+              venda, data, estado: estado.replace(/^Devolvido no dia .*/i, 'Devolvido'), tipo: ecTipo(estado), motivo: ecMotivo(iDesc>=0 ? r[iDesc] : ''),
+              un, valor: Math.round(un*preco*100)/100, sku: iSku>=0 ? ecTxt(r[iSku]) : '', titulo: iTit>=0 ? ecTxt(r[iTit]) : '',
+            });
+          });
+          if(regs.length){ porConta[conta] = regs; if(semPreco > regs.length*0.5) avisos.push(`Conta ${conta}: ${semPreco} de ${regs.length} linha(s) sem preço — confira se a exportação veio com as colunas certas.`); }
+        });
+        resolve({porConta, avisos});
+      }catch(err){ reject(new Error('Não consegui ler essa planilha. Confira se é a exportação de devoluções do Mercado Livre.')); }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+function ecId(r){ return `${r.venda}|${r.sku}|${r.titulo}`; }
+function ecCompactar(regs){ return regs.map(r => EC_CAMPOS.map(k => r[k])); }
+function ecExpandir(arr){ return (arr||[]).map(a => { if(!Array.isArray(a)) return a; const r = {}; EC_CAMPOS.forEach((k,i) => r[k] = a[i]); return r; }); }
+
+// Junta com o que já existe (lê fresco do banco antes de gravar). Nunca remove registro.
+async function ecGravarImportacao(plataforma, porConta, arquivo){
+  const index = (await safeGetCritico('crm:ecom:index')) || {chaves:[], importacoes:[]};
+  const grupos = {};
+  Object.entries(porConta).forEach(([conta, regs]) => regs.forEach(r => {
+    const k = `crm:ecom:${plataforma}:${conta}:${r.data.slice(0,7)}`;
+    (grupos[k] = grupos[k] || []).push({...r, conta});
+  }));
+  let novos = 0, atualizados = 0;
+  for(const [k, regs] of Object.entries(grupos)){
+    const atual = await safeGetCritico(k);
+    const mapa = new Map(ecExpandir(atual && atual.regs).map(r => [ecId(r), r]));
+    regs.forEach(r => { const {conta, ...limpo} = r; const id = ecId(limpo); if(mapa.has(id)) atualizados++; else novos++; mapa.set(id, limpo); });
+    const ok = await safeSet(k, {formato:1, regs: ecCompactar(Array.from(mapa.values()))});
+    if(!ok) throw new Error(`Falha ao gravar ${k}. O que já foi gravado continua salvo; tente importar de novo.`);
+    if(!index.chaves.includes(k)) index.chaves.push(k);
+  }
+  index.chaves.sort();
+  index.importacoes = (index.importacoes||[]).concat([{em:new Date().toISOString(), por: STATE.session && STATE.session.nome, plataforma, arquivo, contas:Object.keys(porConta), novos, atualizados}]).slice(-50);
+  if(!(await safeSet('crm:ecom:index', index))) throw new Error('Falha ao gravar o índice do e-commerce. Tente de novo.');
+  STATE.ecom = null; // força recarregar
+  return {novos, atualizados};
+}
+async function ecCarregar(){
+  if(STATE.ecom) return STATE.ecom;
+  const index = (await safeGet('crm:ecom:index')) || {chaves:[], importacoes:[]};
+  const regs = [];
+  const partes = await Promise.all(index.chaves.map(k => safeGet(k).then(v => ({k, v}))));
+  partes.forEach(({k, v}) => {
+    const [, , plat, conta] = k.split(':');
+    ecExpandir(v && v.regs).forEach(r => regs.push({...r, plataforma: plat, conta}));
+  });
+  STATE.ecom = {index, regs};
+  return STATE.ecom;
+}
+function ecGanhou(r){ return /Te demos o dinheiro|liberamos o (dinheiro|valor)|Creditamos|n[ãa]o foi sua responsabilidade/i.test(r.estado+' '+r.motivo); }
+function ecChaveProduto(r){ return ecSkuValido(r.sku) ? r.sku.toUpperCase() : r.titulo; }
+function ecBarras(mapa, cor){
+  const arr = Object.entries(mapa).sort((a,b)=>b[1]-a[1]).slice(0,8); const mx = arr[0] ? arr[0][1] : 1;
+  return arr.map(([k,n]) => `<div class="ec-l" title="${ecEsc(k)}"><span class="ec-tx">${ecEsc(k||'(sem descrição)')}</span><span class="ec-n">${n}</span><div class="ec-b"><span style="width:${n/mx*100}%;background:${cor}"></span></div></div>`).join('') || '<p class="hint">Nada no período.</p>';
+}
+function ecDataBR(d){ return d ? d.split('-').reverse().join('/') : ''; }
+function ecProdutoHTML(sku, titulo){ return `<td class="ec-prod">${ecSkuValido(sku)?`<b>${ecEsc(sku)}</b>`:''}<small>${ecEsc(titulo)}</small></td>`; }
+function ecTagHTML(tipo){ return `<span class="ec-tag" style="--c:${EC_COR[tipo]||'var(--ok)'}">${ecEsc(tipo)}</span>`; }
+
+async function renderEcommerce(main){
+  main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
+  const ui = STATE.ecomUI = STATE.ecomUI || {aba:'painel', plat:'ml', mes:null, conta:'', tipo:'', texto:'', lim:40, busca:''};
+  const dados = await ecCarregar();
+  const plat = EC_PLATAFORMAS.find(p => p.id === ui.plat) || EC_PLATAFORMAS[0];
+  const regsPlat = dados.regs.filter(r => r.plataforma === plat.id);
+  const meses = Array.from(new Set(regsPlat.map(r => r.data.slice(0,7)))).sort().reverse();
+  if(ui.mes === null) ui.mes = meses[0] || '';
+  const contas = Array.from(new Set(plat.contas.concat(regsPlat.map(r => r.conta))));
+  const ultImp = (dados.index.importacoes||[]).slice(-1)[0];
+  const nomeMes = (k) => { const [a,m] = k.split('-').map(Number); const s = new Date(a,m-1,1).toLocaleDateString('pt-BR',{month:'long', year:'numeric'}); return s.charAt(0).toUpperCase()+s.slice(1); };
+
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">E-commerce</div><h2>Devoluções e reclamações</h2></div>
+    <div class="ec-subabas">
+      <button class="ec-subaba ${ui.aba==='painel'?'active':''}" data-aba="painel">📊 Painel e-commerce</button>
+      <button class="ec-subaba ${ui.aba==='busca'?'active':''}" data-aba="busca">🔎 Buscar produto (garantia + e-commerce)</button>
+    </div>
+    <section id="ecAbaPainel" style="${ui.aba==='painel'?'':'display:none'}">
+      <div class="ec-plats">${EC_PLATAFORMAS.map(p => `<span class="ec-plat ${p.id===plat.id?'on':''} ${p.ativa?'':'off'}" ${p.ativa?`data-plat="${p.id}"`:'title="Em breve"'}>${p.nome}${p.ativa?'':' · em breve'}</span>`).join('')}</div>
+      <div class="ec-filtros">
+        <label>Mês</label>
+        <select id="ecMes">${meses.map(m => `<option value="${m}" ${m===ui.mes?'selected':''}>${nomeMes(m)}</option>`).join('')}<option value="" ${ui.mes===''?'selected':''}>Todos os meses</option></select>
+        <label>Conta</label>
+        <div class="ec-chips">${['',...contas].map(c => `<span class="ec-chip ${ui.conta===c?'on':''}" data-conta="${c}">${c||'Todas'}</span>`).join('')}</div>
+        <label class="ghost-btn ec-imp" style="margin-left:auto; cursor:pointer;">⬆ Importar planilha ${plat.nome}<input type="file" id="ecArquivo" accept=".xlsx,.xls" style="display:none"></label>
+      </div>
+      <div id="ecMsg">${ultImp ? `<p class="hint">Última importação: ${new Date(ultImp.em).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})} · ${ecEsc(ultImp.arquivo||'')} · ${ultImp.novos} nova(s), ${ultImp.atualizados} atualizada(s).</p>` : `<p class="hint">Nenhuma planilha importada ainda. Use "Importar planilha" — cada aba da planilha vira uma conta.</p>`}</div>
+      <div id="ecPainel"></div>
+    </section>
+    <section id="ecAbaBusca" style="${ui.aba==='busca'?'':'display:none'}">
+      <div class="ec-busca"><input type="search" id="ecBusca" value="${ecEsc(ui.busca)}" placeholder="Código ou nome do produto (ex.: PCI-BC-015, barra led 32lb)"></div>
+      <div id="ecBuscaRes"></div>
+    </section>
+  `;
+
+  const desenharPainel = () => {
+    const b = regsPlat.filter(r => (!ui.mes || r.data.startsWith(ui.mes)) && (!ui.conta || r.conta === ui.conta));
+    const nc = b.filter(r => r.tipo !== 'Cancelamento');
+    const doTipo = t => b.filter(r => r.tipo === t);
+    const soma = arr => arr.reduce((s,r) => s + (r.valor||0), 0);
+    const med = doTipo('Mediação'), medG = med.filter(ecGanhou).length;
+    const m1 = {}, m2 = {};
+    nc.forEach(r => m1[r.motivo] = (m1[r.motivo]||0)+1);
+    doTipo('Cancelamento').forEach(r => m2[r.motivo] = (m2[r.motivo]||0)+1);
+    const P = {};
+    nc.forEach(r => { const k = ecChaveProduto(r); const p = P[k] || (P[k] = {k, titulo:r.titulo, sku: ecSkuValido(r.sku)?r.sku:'', n:0, v:0, contas:new Set(), mot:{}}); p.n++; p.v += r.valor||0; p.contas.add(r.conta); p.mot[r.motivo] = (p.mot[r.motivo]||0)+1; });
+    const tx = (ui.texto||'').toLowerCase();
+    const lista = b.filter(r => (!ui.tipo || r.tipo === ui.tipo) && (!tx || `${r.sku} ${r.titulo} ${r.venda} ${r.motivo} ${r.estado}`.toLowerCase().includes(tx))).sort((x,y) => y.data.localeCompare(x.data));
+    const kpi = (t, v, s, c) => `<div class="ec-kpi" style="--c:${c}"><div class="ec-kt">${t}</div><div class="ec-kv">${v}</div><div class="ec-ks">${s}</div></div>`;
+    document.getElementById('ecPainel').innerHTML = `
+      <div class="ec-kpis">
+        ${kpi('Ocorrências', b.length, fmtMoney(soma(b))+' envolvidos', 'var(--ink)')}
+        ${kpi('Devoluções', doTipo('Devolução').length, fmtMoney(soma(doTipo('Devolução'))), EC_COR['Devolução'])}
+        ${kpi('Mediações', med.length, `${medG} a nosso favor · ${med.length-medG} contra`, EC_COR['Mediação'])}
+        ${kpi('Reclamações', doTipo('Reclamação').length, fmtMoney(soma(doTipo('Reclamação'))), EC_COR['Reclamação'])}
+        ${kpi('Cancelamentos', doTipo('Cancelamento').length, 'antes de enviar ou no caminho', EC_COR['Cancelamento'])}
+      </div>
+      <div class="ec-2col">
+        <section class="panel"><h3>Motivo / desfecho</h3><p class="hint">Devoluções, mediações e reclamações.</p><div class="ec-barras">${ecBarras(m1, 'var(--primary)')}</div></section>
+        <section class="panel"><h3>Motivo dos cancelamentos</h3><p class="hint">Por que o comprador cancelou.</p><div class="ec-barras">${ecBarras(m2, 'var(--warn)')}</div></section>
+      </div>
+      <section class="panel">
+        <h3>Produtos que mais voltam</h3><p class="hint">Sem contar cancelamentos. Clique no produto para ver todas as devoluções dele (garantia + e-commerce).</p>
+        <div style="overflow-x:auto"><table class="ec-tab"><thead><tr><th>Produto</th><th class="n">Ocorrências</th><th class="n">Valor</th><th>Contas</th><th>Motivo mais comum</th></tr></thead><tbody>
+          ${Object.values(P).sort((x,y) => y.n-x.n).slice(0,15).map(p => { const mm = Object.entries(p.mot).sort((x,y)=>y[1]-x[1])[0] || ['—',0];
+            return `<tr class="ec-click" data-busca="${ecEsc(p.sku || p.titulo.slice(0,40))}">${ecProdutoHTML(p.sku, p.titulo)}<td class="n"><b>${p.n}</b></td><td class="n">${fmtMoney(p.v)}</td><td>${Array.from(p.contas).join(', ')}</td><td class="ec-mot">${ecEsc(mm[0]||'(sem descrição)')} (${mm[1]})</td></tr>`; }).join('') || '<tr><td colspan="5" class="hint">Nada no período.</td></tr>'}
+        </tbody></table></div>
+      </section>
+      <section class="panel">
+        <h3>Por conta</h3>
+        <div style="overflow-x:auto"><table class="ec-tab"><thead><tr><th>Conta</th>${['Devolução','Mediação','Reclamação','Cancelamento'].map(t=>`<th class="n">${t}</th>`).join('')}<th class="n">Outros</th><th class="n">Valor envolvido</th></tr></thead><tbody>
+          ${contas.filter(c => !ui.conta || c === ui.conta).map(c => { const x = b.filter(r => r.conta === c); const q = t => x.filter(r => r.tipo === t).length;
+            return `<tr><td><b>${ecEsc(c)}</b>${x.length?'':' <span class="hint">(sem dados)</span>'}</td>${['Devolução','Mediação','Reclamação','Cancelamento'].map(t=>`<td class="n">${q(t)}</td>`).join('')}<td class="n">${q('Outros')+q('Não entregue')}</td><td class="n">${fmtMoney(soma(x))}</td></tr>`; }).join('')}
+        </tbody></table></div>
+      </section>
+      <section class="panel">
+        <h3>Todas as ocorrências</h3>
+        <div class="ec-filtros" style="margin:8px 0 12px; padding:8px 10px;">
+          <label>Tipo</label><div class="ec-chips">${['',...EC_TIPOS].map(t => `<span class="ec-chip ${ui.tipo===t?'on':''}" data-tipo="${t}">${t||'Todos'}</span>`).join('')}</div>
+          <input type="search" id="ecTexto" value="${ecEsc(ui.texto)}" placeholder="Filtrar por produto, SKU ou nº da venda" style="flex:1; min-width:200px;">
+        </div>
+        <div style="overflow-x:auto"><table class="ec-tab"><thead><tr><th>Data</th><th>Conta</th><th>Venda</th><th>Produto</th><th class="n">Un.</th><th class="n">Valor</th><th>Tipo</th><th>Situação / motivo</th></tr></thead><tbody>
+          ${lista.slice(0, ui.lim).map(r => `<tr><td>${ecDataBR(r.data)}</td><td>${ecEsc(r.conta)}</td><td>${ecEsc(r.venda)}</td>${ecProdutoHTML(r.sku, r.titulo)}<td class="n">${r.un}</td><td class="n">${fmtMoney(r.valor)}</td><td>${ecTagHTML(r.tipo)}</td><td class="ec-mot"><b>${ecEsc(r.estado)}</b><br>${ecEsc(r.motivo)}</td></tr>`).join('') || '<tr><td colspan="8" class="hint">Nada encontrado.</td></tr>'}
+        </tbody></table></div>
+        ${lista.length > ui.lim ? `<button class="ghost-btn" id="ecMais" style="margin-top:10px;">Ver mais (${lista.length - ui.lim})</button>` : ''}
+      </section>`;
+    const t = document.getElementById('ecTexto');
+    t.oninput = () => { ui.texto = t.value; ui.lim = 40; const pos = t.selectionStart; desenharPainel(); const n = document.getElementById('ecTexto'); n.focus(); n.setSelectionRange(pos, pos); };
+    const mais = document.getElementById('ecMais'); if(mais) mais.onclick = () => { ui.lim += 40; desenharPainel(); };
+  };
+
+  let garantiasCarregadas = false;
+  const desenharBusca = async () => {
+    const el = document.getElementById('ecBuscaRes');
+    const q = (ui.busca||'').trim().toLowerCase();
+    if(q.length < 2){ el.innerHTML = '<p class="hint">Digite pelo menos 2 letras do código ou do nome do produto.</p>'; return; }
+    if(!garantiasCarregadas){ try{ await listarGarantias(); }catch(e){} garantiasCarregadas = true; }
+    const e = dados.regs.filter(r => `${r.sku} ${r.titulo}`.toLowerCase().includes(q)).sort((x,y) => y.data.localeCompare(x.data));
+    const g = [];
+    (STATE.garantias||[]).forEach(gar => {
+      if(gar.excluida || !['garantia','sac'].includes(gar.tipo || 'garantia')) return;
+      (gar.itens||[]).forEach(it => {
+        if(!`${it.codigo||''} ${it.descricao||''}`.toLowerCase().includes(q)) return;
+        g.push({data:(gar.criadoEm||'').slice(0,10), numero:gar.numero, cliente:gar.clienteNome||'', tipo:gar.tipo||'garantia', codigo:it.codigo||'', descricao:it.descricao||'', qtd:Number(it.quantidade)||0,
+          motivo: (gar.motivoModo==='item' ? it.motivo : gar.motivoGeral) || it.motivo || gar.motivoGeral || '', status: String(gar.status||'').replace(/_/g,' ')});
+      });
+    });
+    const ecSemCanc = e.filter(r => r.tipo !== 'Cancelamento');
+    const mot = {};
+    ecSemCanc.forEach(r => mot[r.motivo] = (mot[r.motivo]||0)+1);
+    g.forEach(r => { const k = r.motivo || '(sem motivo)'; mot[k] = (mot[k]||0)+1; });
+    const linhas = [
+      ...g.map(r => ({d:r.data, h:`<td>${ecDataBR(r.data)}</td><td>${r.tipo==='sac'?'SAC':'Garantia'}</td><td>${ecEsc(r.numero)}<br><small class="hint">${ecEsc(r.cliente)}</small></td><td class="ec-prod"><b>${ecEsc(r.codigo)}</b><small>${ecEsc(r.descricao)}</small></td><td class="n">${r.qtd}</td><td><span class="ec-tag" style="--c:var(--ok)">${r.tipo==='sac'?'SAC':'Garantia'}</span></td><td class="ec-mot"><b>${ecEsc(r.motivo||'—')}</b><br><span style="text-transform:capitalize">${ecEsc(r.status)}</span></td>`})),
+      ...e.map(r => ({d:r.data, h:`<td>${ecDataBR(r.data)}</td><td>${(EC_PLATAFORMAS.find(p=>p.id===r.plataforma)||{}).nome||r.plataforma} · ${ecEsc(r.conta)}</td><td>${ecEsc(r.venda)}</td>${ecProdutoHTML(r.sku, r.titulo)}<td class="n">${r.un}</td><td>${ecTagHTML(r.tipo)}</td><td class="ec-mot"><b>${ecEsc(r.estado)}</b><br>${ecEsc(r.motivo)}</td>`})),
+    ].sort((x,y) => (y.d||'').localeCompare(x.d||''));
+    el.innerHTML = `
+      <div class="ec-fontes">
+        <div class="ec-fonte" style="--c:var(--ok)"><div class="hint" style="margin:0">Garantia / SAC (clientes B2B)</div><div class="ec-fv">${g.length} <span>ocorrência(s) · ${g.reduce((s,r)=>s+r.qtd,0)} un.</span></div></div>
+        <div class="ec-fonte" style="--c:#E6C700"><div class="hint" style="margin:0">E-commerce (sem cancelamentos)</div><div class="ec-fv">${ecSemCanc.length} <span>ocorrência(s) · ${ecSemCanc.reduce((s,r)=>s+(r.un||0),0)} un.</span></div></div>
+        <div class="ec-fonte" style="--c:var(--warn)"><div class="hint" style="margin:0">Cancelamentos no e-commerce</div><div class="ec-fv">${e.length - ecSemCanc.length}</div></div>
+      </div>
+      <section class="panel"><h3>Motivos somados</h3><div class="ec-barras">${ecBarras(mot, 'var(--primary)')}</div></section>
+      <section class="panel"><h3>Todas as devoluções do produto</h3>
+        <div style="overflow-x:auto"><table class="ec-tab"><thead><tr><th>Data</th><th>Origem</th><th>Documento</th><th>Produto</th><th class="n">Un.</th><th>Tipo</th><th>Motivo</th></tr></thead><tbody>
+          ${linhas.slice(0, 300).map(x => `<tr>${x.h}</tr>`).join('') || '<tr><td colspan="7" class="hint">Nenhuma devolução encontrada para esse produto.</td></tr>'}
+        </tbody></table></div>
+        ${linhas.length > 300 ? `<p class="hint" style="margin-top:8px">Mostrando 300 de ${linhas.length}. Refine a busca para ver menos.</p>` : ''}
+      </section>`;
+  };
+
+  // Eventos
+  main.querySelectorAll('.ec-subaba').forEach(b => b.onclick = () => { ui.aba = b.dataset.aba; renderEcommerce(main); });
+  main.querySelectorAll('[data-plat]').forEach(b => b.onclick = () => { ui.plat = b.dataset.plat; ui.mes = null; ui.conta = ''; renderEcommerce(main); });
+  const selMes = document.getElementById('ecMes'); if(selMes) selMes.onchange = () => { ui.mes = selMes.value; ui.lim = 40; desenharPainel(); };
+  if(main._ecClick) main.removeEventListener('click', main._ecClick);
+  main._ecClick = ev => {
+    const c = ev.target.closest('[data-conta]'); if(c){ ui.conta = c.dataset.conta; ui.lim = 40; main.querySelectorAll('[data-conta]').forEach(x => x.classList.toggle('on', x===c)); desenharPainel(); return; }
+    const t = ev.target.closest('[data-tipo]'); if(t){ ui.tipo = t.dataset.tipo; ui.lim = 40; desenharPainel(); return; }
+    const p = ev.target.closest('[data-busca]'); if(p){ ui.busca = p.dataset.busca; ui.aba = 'busca'; renderEcommerce(main); }
+  };
+  main.addEventListener('click', main._ecClick);
+  let tBusca = null;
+  const inpBusca = document.getElementById('ecBusca');
+  inpBusca.oninput = () => { ui.busca = inpBusca.value; clearTimeout(tBusca); tBusca = setTimeout(desenharBusca, 250); };
+  const arq = document.getElementById('ecArquivo');
+  arq.onchange = async () => {
+    const file = arq.files[0]; if(!file) return;
+    const msg = document.getElementById('ecMsg');
+    msg.innerHTML = `<div class="hint">Lendo planilha…</div>`;
+    try{
+      const {porConta, avisos} = await ecLerPlanilhaML(file);
+      const contasLidas = Object.entries(porConta);
+      if(!contasLidas.length) throw new Error('Não achei nenhuma linha válida na planilha.' + (avisos.length ? ' ' + avisos.join(' ') : ''));
+      msg.innerHTML = `
+        <div class="msg ok">Lidas ${contasLidas.map(([c, r]) => `<b>${ecEsc(c)}</b> (${r.length})`).join(', ')}. Confirme para gravar — nada que já está no CRM é apagado.</div>
+        ${avisos.map(a => `<div class="msg err">⚠️ ${ecEsc(a)}</div>`).join('')}
+        <div style="margin-top:8px; display:flex; gap:8px;"><button class="ghost-btn" id="ecGravar" style="border-color:var(--ok); color:var(--ok); font-weight:600;">Gravar importação</button><button class="ghost-btn" id="ecCancelar">Cancelar</button></div>`;
+      document.getElementById('ecCancelar').onclick = () => { arq.value = ''; renderEcommerce(main); };
+      document.getElementById('ecGravar').onclick = async () => {
+        const btn = document.getElementById('ecGravar'); btn.disabled = true; btn.textContent = 'Gravando…';
+        try{
+          const r = await ecGravarImportacao(plat.id, porConta, file.name);
+          ui.mes = null;
+          await renderEcommerce(main);
+          document.getElementById('ecMsg').innerHTML = `<div class="msg ok">Importação gravada: ${r.novos} ocorrência(s) nova(s), ${r.atualizados} atualizada(s).</div>`;
+        }catch(err){ btn.disabled = false; btn.textContent = 'Gravar importação'; msg.insertAdjacentHTML('beforeend', `<div class="msg err">${ecEsc(err.message)}</div>`); }
+      };
+    }catch(err){ msg.innerHTML = `<div class="msg err">${ecEsc(err.message)}</div>`; }
+  };
+
+  if(ui.aba === 'painel') desenharPainel(); else desenharBusca();
+}
+// ================= FIM E-COMMERCE =================
+
+
 
 // ---------------- VENDOR VIEW ----------------
 async function renderVendorShell(){
@@ -8768,6 +9127,7 @@ async function renderManagerShell(){
     {page:'inativos', label:'Clientes inativos'},
     {page:'pedidos-equipe', label:'Pedidos'},
     {page:'elaboracao-metas', label:'Elaboração de Metas'},
+    {page:'ecommerce', label:'🛒 E-commerce'},
     {page:'financeira', label:'Financeira'},
     {page:'compras-estoque', label:'Compras'},
     {group:'estoque', label:'Estoque', children:[ {page:'garantia', label:'Garantia'}, {page:'sac', label:'SAC'}, {page:'informar-nf', label:'🧾 Informar NF'}, {page:'saida', label:'🚚 Saída'} ]},
@@ -8785,6 +9145,7 @@ async function renderManagerShell(){
   else if(STATE.route.page==='pedidos-equipe') await renderManagerPedidos(main);
   else if(STATE.route.page==='elaboracao-metas') await renderElaboracaoMetas(main);
   else if(STATE.route.page==='campanha') await renderCampanhaGerente(main);
+  else if(STATE.route.page==='ecommerce') await renderEcommerce(main);
   else if(STATE.route.page==='financeira') await renderFinanceiroBody(main, () => renderManagerShell());
   else if(STATE.route.page==='compras-estoque') await renderComprasModulo(main, renderManagerShell);
   else if(STATE.route.page==='garantia') await renderGarantiaModulo(main, renderManagerShell);

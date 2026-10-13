@@ -743,6 +743,43 @@
     .sd-nf .sd-ped-wrap{grid-column:1 / 3;}
     .sd-tab .hm{display:none;}
   }
+
+  /* ===== Meu ganho ===== */
+  .gn-placar{background:var(--board); color:var(--board-ink); border-radius:14px; padding:24px 28px; display:grid; grid-template-columns:1.3fr 1fr; gap:24px; box-shadow:var(--shadow-soft); margin-bottom:4px;}
+  .gn-lab{font-size:12px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; color:var(--board-dim);}
+  .gn-total{font-family:var(--font-display); font-size:58px; font-weight:700; line-height:1; margin:6px 0 8px; font-variant-numeric:tabular-nums;}
+  .gn-note{font-size:13.5px; color:var(--board-dim);}
+  .gn-pot{background:var(--board-2); border-radius:10px; padding:16px 18px; display:flex; flex-direction:column; justify-content:center;}
+  .gn-pv{font-family:var(--font-display); font-size:34px; font-weight:700; color:var(--pace-ok); margin:4px 0;}
+  .gn-pd{font-size:13px; color:var(--board-dim); line-height:1.5;} .gn-pd b{color:var(--board-ink);}
+  .gn-barra{grid-column:1/-1; display:flex; height:12px; border-radius:6px; overflow:hidden; background:var(--tl-track);}
+  .gn-barra span{display:block; height:100%;}
+  .gn-legenda{grid-column:1/-1; display:flex; flex-wrap:wrap; gap:16px; font-size:12.5px; color:var(--board-dim); margin-top:-12px;}
+  .gn-legenda i{display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:6px; vertical-align:-1px;}
+  .gn-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px; margin:18px 0;}
+  .gn-card{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow-soft); position:relative;}
+  .gn-t{font-size:12.5px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--ink-soft); padding-right:70px;}
+  .gn-v{font-family:var(--font-display); font-size:30px; font-weight:700; margin:6px 0 2px; font-variant-numeric:tabular-nums;}
+  .gn-r{font-size:13px; color:var(--ink-soft);}
+  .gn-st{position:absolute; top:14px; right:14px; font-size:11px; font-weight:700; padding:3px 8px; border-radius:20px;}
+  .gn-st.ok{background:var(--ok-soft); color:var(--ok);} .gn-st.lock{background:var(--warn-soft); color:var(--warn);} .gn-st.fix{background:var(--info-soft); color:var(--info);}
+  .gn-card.locked .gn-v{color:var(--ink-faint); text-decoration:line-through; text-decoration-thickness:2px;}
+  .gn-prog{height:7px; background:var(--border); border-radius:4px; margin:12px 0 6px; overflow:hidden;}
+  .gn-prog b{display:block; height:100%; border-radius:4px;}
+  .gn-falta{font-size:13px; font-weight:600; color:var(--warn); margin-top:6px;}
+  .gn-feito{font-size:13px; font-weight:600; color:var(--ok); margin-top:6px;}
+  .gn-2col{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  .gn-conta{display:grid; grid-template-columns:1fr auto; gap:6px 24px; max-width:460px; font-size:15px; font-variant-numeric:tabular-nums;}
+  .gn-neg{color:var(--primary);}
+  .gn-tot{border-top:2px solid var(--ink); padding-top:6px; font-weight:800; font-size:17px;}
+  .gn-tab{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-numeric:tabular-nums;}
+  .gn-tab th{text-align:left; font-size:11.5px; text-transform:uppercase; letter-spacing:.4px; color:var(--ink-soft); padding:8px; border-bottom:1px solid var(--border);}
+  .gn-tab td{padding:9px 8px; border-bottom:1px solid var(--border); white-space:nowrap;}
+  .gn-tab .n{text-align:right;}
+  .gn-tag{font-size:11px; font-weight:700; padding:2px 7px; border-radius:20px; text-transform:capitalize;}
+  .gn-tag.fat{background:var(--ok-soft); color:var(--ok);} .gn-tag.pr{background:var(--info-soft); color:var(--info);}
+  .gn-aviso{font-size:12.5px; color:var(--ink-faint); margin-top:12px;}
+  @media (max-width:860px){ .gn-placar{grid-template-columns:1fr; padding:20px;} .gn-total{font-size:44px;} .gn-2col{grid-template-columns:1fr;} }
 </style>
 </head>
 <body>
@@ -5570,11 +5607,351 @@ function campanhaStatusGarantiaHTML(p){
 }
 // ================= FIM CAMPANHA =================
 
+// ================= MEU GANHO (quanto o vendedor recebe no mês) =================
+// Ganho = salário base + 1% da base de comissão + 0,25% se bater a meta de positivação
+//         + 0,25% se bater a meta de SKUs distintos + premiação da campanha (se houver no mês).
+// Base de comissão de cada pedido = VALORFINANCEIROLISTA − IPI − ICMS − ICMS ST (impostos somados dos itens).
+// Só conta pedido FATURADO. Pedido ainda não faturado aparece separado, como "ainda pode entrar".
+// Os dados vêm da importação "Pedidos e itens do mês" (gerente), gravados em crm:ganho:<mes>:<vendedor>.
+// Essa importação só grava chaves próprias (crm:ganho:*) — não apaga nem altera nada do resto do CRM.
+const GANHO_REGRAS = { salario: 2223.88, comissao: 0.01, bonusPositivacao: 0.0025, bonusSku: 0.0025 };
+
+function gnEsc(s){ return String(s===null||s===undefined?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function gnNum(v){
+  if(v===null || v===undefined || v==='') return 0;
+  if(typeof v === 'number') return isFinite(v) ? v : 0;
+  let s = String(v).trim().replace(/[R$\s]/g,'');
+  if(s.includes(',')) s = s.replace(/\./g,'').replace(',', '.');
+  const n = Number(s); return isFinite(n) ? n : 0;
+}
+function gnR2(v){ return Math.round((v||0)*100)/100; }
+function gnData(v){
+  if(!v) return '';
+  if(v instanceof Date && !isNaN(v)) return `${v.getFullYear()}-${String(v.getMonth()+1).padStart(2,'0')}-${String(v.getDate()).padStart(2,'0')}`;
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if(m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  return '';
+}
+function gnFaturado(sit){ return /^FATURADO/i.test(String(sit||'').trim()); }
+function gnCancelado(sit){ return /CANCEL/i.test(String(sit||'')); }
+
+// Lê uma planilha e devolve as linhas como objetos pelo NOME da coluna (cabeçalho em maiúsculas).
+function gnLerPlanilha(file){
+  return new Promise((resolve, reject) => {
+    if(typeof XLSX === 'undefined'){ reject(new Error('Biblioteca de planilha não carregou. Tente recarregar a página.')); return; }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Falha ao ler o arquivo '+file.name+'.'));
+    reader.onload = () => {
+      try{
+        const wb = XLSX.read(new Uint8Array(reader.result), {type:'array', cellDates:true});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const linhas = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
+        const cab = (linhas.shift()||[]).map(h => String(h||'').trim().toUpperCase());
+        resolve(linhas.filter(r => r && r.some(c => c!==null && c!=='')).map(r => { const o = {}; cab.forEach((h,i) => { if(h) o[h] = r[i]; }); return o; }));
+      }catch(err){ reject(new Error('Não consegui ler '+file.name+'. Confira se a primeira linha é o cabeçalho.')); }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+function gnExigirColunas(linhas, cols, nomeArq){
+  const tem = new Set(Object.keys(linhas[0]||{}));
+  const faltam = cols.filter(c => !tem.has(c));
+  if(faltam.length) throw new Error(`A planilha de ${nomeArq} não tem a(s) coluna(s): ${faltam.join(', ')}. Confira se subiu o arquivo certo.`);
+}
+
+// Junta pedidos + itens e monta o resultado por vendedor. Não grava nada.
+function gnProcessarPlanilhas(pedidos, itens){
+  gnExigirColunas(pedidos, ['NUMERO','VENDEDOR','CLIENTE','DESC_SITUACAO','EMISSAO','VALORFINANCEIROLISTA'], 'PEDIDOS');
+  gnExigirColunas(itens, ['NUMERO','PRODUTO','VALORIPI','VALORICMS','VALORICMSST'], 'ITENS');
+  const chave = (r) => `${r.EMPRESA??''}|${r.FILIAL??''}|${String(r.NUMERO).trim()}`;
+  const imp = new Map(); // pedido -> {ipi, icms, st, skus:Set}
+  itens.forEach(r => {
+    if(r.NUMERO===null || r.NUMERO===undefined) return;
+    const k = chave(r);
+    const a = imp.get(k) || {ipi:0, icms:0, st:0, skus:new Set()};
+    a.ipi += gnNum(r.VALORIPI); a.icms += gnNum(r.VALORICMS); a.st += gnNum(r.VALORICMSST);
+    const cod = String(r.PRODUTO||'').trim().toUpperCase(); if(cod) a.skus.add(cod);
+    imp.set(k, a);
+  });
+  const contaMes = {};
+  const porVend = new Map();
+  let semItens = 0;
+  pedidos.forEach(r => {
+    if(r.NUMERO===null || r.NUMERO===undefined || gnCancelado(r.DESC_SITUACAO)) return;
+    const vend = Number(r.VENDEDOR); if(!vend && vend!==0) return;
+    const em = gnData(r.EMISSAO); if(em) contaMes[em.slice(0,7)] = (contaMes[em.slice(0,7)]||0)+1;
+    const t = imp.get(chave(r)); if(!t) semItens++;
+    const valor = gnNum(r.VALORFINANCEIROLISTA);
+    const ipi = t ? t.ipi : 0, icms = t ? t.icms : 0, st = t ? t.st : 0;
+    const p = {
+      n: String(r.NUMERO).trim(), nf: r.ULTIMANOTA ? String(r.ULTIMANOTA).replace(/\.0+$/,'') : '',
+      cli: r.CLIENTE!==null && r.CLIENTE!==undefined ? String(r.CLIENTE).replace(/\.0+$/,'') : '', uf: r.UF||'',
+      sit: String(r.DESC_SITUACAO||'').trim(), fat: gnFaturado(r.DESC_SITUACAO), em,
+      valor: gnR2(valor), ipi: gnR2(ipi), icms: gnR2(icms), st: gnR2(st), base: gnR2(valor-ipi-icms-st),
+    };
+    const v = porVend.get(vend) || {pedidos:[], skus:new Set()};
+    v.pedidos.push(p);
+    if(p.fat && t) t.skus.forEach(s => v.skus.add(s));
+    porVend.set(vend, v);
+  });
+  const mesDetectado = Object.entries(contaMes).sort((a,b) => b[1]-a[1])[0]?.[0] || currentMonthKey();
+  return {mesDetectado, porVend, semItens};
+}
+// Grava cada pedido como lista curta (ocupa metade do espaço) e remonta ao ler.
+const GN_CAMPOS = ['n','nf','cli','uf','sit','em','valor','ipi','icms','st','base'];
+function gnCompactar(pedidos){ return pedidos.map(p => GN_CAMPOS.map(k => p[k])); }
+function gnExpandir(dado){
+  if(!dado || !Array.isArray(dado.pedidos)) return dado;
+  dado.pedidos = dado.pedidos.map(a => {
+    if(!Array.isArray(a)) return a;
+    const p = {}; GN_CAMPOS.forEach((k,i) => p[k] = a[i]); p.fat = gnFaturado(p.sit); return p;
+  });
+  return dado;
+}
+function gnResumoVendedor(pedidos){
+  const fat = pedidos.filter(p => p.fat), pend = pedidos.filter(p => !p.fat);
+  const soma = (arr, k) => gnR2(arr.reduce((s,p) => s + (p[k]||0), 0));
+  return {
+    qtdFat: fat.length, qtdPend: pend.length,
+    valor: soma(fat,'valor'), ipi: soma(fat,'ipi'), icms: soma(fat,'icms'), st: soma(fat,'st'), base: soma(fat,'base'),
+    basePend: soma(pend,'base'), clientes: new Set(fat.map(p => p.cli)).size,
+  };
+}
+
+// Grava o mês importado: uma chave por vendedor + um resumo. Só chaves crm:ganho:*.
+async function gnSalvarImportacao(mes, porVend, arquivos){
+  const importadoEm = new Date().toISOString();
+  const resumo = {mes, importadoEm, arquivos, vendedores: []};
+  for(const [vend, v] of porVend){
+    const dado = {mes, vendedor: vend, importadoEm, formato: 1, pedidos: gnCompactar(v.pedidos), skus: Array.from(v.skus)};
+    const ok = await safeSet(`crm:ganho:${mes}:${vend}`, dado);
+    if(!ok) throw new Error(`Falha ao gravar os pedidos do vendedor Nº ${vend}. Nada foi perdido; tente processar de novo.`);
+    const r = gnResumoVendedor(v.pedidos);
+    resumo.vendedores.push({codigo: vend, base: r.base, basePend: r.basePend, pedidos: r.qtdFat, clientes: r.clientes, skus: v.skus.size});
+  }
+  resumo.vendedores.sort((a,b) => b.base - a.base);
+  if(!(await safeSet(`crm:ganho:${mes}:resumo`, resumo))) throw new Error('Falha ao gravar o resumo da importação. Tente de novo.');
+  return resumo;
+}
+
+// Calcula o ganho de um vendedor num mês (dados importados + metas + campanha).
+function gnCalcular(vendedorCodigo, mes, dado){
+  const R = GANHO_REGRAS;
+  const vendor = STATE.vendors.find(v => v.codigo === vendedorCodigo);
+  const metas = metasDoVendedorNoMes(vendor, mes);
+  const pedidos = (dado && dado.pedidos) || [];
+  const r = gnResumoVendedor(pedidos);
+  const totalCarteira = clientesDoVendedorNoMes(vendedorCodigo, mes).length;
+  const alvoPosit = metas.positivacao ? Math.ceil(totalCarteira * metas.positivacao / 100) : 0;
+  const skus = (dado && dado.skus ? dado.skus.length : 0);
+  const comissao = gnR2(r.base * R.comissao);
+  const valorBonusPos = gnR2(r.base * R.bonusPositivacao);
+  const valorBonusSku = gnR2(r.base * R.bonusSku);
+  const batePos = alvoPosit > 0 && r.clientes >= alvoPosit;
+  const bateSku = metas.skus > 0 && skus >= metas.skus;
+  let campanha = 0;
+  if(typeof CAMPANHA !== 'undefined' && mes === CAMPANHA.mes){
+    try{ campanha = gnR2(campanhaResumo(campanhaPedidosDoVendedor(vendedorCodigo)).premio); }catch(e){ campanha = 0; }
+  }
+  const total = gnR2(R.salario + comissao + (batePos?valorBonusPos:0) + (bateSku?valorBonusSku:0) + campanha);
+  const potencial = gnR2(R.salario + comissao + valorBonusPos + valorBonusSku + campanha);
+  return {r, metas, totalCarteira, alvoPosit, skus, comissao, valorBonusPos, valorBonusSku, batePos, bateSku, campanha, total, potencial,
+    extraPend: gnR2(r.basePend * R.comissao), pedidos};
+}
+
+function gnCardHTML({titulo, valor, linha, estado, pct, rodape, rodapeCls}){
+  const st = {fixo:['fix','fixo'], ok:['ok','liberado'], lock:['lock','travado'], semMeta:['lock','sem meta']}[estado] || ['fix',''];
+  return `<div class="gn-card ${estado==='lock'||estado==='semMeta'?'locked':''}">
+    <span class="gn-st ${st[0]}">${st[1]}</span>
+    <div class="gn-t">${titulo}</div>
+    <div class="gn-v">${valor}</div>
+    <div class="gn-r">${linha||''}</div>
+    ${pct!==undefined && pct!==null ? `<div class="gn-prog"><b style="width:${Math.min(100,pct)}%;background:${pct>=100?'var(--ok)':'var(--warn)'}"></b></div>` : ''}
+    ${rodape ? `<div class="${rodapeCls||'gn-feito'}">${rodape}</div>` : ''}
+  </div>`;
+}
+
+async function renderVendorGanho(main){
+  const vc = STATE.session.codigo;
+  const mes = STATE.mesSelecionado || currentMonthKey();
+  main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
+  await getContatos(vc);
+  const dado = gnExpandir(await safeGet(`crm:ganho:${mes}:${vc}`));
+  const g = gnCalcular(vc, mes, dado);
+  const R = GANHO_REGRAS, f = fmtMoney;
+  const [a, m] = mes.split('-').map(Number);
+  const mesNome = new Date(a, m-1, 1).toLocaleDateString('pt-BR', {month:'long', year:'numeric'});
+  const quando = dado && dado.importadoEm ? new Date(dado.importadoEm).toLocaleString('pt-BR', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'}) : null;
+
+  const faltaPos = Math.max(0, g.alvoPosit - g.r.clientes), faltaSku = Math.max(0, g.metas.skus - g.skus);
+  const travados = [];
+  if(!g.batePos) travados.push({nome:'positivação', valor:g.valorBonusPos, falta: g.alvoPosit ? `faltam <b>${faltaPos} cliente${faltaPos===1?'':'s'}</b> comprando` : 'meta de positivação ainda não definida'});
+  if(!g.bateSku) travados.push({nome:'SKU', valor:g.valorBonusSku, falta: g.metas.skus ? `faltam <b>${faltaSku} SKU${faltaSku===1?'':'s'}</b> distintos` : 'meta de SKU ainda não definida'});
+
+  const partes = [
+    {nome:'Salário', v:R.salario, cor:'#5D7A6B'},
+    {nome:'Comissão 1%', v:g.comissao, cor:'#7EE2A6'},
+    {nome:'Bônus SKU', v:g.bateSku?g.valorBonusSku:0, cor:'#8CB8F0'},
+    {nome:'Bônus positivação', v:g.batePos?g.valorBonusPos:0, cor:'#C9A6F5'},
+    {nome:'Campanha', v:g.campanha, cor:'#FFC531'},
+  ].filter(p => p.v > 0);
+
+  const ordenados = g.pedidos.slice().sort((x,y) => (y.em||'').localeCompare(x.em||'') || Number(y.n)-Number(x.n));
+  const LIM = 50;
+  const linhaPedido = (p) => `<tr>
+      <td>${gnEsc(p.n)}</td><td>${gnEsc(p.nf)||'—'}</td><td>${gnEsc(p.cli)}</td>
+      <td>${p.em ? p.em.split('-').reverse().slice(0,2).join('/') : ''}</td>
+      <td><span class="gn-tag ${p.fat?'fat':'pr'}">${p.fat?'Faturado':gnEsc(p.sit.toLowerCase())}</span></td>
+      <td class="n">${f(p.valor)}</td><td class="n gn-neg">${f(p.ipi)}</td><td class="n gn-neg">${f(p.icms)}</td><td class="n gn-neg">${f(p.st)}</td>
+      <td class="n"><b>${f(p.base)}</b></td></tr>`;
+
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Meu ganho</div><h2>Quanto você vai receber</h2></div>
+    ${mesSeletorHTML('mesGanho')}
+    <p class="hint">${quando ? `Calculado com os pedidos importados em ${quando}. Atualiza sempre que o gerente importar os pedidos de novo.` : `Os pedidos de ${mesNome} ainda não foram importados — por enquanto aparecem só o salário e a campanha.`}</p>
+
+    <section class="gn-placar">
+      <div>
+        <div class="gn-lab">Você ganha hoje</div>
+        <div class="gn-total">${f(g.total)}</div>
+        <div class="gn-note">Salário + comissão + bônus já liberados${g.campanha ? ' + campanha' : ''}</div>
+      </div>
+      <div class="gn-pot">
+        ${travados.length ? `
+          <div class="gn-lab">Se bater ${travados.map(t => t.nome).join(' e ')}</div>
+          <div class="gn-pv">${f(g.potencial)}</div>
+          <div class="gn-pd">${travados.map(t => `+ ${f(t.valor)} · ${t.falta}`).join('<br>')}</div>` : `
+          <div class="gn-lab">Bônus</div>
+          <div class="gn-pv">Tudo liberado ✓</div>
+          <div class="gn-pd">Positivação e SKU batidos. Agora cada venda é comissão.</div>`}
+      </div>
+      <div class="gn-barra">${partes.map(p => `<span style="width:${(p.v/g.total*100).toFixed(2)}%;background:${p.cor}"></span>`).join('')}</div>
+      <div class="gn-legenda">${partes.map(p => `<span><i style="background:${p.cor}"></i>${p.nome}</span>`).join('')}</div>
+    </section>
+
+    <div class="gn-grid">
+      ${gnCardHTML({titulo:'Salário base', valor:f(R.salario), linha:'Garantido no mês', estado:'fixo'})}
+      ${gnCardHTML({titulo:'Comissão · 1%', valor:f(g.comissao), linha:`1% de ${f(g.r.base)} de base`, estado:'ok', rodape:'Cada R$ 10 mil faturados = + R$ 100'})}
+      ${gnCardHTML({titulo:'Bônus SKU · 0,25%', valor:f(g.valorBonusSku),
+          linha: g.metas.skus ? `${g.skus} de ${g.metas.skus} SKUs distintos` : `${g.skus} SKUs distintos · sem meta definida`,
+          estado: !g.metas.skus ? 'semMeta' : g.bateSku ? 'ok' : 'lock',
+          pct: g.metas.skus ? Math.round(g.skus/g.metas.skus*100) : null,
+          rodape: !g.metas.skus ? 'Peça ao gerente para definir a meta de SKU' : g.bateSku ? 'Meta batida ✓' : `Faltam ${faltaSku} SKU${faltaSku===1?'':'s'} distintos para liberar`,
+          rodapeCls: g.bateSku ? 'gn-feito' : 'gn-falta'})}
+      ${gnCardHTML({titulo:'Bônus positivação · 0,25%', valor:f(g.valorBonusPos),
+          linha: g.alvoPosit ? `${g.r.clientes} de ${g.alvoPosit} clientes (${g.metas.positivacao}% da carteira)` : `${g.r.clientes} clientes compraram · sem meta definida`,
+          estado: !g.alvoPosit ? 'semMeta' : g.batePos ? 'ok' : 'lock',
+          pct: g.alvoPosit ? Math.round(g.r.clientes/g.alvoPosit*100) : null,
+          rodape: !g.alvoPosit ? 'Peça ao gerente para definir a meta de positivação' : g.batePos ? 'Meta batida ✓' : `Faltam ${faltaPos} cliente${faltaPos===1?'':'s'} comprarem para liberar`,
+          rodapeCls: g.batePos ? 'gn-feito' : 'gn-falta'})}
+      ${(typeof CAMPANHA !== 'undefined' && mes === CAMPANHA.mes) ? gnCardHTML({titulo:'Campanha', valor:f(g.campanha), linha:`Premiação da ${gnEsc(CAMPANHA.nome)}`, estado:'ok'}) : ''}
+    </div>
+
+    <div class="gn-2col">
+      <section class="panel">
+        <h3>Como chegamos na base</h3>
+        <p class="hint">Valor dos pedidos faturados menos os impostos.</p>
+        <div class="gn-conta">
+          <span>Valor dos pedidos (${g.r.qtdFat})</span><span>${f(g.r.valor)}</span>
+          <span class="gn-neg">− IPI</span><span class="gn-neg">${f(g.r.ipi)}</span>
+          <span class="gn-neg">− ICMS</span><span class="gn-neg">${f(g.r.icms)}</span>
+          <span class="gn-neg">− ST</span><span class="gn-neg">${f(g.r.st)}</span>
+          <span class="gn-tot">Base de comissão</span><span class="gn-tot">${f(g.r.base)}</span>
+        </div>
+      </section>
+      <section class="panel">
+        <h3>Ainda pode entrar</h3>
+        <p class="hint">Pedidos que ainda não foram faturados. Só contam depois de faturados.</p>
+        <div class="gn-conta">
+          <span>Pedidos não faturados (${g.r.qtdPend})</span><span>${f(g.r.basePend)} de base</span>
+          <span class="gn-tot">Comissão extra possível</span><span class="gn-tot">${f(g.extraPend)}</span>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h3>Pedidos do mês</h3>
+      ${ordenados.length ? `
+        <p class="hint">${ordenados.length} pedido(s). Valor = financeiro lista; base = valor − IPI − ICMS − ST.</p>
+        <div style="overflow-x:auto">
+          <table class="gn-tab">
+            <thead><tr><th>Pedido</th><th>NF</th><th>Cliente</th><th>Emissão</th><th>Situação</th><th class="n">Valor</th><th class="n">IPI</th><th class="n">ICMS</th><th class="n">ST</th><th class="n">Base</th></tr></thead>
+            <tbody id="gnPedidosBody">${ordenados.slice(0, LIM).map(linhaPedido).join('')}</tbody>
+          </table>
+        </div>
+        ${ordenados.length > LIM ? `<button class="ghost-btn" id="gnVerTodos" style="margin-top:12px;">Ver todos os ${ordenados.length} pedidos</button>` : ''}
+      ` : `<div class="empty-state">Nenhum pedido importado para este mês.</div>`}
+      <p class="gn-aviso">Valor estimado. O valor oficial é o do fechamento da folha.</p>
+    </section>
+  `;
+  const sel = document.getElementById('mesGanho');
+  if(sel) sel.onchange = (e) => { STATE.mesSelecionado = e.target.value; renderVendorGanho(main); };
+  const btn = document.getElementById('gnVerTodos');
+  if(btn) btn.onclick = () => { document.getElementById('gnPedidosBody').innerHTML = ordenados.map(linhaPedido).join(''); btn.remove(); };
+}
+
+// Painel de importação (gerente): pedidos + itens do mês.
+function gnImportPanelHTML(){
+  return `
+    <div class="panel import-panel" style="border-left-color:#1F7A45;">
+      <div class="import-panel-title"><span class="import-badge" style="background:#1F7A45;">6</span><h3>Pedidos e itens do mês (ganho dos vendedores)</h3></div>
+      <p class="hint">Suba as duas planilhas do mês exatamente como saem do sistema: <b>pedidos</b> (colunas NUMERO, VENDEDOR, CLIENTE, DESC_SITUACAO, EMISSAO, VALORFINANCEIROLISTA…) e <b>itens</b> (NUMERO, PRODUTO, VALORIPI, VALORICMS, VALORICMSST…). Alimenta a aba <b>"💵 Meu ganho"</b> de cada vendedor. Pode importar de novo quantas vezes quiser no mês: substitui só a importação anterior daquele mês, nada mais do CRM é alterado.</p>
+      <div class="form-row" style="align-items:center; flex-wrap:wrap; gap:10px;">
+        <label style="font-size:13px;">Pedidos <input type="file" id="f_gn_pedidos" accept=".xlsx,.xls"></label>
+        <label style="font-size:13px;">Itens <input type="file" id="f_gn_itens" accept=".xlsx,.xls"></label>
+        <button class="ghost-btn" id="btnGnLer">Ler planilhas</button>
+      </div>
+      <div id="msgGanho"></div>
+    </div>`;
+}
+function gnBindImportPanel(){
+  const btn = document.getElementById('btnGnLer'); if(!btn) return;
+  btn.onclick = async () => {
+    const msg = document.getElementById('msgGanho');
+    const fp = document.getElementById('f_gn_pedidos').files[0], fi = document.getElementById('f_gn_itens').files[0];
+    if(!fp || !fi){ msg.innerHTML = `<div class="msg err">Escolha as duas planilhas (pedidos e itens).</div>`; return; }
+    msg.innerHTML = `<div class="hint">Lendo planilhas…</div>`;
+    try{
+      const [pedidos, itens] = await Promise.all([gnLerPlanilha(fp), gnLerPlanilha(fi)]);
+      const res = gnProcessarPlanilhas(pedidos, itens);
+      const nomeV = (c) => vendorNome(c) || `<span style="color:var(--ink-faint)">não cadastrado</span>`;
+      const linhas = Array.from(res.porVend.entries()).map(([c, v]) => ({c, r: gnResumoVendedor(v.pedidos), skus: v.skus.size})).sort((a,b) => b.r.base - a.r.base);
+      const totBase = linhas.reduce((s,l) => s + l.r.base, 0);
+      msg.innerHTML = `
+        <div class="msg ok">Lidos ${pedidos.length} pedido(s) e ${itens.length} item(ns) de ${linhas.length} vendedor(es). Base faturada total: <b>${fmtMoney(totBase)}</b>.${res.semItens ? ` ⚠️ ${res.semItens} pedido(s) sem itens na planilha de itens (ficaram sem desconto de imposto).` : ''}</div>
+        <div class="form-row" style="align-items:center; margin-top:10px; gap:10px;">
+          <label style="font-size:13px;">Mês dos pedidos: <input type="month" id="f_gn_mes" value="${res.mesDetectado}"></label>
+          <button class="ghost-btn" id="btnGnGravar" style="border-color:var(--ok); color:var(--ok); font-weight:600;">Gravar importação</button>
+        </div>
+        <div style="overflow-x:auto; margin-top:10px;">
+          <table class="cred-table">
+            <thead><tr><th>Nº</th><th>Vendedor</th><th style="text-align:right">Pedidos fat.</th><th style="text-align:right">Clientes</th><th style="text-align:right">SKUs</th><th style="text-align:right">Base faturada</th><th style="text-align:right">Comissão 1%</th><th style="text-align:right">Base não faturada</th></tr></thead>
+            <tbody>${linhas.map(l => `<tr><td>${l.c}</td><td>${nomeV(l.c)}</td><td style="text-align:right">${l.r.qtdFat}</td><td style="text-align:right">${l.r.clientes}</td><td style="text-align:right">${l.skus}</td><td style="text-align:right">${fmtMoney(l.r.base)}</td><td style="text-align:right">${fmtMoney(l.r.base*GANHO_REGRAS.comissao)}</td><td style="text-align:right">${fmtMoney(l.r.basePend)}</td></tr>`).join('')}</tbody>
+          </table>
+        </div>`;
+      document.getElementById('btnGnGravar').onclick = async () => {
+        const mes = document.getElementById('f_gn_mes').value;
+        if(!/^\d{4}-\d{2}$/.test(mes)){ alert('Informe o mês.'); return; }
+        const b = document.getElementById('btnGnGravar'); b.disabled = true; b.textContent = 'Gravando…';
+        try{
+          const resumo = await gnSalvarImportacao(mes, res.porVend, {pedidos: fp.name, itens: fi.name});
+          msg.innerHTML = `<div class="msg ok">Importação de ${mes} gravada para ${resumo.vendedores.length} vendedor(es). Já aparece na aba "💵 Meu ganho".</div>`;
+          document.getElementById('f_gn_pedidos').value = ''; document.getElementById('f_gn_itens').value = '';
+        }catch(err){ b.disabled = false; b.textContent = 'Gravar importação'; msg.insertAdjacentHTML('beforeend', `<div class="msg err">${err.message}</div>`); }
+      };
+    }catch(err){ msg.innerHTML = `<div class="msg err">${err.message}</div>`; }
+  };
+}
+// ================= FIM MEU GANHO =================
+
+
 // ---------------- VENDOR VIEW ----------------
 async function renderVendorShell(){
   normalizarRotaAntiga();
   const items = [
     {page:'dashboard', label:'Dashboard'},
+    {page:'ganho', label:'💵 Meu ganho'},
     {page:'hoje', label:'Contatos hoje'},
     {page:'carteira', label:'Carteira completa'},
     {page:'pedidos', label:'Pedidos'},
@@ -5602,6 +5979,7 @@ async function renderVendorShell(){
   else if(STATE.route.page==='inativos') await renderVendorInativos(main);
   else if(STATE.route.page==='assistente') renderVendorAssistenteIA(main);
   else if(STATE.route.page==='campanha') await renderCampanhaVendedor(main);
+  else if(STATE.route.page==='ganho') await renderVendorGanho(main);
   else if(STATE.route.page==='garantia') await renderGarantiaModulo(main, renderVendorShell);
   else if(STATE.route.page==='sac') await renderSacModulo(main);
   else if(STATE.route.page==='compras-estoque') await renderComprasModulo(main, renderVendorShell);
@@ -10159,6 +10537,8 @@ function renderManagerImportacoes(main){
       <div id="msgFinanceiro"></div>
     </div>
 
+    ${gnImportPanelHTML()}
+
     <div class="panel" style="border-color:var(--warn); background:var(--warn-soft);">
       <h3 style="color:var(--warn);">🔧 Corrigir vendedor errado / duplicata</h3>
       <p class="hint">Ferramenta de correção — use quando algum cliente ficou na carteira errada, duplicado, ou preso nos inativos por engano. Suba uma planilha simples: <b>Código do cliente</b>, <b>Vendedor</b> (número, ou "número-nome"). O cliente é movido pra carteira certa não importa onde esteja hoje (outra carteira, duplicado, ou inativos) — se estiver duplicado, mantém só uma cópia. Ninguém é apagado.</p>
@@ -10170,6 +10550,7 @@ function renderManagerImportacoes(main){
     </div>
   `;
 
+  gnBindImportPanel();
   let PENDING_SYNC_VENDEDOR = null;
   document.getElementById('btnProcessarSyncVendedor').onclick = async () => {
     const msg = document.getElementById('msgSyncVendedor');

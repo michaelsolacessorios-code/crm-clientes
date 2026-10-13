@@ -1009,7 +1009,7 @@ const META_PADRAO = 300000;
 // Isso é o que permite que todo mundo conectado atualize sozinho, sem precisar de ninguém
 // clicar em nada — o navegador de cada um confere essa versão a cada 30s e, se estiver
 // desatualizado, recarrega a página automaticamente.
-const APP_VERSION = '2026-10-02-04';
+const APP_VERSION = '2026-10-13-01';
 
 const SESSION_ID = 'sess'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 let HEARTBEAT_TIMER = null;
@@ -2525,6 +2525,740 @@ function reclBuscarItem(codigo){
   return null;
 }
 
+// =====================================================================================
+// SOLICITAÇÃO DE COMPRA — ITENS NOVOS (aba Compras → Solicitação de Compra)
+// Fluxo: vendedor pede → comprador (Roberto) cota em RMB + qtd mínima → gerente/diretor define
+// condições em R$ → vendedor marca aceite/recusa do cliente (com print e comprovante) →
+// comprador marca comprado → "A caminho" / "Chegou" saem sozinhos da Previsão de Compras.
+// Cada solicitação é uma linha própria no banco (/api/solicitacao), fotos no Storage privado.
+// O vendedor só vê as solicitações dele e nunca vê o preço em RMB.
+// =====================================================================================
+const SOL_STATUS = {
+  cotacao:  {label:'Aguardando cotação',         cls:'warn',   icon:'⏳'},
+  condicoes:{label:'Aguardando condições',       cls:'info',   icon:'📝'},
+  cliente:  {label:'Aguardando cliente',         cls:'info',   icon:'🤝'},
+  aceito:   {label:'Aceito — aguardando compra', cls:'ok',     icon:'✅'},
+  recusado: {label:'Recusado',                   cls:'danger', icon:'✖'},
+  comprado: {label:'Comprado',                   cls:'warn',   icon:'🛒'},
+  acaminho: {label:'A caminho',                  cls:'info',   icon:'🚢'},
+  chegou:   {label:'Chegou',                     cls:'ok',     icon:'📦'},
+};
+const SOL_FLUXO = ['cotacao','condicoes','cliente','aceito','comprado','acaminho','chegou'];
+const SOL_TIPOS_COND = {antecipado:'Antecipado', avista:'À vista na chegada', prazo:'A prazo', ato:'Valor no ato + prazo', livre:'Outra (texto livre)'};
+const SOL_MAX_FOTOS = 10;
+
+function solTipo(){ return (STATE.session||{}).tipo; }
+function solPodeUsar(){ return ['vendedor','compras','gerente'].includes(solTipo()); }
+function solVeRMB(){ return ['compras','gerente'].includes(solTipo()); }
+function solNumeroFmt(n){ return 'Nº ' + String(n).padStart(4,'0'); }
+function solDia(iso){ return String(iso||'').slice(0,10); }
+function solParseNum(v){ if(v===''||v==null) return NaN; const s = String(v).trim(); return Number(s.includes(',') ? s.replace(/\./g,'').replace(',','.') : s); }
+function solRMB(n){ return '¥ ' + (Number(n)||0).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2}); }
+function solNum(n){ return (Number(n)||0).toLocaleString('pt-BR'); }
+
+// ---------- Conversa com o servidor ----------
+async function solApi(body){
+  const res = await fetch('/api/solicitacao', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok){ const err = new Error(data.error || 'Falha ao falar com o servidor.'); err.status = res.status; throw err; }
+  return data;
+}
+async function listarSolicitacoes(){
+  const res = await fetch('/api/solicitacao?acao=listar');
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok) throw new Error(data.error || 'Não consegui carregar as solicitações.');
+  STATE.solicitacoes = data.solicitacoes || [];
+  return STATE.solicitacoes;
+}
+async function salvarSolicitacao(s){
+  const data = await solApi({acao:'salvar', solicitacao: s});
+  const salva = data.solicitacao;
+  if(Array.isArray(STATE.solicitacoes)){
+    const i = STATE.solicitacoes.findIndex(x => x.numero === salva.numero);
+    if(i === -1) STATE.solicitacoes.unshift(salva); else STATE.solicitacoes[i] = salva;
+  }
+  return salva;
+}
+async function solEnviarFoto(file){
+  const blob = await reclComprimirFoto(file);
+  const {path, uploadUrl} = await solApi({acao:'url-upload'});
+  const r = await fetch(uploadUrl, {method:'PUT', headers:{'Content-Type':'image/jpeg', 'x-upsert':'false'}, body: blob});
+  if(!r.ok) throw new Error('Não consegui enviar a imagem "' + file.name + '". Tente de novo.');
+  return path;
+}
+async function solEnviarVarias(lista, btn, rotulo){
+  const paths = [];
+  for(let i = 0; i < lista.length; i++){
+    if(btn) btn.textContent = `Enviando ${rotulo} ${i+1} de ${lista.length}...`;
+    paths.push(await solEnviarFoto(lista[i].file));
+  }
+  return paths;
+}
+async function solUrlsFotos(paths){
+  STATE.solFotoCache = STATE.solFotoCache || {};
+  const cache = STATE.solFotoCache, agora = Date.now();
+  const faltam = (paths||[]).filter(p => !cache[p] || cache[p].ate < agora);
+  if(faltam.length){
+    const {urls} = await solApi({acao:'urls-fotos', paths: faltam});
+    Object.entries(urls||{}).forEach(([p,u]) => { cache[p] = {url:u, ate: agora + 50*60*1000}; });
+  }
+  const out = {};
+  (paths||[]).forEach(p => { if(cache[p]) out[p] = cache[p].url; });
+  return out;
+}
+
+// ---------- Regras de status ----------
+function solContainersDoItem(s, codigo){
+  if(!s.compra || !s.aceite) return [];
+  const desde = solDia(s.aceite.em);
+  const c = String(codigo||'').trim().toUpperCase();
+  return (STATE.previsoes||[]).filter(cont => String(cont.criadoEm||'') >= desde &&
+    (cont.itens||[]).some(it => String(it.codigo||'').trim().toUpperCase() === c));
+}
+function solStatusItem(s, item){
+  const conts = solContainersDoItem(s, item.codigo);
+  const ch = conts.find(c => c.status === 'chegou');
+  if(ch) return {st:'chegou', cont:ch};
+  if(conts.length) return {st:'acaminho', cont:conts[0]};
+  return null;
+}
+function solStatus(s){
+  if(!s.cotacao) return 'cotacao';
+  if(!s.condicoes) return 'condicoes';
+  if(!s.aceite) return 'cliente';
+  if(s.aceite.resultado === 'recusado') return 'recusado';
+  if(!s.compra) return 'aceito';
+  const sts = (s.itens||[]).map(i => solStatusItem(s,i));
+  if(sts.length && sts.every(x => x && x.st === 'chegou')) return 'chegou';
+  if(sts.some(Boolean)) return 'acaminho';
+  return 'comprado';
+}
+function solBadge(s){
+  const st = solStatus(s), info = SOL_STATUS[st];
+  let extra = '';
+  if(st === 'acaminho' || st === 'chegou'){
+    const conts = [...new Set((s.itens||[]).map(i => solStatusItem(s,i)).filter(Boolean).map(x => x.cont))];
+    extra = ' · ' + conts.map(c => gEsc(c.nome) + (st==='acaminho' && c.previsaoChegada ? ' (chega ' + fmtDatePt(c.previsaoChegada) + ')' : '')).join(', ');
+  }
+  return `<span class="status-badge status-${info.cls}">${info.icon} ${info.label}${extra}</span>`;
+}
+function solValorCond(s, c){
+  if(!c) return 0;
+  if(s.condicoes && s.condicoes.modo === 'unica') return Number(c.total)||0;
+  return (s.itens||[]).reduce((a,i) => a + (Number((c.precos||{})[i.id])||0) * (Number(i.quantidade)||0), 0);
+}
+function solSinal(s, c){ return c.tipo === 'antecipado' ? solValorCond(s,c) * (Number(c.pct)||0) / 100 : 0; }
+function solDescCond(c){
+  if(c.tipo === 'antecipado') return `Antecipado — ${c.pct||0}% no pedido` + (Number(c.pct) < 100 ? ` + ${100 - Number(c.pct)}% na chegada` : '');
+  if(c.tipo === 'avista') return 'À vista na chegada';
+  if(c.tipo === 'prazo') return `A prazo ${gEsc(c.parcelas||'')}`;
+  if(c.tipo === 'ato') return `${fmtMoney(c.valorAto)} no ato + ${gEsc(c.parcelas||'')}`;
+  return gEsc(c.texto || 'Condição');
+}
+function solValorFechado(s){ return (s.aceite && s.aceite.resultado === 'aceito') ? solValorCond(s, s.condicoes.lista[s.aceite.escolhida]) : 0; }
+function solValorRecusado(s){
+  if(!s.condicoes) return 0;
+  const vs = s.condicoes.lista.map(c => solValorCond(s,c)).filter(v => v > 0);
+  return vs.length ? Math.min(...vs) : 0;
+}
+function solVisiveis(todas){
+  const t = solTipo();
+  return (todas||[]).filter(s => t !== 'vendedor' || s.vendedorCodigo === STATE.session.codigo).sort((a,b) => b.numero - a.numero);
+}
+function solPendenteComigo(s){
+  const t = solTipo(), st = solStatus(s);
+  if(t === 'vendedor') return st === 'cliente';
+  if(t === 'compras') return st === 'cotacao' || st === 'aceito';
+  if(t === 'gerente') return st === 'condicoes';
+  return false;
+}
+function solHistorico(s, acao){ s.historico = s.historico || []; s.historico.push({em: new Date().toISOString(), por: gQuem(), acao}); }
+
+function solCss(){
+  if(document.getElementById('solCss')) return;
+  const st = document.createElement('style');
+  st.id = 'solCss';
+  st.textContent = `
+    .sol-card{cursor:pointer; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; display:flex; flex-wrap:wrap; gap:10px; justify-content:space-between; align-items:center;}
+    .sol-card:hover{box-shadow:var(--shadow-hover);}
+    .sol-card.vez{border-left:5px solid var(--primary);}
+    .sol-pill{font-size:11.5px; padding:2px 8px; border-radius:99px; background:var(--bg); color:var(--ink-soft); font-weight:600;}
+    .sol-pill.emb{background:var(--accent-soft); color:var(--accent);}
+    .sol-sec{border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:14px;}
+    .sol-sec.acao{border-color:var(--primary); box-shadow:0 0 0 3px var(--primary-soft);}
+    .sol-sec h4{margin:0 0 10px; font-size:15.5px; display:flex; flex-wrap:wrap; gap:8px; align-items:baseline;}
+    .sol-sec h4 small{font-weight:500; color:var(--ink-faint); font-size:12px;}
+    .sol-tl{display:flex; flex-wrap:wrap; gap:4px; margin:0 0 14px;}
+    .sol-tl span{font-size:11.5px; padding:4px 8px; border-radius:6px; background:var(--bg); color:var(--ink-faint); font-weight:600;}
+    .sol-tl span.ok{background:var(--ok-soft); color:var(--ok);}
+    .sol-tl span.cur{background:var(--primary); color:#fff;}
+    .sol-tl span.bad{background:var(--danger-soft); color:var(--danger);}
+    .sol-tbl{width:100%; border-collapse:collapse; font-size:13.5px;}
+    .sol-tbl th{text-align:left; font-size:11.5px; text-transform:uppercase; color:var(--ink-faint); font-weight:600; padding:6px 8px; border-bottom:1px solid var(--border);}
+    .sol-tbl td{padding:7px 8px; border-bottom:1px solid var(--border); vertical-align:middle;}
+    .sol-tbl .num{text-align:right; font-variant-numeric:tabular-nums;}
+    .sol-tbl input{width:100%;}
+    .sol-wrap{overflow-x:auto;}
+    .sol-rmb{color:var(--sac,#7B4FC9); font-weight:700;}
+    .sol-cond{border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin-bottom:8px; background:var(--bg);}
+    .sol-cond.escolhida{border-color:var(--ok); background:var(--ok-soft);}
+    .sol-cond label.pick{display:flex; gap:8px; align-items:flex-start; cursor:pointer; margin:0;}
+    .sol-seg{display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; flex-wrap:wrap;}
+    .sol-seg button{border:none; background:var(--surface); padding:7px 14px; cursor:pointer; font-weight:600; color:var(--ink-soft);}
+    .sol-seg button.on{background:var(--ink); color:var(--surface);}
+    .sol-item{border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin-bottom:8px; background:var(--bg);}
+    .sol-item .g{display:grid; grid-template-columns:160px 1fr 110px; gap:8px; margin-top:8px;}
+    .sol-thumbs{display:flex; flex-wrap:wrap; gap:8px; margin-top:6px;}
+    .sol-thumbs .t{position:relative;}
+    .sol-thumbs img{width:84px; height:84px; object-fit:cover; border-radius:8px; border:1px solid var(--border); display:block; cursor:zoom-in; background:var(--bg);}
+    .sol-thumbs .x{position:absolute; top:-6px; right:-6px; width:22px; height:22px; border-radius:50%; border:none; background:var(--danger); color:#fff; cursor:pointer; font-size:13px; line-height:22px; padding:0;}
+    .sol-kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; margin-bottom:14px;}
+    .sol-kpi{background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px;}
+    .sol-kpi span{font-size:12px; color:var(--ink-faint); font-weight:600; text-transform:uppercase;}
+    .sol-kpi b{display:block; font-family:var(--font-display); font-size:28px; line-height:1.1; margin-top:4px;}
+    .sol-kpi small{color:var(--ink-soft); font-size:12.5px;}
+    .sol-bar{height:8px; border-radius:99px; background:var(--bg); overflow:hidden; flex:1; min-width:60px;}
+    .sol-bar i{display:block; height:100%; background:var(--ok);}
+    .sol-req{color:var(--danger);}
+    @media (max-width:640px){ .sol-item .g{grid-template-columns:1fr;} }
+  `;
+  document.head.appendChild(st);
+}
+
+// Miniaturas das imagens privadas (carrega os links temporários depois de desenhar).
+function solThumbsHTML(paths){
+  if(!paths || !paths.length) return '<div class="hint">Nenhuma imagem.</div>';
+  return `<div class="sol-thumbs">${paths.map(p => `<div class="t"><img data-solfoto="${gEsc(p)}" alt="imagem"></div>`).join('')}</div>`;
+}
+async function solCarregarThumbs(root){
+  const imgs = Array.from(root.querySelectorAll('img[data-solfoto]'));
+  if(!imgs.length) return;
+  try{
+    const urls = await solUrlsFotos(imgs.map(i => i.dataset.solfoto));
+    imgs.forEach(i => { const u = urls[i.dataset.solfoto]; if(u){ i.src = u; i.onclick = () => window.open(u, '_blank'); } });
+  }catch(e){ /* sem foto não trava a tela */ }
+}
+// Seletor de imagens locais (antes de enviar)
+function solSeletorHTML(id, lista, texto){
+  return `<input type="file" id="${id}" accept="image/*" multiple style="display:none">
+    <button type="button" class="ghost-btn" data-solpick="${id}">📎 ${texto || 'Anexar imagens'}</button>
+    <div class="sol-thumbs">${lista.map((f,i) => `<div class="t"><img src="${f.url}" alt=""><button class="x" data-solrm="${id}" data-ix="${i}" title="Remover">×</button></div>`).join('')}</div>`;
+}
+function solLigarSeletor(root, id, lista, redesenhar, msgEl){
+  const inp = root.querySelector('#'+id); if(!inp) return;
+  root.querySelector(`[data-solpick="${id}"]`).onclick = () => inp.click();
+  inp.onchange = (e) => {
+    const novos = Array.from(e.target.files||[]).filter(f => /^image\//.test(f.type) || /\.(jpe?g|png|webp|heic|heif)$/i.test(f.name));
+    const cabem = SOL_MAX_FOTOS - lista.length;
+    novos.slice(0, cabem).forEach(f => lista.push({file:f, url: URL.createObjectURL(f)}));
+    if(novos.length > cabem && msgEl) msgEl.innerHTML = `<div class="msg err">Máximo de ${SOL_MAX_FOTOS} imagens.</div>`;
+    redesenhar();
+  };
+  root.querySelectorAll(`[data-solrm="${id}"]`).forEach(b => b.onclick = () => { const i = Number(b.dataset.ix); URL.revokeObjectURL(lista[i].url); lista.splice(i,1); redesenhar(); });
+}
+
+// ---------- Tela principal ----------
+async function renderSolicitacoesCompra(box){
+  solCss();
+  STATE.solUI = STATE.solUI || {};
+  const ui = STATE.solUI;
+  box.innerHTML = `<div class="loading" style="min-height:160px">Carregando solicitações…</div>`;
+  let todas;
+  try{
+    await recarregarPrevisoesFrescas().catch(() => {});
+    todas = await listarSolicitacoes();
+  }catch(err){ box.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`; return; }
+  const redesenhar = () => renderSolicitacoesCompra(box);
+  const t = solTipo();
+  const lista = solVisiveis(todas);
+  const grupos = {
+    pendentes: lista.filter(solPendenteComigo),
+    andamento: lista.filter(s => ['cotacao','condicoes','cliente'].includes(solStatus(s))),
+    aceitas:   lista.filter(s => s.aceite && s.aceite.resultado === 'aceito'),
+    recusadas: lista.filter(s => solStatus(s) === 'recusado'),
+    todas:     lista,
+  };
+  const abas = [['pendentes','Pendentes comigo'],['andamento','Em andamento'],['aceitas','Aceitas / compra'],['recusadas','Recusadas'],['todas','Todas'],['resultado','📊 Resultado']];
+  if(!ui.vista) ui.vista = grupos.pendentes.length ? 'pendentes' : 'andamento';
+  const textoTopo = {
+    vendedor:'Peça ao comprador a cotação de itens novos para o seu cliente. Você acompanha aqui as condições e quando o produto chega.',
+    compras:'Cote na China (preço em RMB e quantidade mínima) e marque como comprado depois do aceite do cliente.',
+    gerente:'Defina as condições de venda em R$ para as cotações do comprador e acompanhe o resultado da equipe.',
+  }[t] || '';
+
+  box.innerHTML = `
+    <p class="hint" style="margin:0 0 14px; max-width:780px;">${textoTopo}</p>
+    <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:14px;">
+      ${t === 'vendedor' ? '<button class="primary-btn" id="solNova">+ Nova solicitação</button>' : ''}
+    </div>
+    <div class="tabs" style="flex-wrap:wrap; margin-bottom:14px;">
+      ${abas.map(([k,l]) => `<button class="tab-btn ${ui.vista===k?'active':''}" data-solvista="${k}">${l}${k!=='resultado' ? ` (${grupos[k].length})` : ''}</button>`).join('')}
+    </div>
+    <div id="solCorpo"></div>
+  `;
+  box.querySelectorAll('[data-solvista]').forEach(b => b.onclick = () => { ui.vista = b.dataset.solvista; redesenhar(); });
+  const bn = box.querySelector('#solNova'); if(bn) bn.onclick = () => abrirNovaSolicitacao(redesenhar);
+  const corpo = box.querySelector('#solCorpo');
+  if(ui.vista === 'resultado'){ renderSolResultado(corpo, lista, redesenhar); return; }
+  const arr = grupos[ui.vista] || [];
+  if(!arr.length){ corpo.innerHTML = `<div class="empty-state">${ui.vista==='pendentes' ? 'Nada pendente com você agora. 👍' : 'Nenhuma solicitação aqui.'}</div>`; return; }
+  corpo.innerHTML = `<div style="display:flex; flex-direction:column; gap:10px;">${arr.map(solCardHTML).join('')}</div>`;
+  corpo.querySelectorAll('[data-sol]').forEach(el => el.onclick = () => {
+    const s = (STATE.solicitacoes||[]).find(x => String(x.numero) === el.dataset.sol);
+    if(s) abrirDetalheSolicitacao(s, redesenhar);
+  });
+}
+function solCardHTML(s){
+  const fechado = solValorFechado(s), vez = solPendenteComigo(s);
+  return `<div class="sol-card ${vez?'vez':''}" data-sol="${s.numero}">
+    <div style="min-width:240px; flex:1;">
+      <div style="font-weight:700; font-size:15px;">${solNumeroFmt(s.numero)} · ${gEsc(s.cliente.codigo)} — ${gEsc(s.cliente.nome)}</div>
+      <div class="hint" style="margin-top:3px;">${solTipo()!=='vendedor' ? 'Vendedor: <b>'+gEsc(s.vendedorNome)+'</b> · ' : ''}Aberta em ${fmtDatePt(solDia(s.criadoEm))} · ${s.itens.length} ${s.itens.length>1?'itens':'item'}
+        ${s.embalagem ? ' <span class="sol-pill emb">Embalagem personalizada</span>' : ''}${s.itens.some(i=>i.novo) ? ' <span class="sol-pill">Item novo</span>' : ''}</div>
+      <div class="hint" style="margin-top:2px;">${s.itens.map(i => gEsc(i.codigo)+' ('+solNum(i.quantidade)+')').join(' · ')}</div>
+    </div>
+    <div style="text-align:right;">
+      ${solBadge(s)}
+      ${fechado ? `<div class="hint" style="margin-top:4px;">Fechado: <b>${fmtMoney(fechado)}</b></div>` : ''}
+      ${vez ? '<div style="margin-top:4px; color:var(--primary); font-weight:700; font-size:13px;">● Sua vez</div>' : ''}
+    </div>
+  </div>`;
+}
+
+// ---------- Resultado (aprovadas x recusadas) ----------
+function renderSolResultado(corpo, lista, redesenhar){
+  const ui = STATE.solUI;
+  const meses = [...new Set(lista.filter(s => s.aceite).map(s => solDia(s.aceite.em).slice(0,7)))].sort().reverse();
+  const f = lista.filter(s => !ui.mes || (s.aceite && solDia(s.aceite.em).slice(0,7) === ui.mes));
+  const resp = f.filter(s => s.aceite);
+  const ac = resp.filter(s => s.aceite.resultado === 'aceito'), rc = resp.filter(s => s.aceite.resultado === 'recusado');
+  const vAc = ac.reduce((a,s) => a + solValorFechado(s), 0), vRc = rc.reduce((a,s) => a + solValorRecusado(s), 0);
+  const conv = resp.length ? ac.length / resp.length * 100 : 0;
+  const abertas = lista.filter(s => !s.aceite).length;
+  let ranking = '';
+  if(solTipo() !== 'vendedor'){
+    const por = {};
+    f.forEach(s => {
+      const k = s.vendedorCodigo;
+      por[k] = por[k] || {nome: s.vendedorNome, total:0, ac:0, rc:0, v:0, vr:0};
+      por[k].total++;
+      if(s.aceite && s.aceite.resultado === 'aceito'){ por[k].ac++; por[k].v += solValorFechado(s); }
+      if(s.aceite && s.aceite.resultado === 'recusado'){ por[k].rc++; por[k].vr += solValorRecusado(s); }
+    });
+    const rows = Object.values(por).sort((a,b) => b.v - a.v);
+    ranking = `<div class="panel"><h3 style="margin:0 0 10px;">Por vendedor</h3><div class="sol-wrap"><table class="sol-tbl">
+      <thead><tr><th>Vendedor</th><th class="num">Solicitações</th><th class="num">Aceitas</th><th class="num">Recusadas</th><th class="num">Valor aceito</th><th class="num">Valor recusado</th><th>Conversão</th></tr></thead>
+      <tbody>${rows.map(r => { const c = (r.ac + r.rc) ? r.ac / (r.ac + r.rc) * 100 : 0;
+        return `<tr><td><b>${gEsc(r.nome)}</b></td><td class="num">${r.total}</td><td class="num">${r.ac}</td><td class="num">${r.rc}</td><td class="num"><b>${fmtMoney(r.v)}</b></td><td class="num">${fmtMoney(r.vr)}</td>
+          <td><div style="display:flex; gap:8px; align-items:center;"><div class="sol-bar"><i style="width:${c}%"></i></div><span>${c.toFixed(0)}%</span></div></td></tr>`; }).join('') || '<tr><td colspan="7" class="hint">Sem dados no período.</td></tr>'}</tbody></table></div></div>`;
+  }
+  corpo.innerHTML = `
+    <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:14px;">
+      <label class="field-label" style="margin:0;">Mês da resposta do cliente</label>
+      <select id="solMes" class="filter-select"><option value="">Todos</option>${meses.map(m => `<option value="${m}" ${m===ui.mes?'selected':''}>${m.split('-').reverse().join('/')}</option>`).join('')}</select>
+      <span class="hint">${solTipo()==='vendedor' ? 'Mostrando só os seus números.' : 'Mostrando toda a equipe.'}</span>
+    </div>
+    <div class="sol-kpis">
+      <div class="sol-kpi"><span>Aprovadas pelo cliente</span><b style="color:var(--ok)">${fmtMoney(vAc)}</b><small>${ac.length} solicitaç${ac.length===1?'ão':'ões'} · negócio futuro</small></div>
+      <div class="sol-kpi"><span>Recusadas</span><b style="color:var(--danger)">${fmtMoney(vRc)}</b><small>${rc.length} solicitaç${rc.length===1?'ão':'ões'} · pela menor condição oferecida</small></div>
+      <div class="sol-kpi"><span>Conversão</span><b>${conv.toFixed(0)}%</b><small>${ac.length} de ${resp.length} respondidas</small></div>
+      <div class="sol-kpi"><span>Em aberto</span><b>${abertas}</b><small>ainda sem resposta do cliente</small></div>
+    </div>
+    ${ranking}`;
+  corpo.querySelector('#solMes').onchange = (e) => { ui.mes = e.target.value; redesenhar(); };
+}
+
+// ---------- Nova solicitação (vendedor) ----------
+function abrirNovaSolicitacao(aoSalvar){
+  const meusClientes = (STATE.roster||[]).filter(c => c.vendedorCodigo === STATE.session.codigo);
+  const f = {cliente:'', embalagem:null, observacao:'', fotos:[], itens:[]};
+  const novoItem = () => ({id: genId(), temNaBase:null, codigo:'', descricao:'', quantidade:''});
+  f.itens.push(novoItem());
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `<div class="modal" style="max-width:720px; max-height:92vh; overflow-y:auto;"><div id="solNovaCorpo"></div></div>`;
+  document.body.appendChild(backdrop);
+  const corpo = backdrop.querySelector('#solNovaCorpo');
+  let enviando = false;
+  const fechar = () => { f.fotos.forEach(x => URL.revokeObjectURL(x.url)); backdrop.remove(); };
+
+  function nomeCliente(cod){ const c = (STATE.roster||[]).find(x => String(x.codigo) === String(cod).trim()); return c ? c.nome : ''; }
+  function desenhar(){
+    corpo.innerHTML = `
+      <h3>Nova solicitação de compra</h3>
+      <p class="hint" style="margin:-4px 0 14px;">Preencha os itens que o cliente quer. O comprador vai cotar na China.</p>
+      <label class="field-label">Cliente (número da sua carteira)</label>
+      <input type="text" id="snCliente" list="snClientesLista" placeholder="Digite o número ou nome" value="${gEsc(f.cliente)}" style="width:100%;">
+      <datalist id="snClientesLista">${meusClientes.map(c => `<option value="${c.codigo}">${gEsc(c.nome)}</option>`).join('')}</datalist>
+      <div class="hint" id="snClienteNome" style="margin:4px 0 14px;">${f.cliente ? (nomeCliente(f.cliente) ? '<span style="color:var(--ok)">✓ '+gEsc(nomeCliente(f.cliente))+'</span>' : '<span style="color:var(--warn)">Cliente não encontrado.</span>') : ''}</div>
+
+      <label class="field-label">Itens</label>
+      ${f.itens.map((it,ix) => `<div class="sol-item" data-ix="${ix}">
+        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+          <b>Item ${ix+1}</b><span class="hint">É um item que já temos na base?</span>
+          <div class="sol-seg"><button type="button" data-base="sim" class="${it.temNaBase===true?'on':''}">Sim</button><button type="button" data-base="nao" class="${it.temNaBase===false?'on':''}">Não, é novo</button></div>
+          ${f.itens.length > 1 ? '<button type="button" class="ghost-btn" data-del style="margin-left:auto; color:var(--danger);">Remover</button>' : ''}
+        </div>
+        ${it.temNaBase === null ? '' : `<div class="g">
+          <div><label class="field-label">${it.temNaBase ? 'Código' : 'Novo código'}</label><input type="text" data-f="codigo" value="${gEsc(it.codigo)}" style="width:100%; text-transform:uppercase;" placeholder="${it.temNaBase ? 'Digite o código' : 'Crie um código'}"></div>
+          <div><label class="field-label">Descrição</label><input type="text" data-f="descricao" value="${gEsc(it.descricao)}" style="width:100%;${it.temNaBase ? ' background:var(--bg);' : ''}" ${it.temNaBase ? 'readonly tabindex="-1" placeholder="Carrega sozinha pelo código"' : 'placeholder="Descreva o produto"'}>
+            <div class="hint" data-info style="margin-top:3px;">${it.temNaBase && it.codigo ? (it.descricao ? '<span style="color:var(--ok)">✓ Encontrado na base</span>' : '<span style="color:var(--warn)">Código não encontrado na base. Confira ou marque como item novo.</span>') : ''}</div></div>
+          <div><label class="field-label">Quantidade</label><input type="number" min="1" step="1" data-f="quantidade" value="${gEsc(it.quantidade)}" style="width:100%;"></div>
+        </div>`}
+      </div>`).join('')}
+      <button type="button" class="ghost-btn" id="snAddItem" style="margin-bottom:14px;">+ Adicionar item</button>
+
+      <label class="field-label">Terá embalagem personalizada?</label>
+      <div class="sol-seg" style="margin-bottom:14px;"><button type="button" data-emb="sim" class="${f.embalagem===true?'on':''}">Sim</button><button type="button" data-emb="nao" class="${f.embalagem===false?'on':''}">Não</button></div>
+
+      <label class="field-label">Observação — detalhes da cotação</label>
+      <textarea id="snObs" placeholder="Cor, material, especificação, volume mensal, prazo que o cliente precisa…">${gEsc(f.observacao)}</textarea>
+
+      <label class="field-label" style="margin-top:10px;">Fotos da solicitação (até ${SOL_MAX_FOTOS})</label>
+      ${solSeletorHTML('snFotos', f.fotos, 'Anexar fotos')}
+
+      <div id="snMsg"></div>
+      <div class="modal-actions" style="margin-top:14px;">
+        <button class="ghost-btn" id="snCancelar">Cancelar</button>
+        <button class="primary-btn" id="snEnviar">Enviar para o comprador</button>
+      </div>`;
+    const $ = (id) => corpo.querySelector('#'+id);
+    $('snCancelar').onclick = () => { if(!enviando) fechar(); };
+    $('snCliente').oninput = (e) => { f.cliente = e.target.value; const n = nomeCliente(f.cliente);
+      $('snClienteNome').innerHTML = f.cliente ? (n ? '<span style="color:var(--ok)">✓ '+gEsc(n)+'</span>' : '<span style="color:var(--warn)">Cliente não encontrado.</span>') : ''; };
+    $('snObs').oninput = (e) => f.observacao = e.target.value;
+    $('snAddItem').onclick = () => { f.itens.push(novoItem()); desenhar(); };
+    corpo.querySelectorAll('[data-emb]').forEach(b => b.onclick = () => { f.embalagem = b.dataset.emb === 'sim'; desenhar(); });
+    corpo.querySelectorAll('.sol-item').forEach(el => {
+      const it = f.itens[Number(el.dataset.ix)];
+      el.querySelectorAll('[data-base]').forEach(b => b.onclick = () => { it.temNaBase = b.dataset.base === 'sim'; it.codigo = ''; it.descricao = ''; desenhar(); });
+      const del = el.querySelector('[data-del]'); if(del) del.onclick = () => { f.itens.splice(Number(el.dataset.ix),1); desenhar(); };
+      el.querySelectorAll('[data-f]').forEach(inp => {
+        inp.oninput = () => {
+          it[inp.dataset.f] = inp.value;
+          if(inp.dataset.f === 'codigo' && it.temNaBase){
+            const achado = reclBuscarItem(inp.value);
+            it.descricao = achado ? achado.descricao : '';
+            el.querySelector('[data-f="descricao"]').value = it.descricao;
+            el.querySelector('[data-info]').innerHTML = !inp.value.trim() ? '' : (achado ? '<span style="color:var(--ok)">✓ Encontrado na base</span>' : '<span style="color:var(--warn)">Código não encontrado na base. Confira ou marque como item novo.</span>');
+          }
+        };
+      });
+    });
+    solLigarSeletor(corpo, 'snFotos', f.fotos, desenhar, $('snMsg'));
+    $('snEnviar').onclick = enviar;
+  }
+  async function enviar(){
+    if(enviando) return;
+    const msg = corpo.querySelector('#snMsg');
+    const erro = (m) => { msg.innerHTML = `<div class="msg err">${m}</div>`; };
+    const cli = (STATE.roster||[]).find(x => String(x.codigo) === String(f.cliente).trim());
+    if(!cli) return erro('Informe um cliente válido.');
+    for(const [ix,it] of f.itens.entries()){
+      if(it.temNaBase === null) return erro(`Item ${ix+1}: diga se o item já existe na base.`);
+      if(!it.codigo.trim()) return erro(`Item ${ix+1}: informe o código.`);
+      if(it.temNaBase && !reclBuscarItem(it.codigo)) return erro(`Item ${ix+1}: código não encontrado na base.`);
+      if(!it.temNaBase && !it.descricao.trim()) return erro(`Item ${ix+1}: escreva a descrição do item novo.`);
+      if(!(Number(it.quantidade) > 0)) return erro(`Item ${ix+1}: informe a quantidade.`);
+    }
+    if(f.embalagem === null) return erro('Diga se terá embalagem personalizada.');
+    if(!f.observacao.trim()) return erro('Escreva os detalhes da cotação na observação.');
+    enviando = true;
+    const btn = corpo.querySelector('#snEnviar'); btn.disabled = true;
+    try{
+      const fotos = await solEnviarVarias(f.fotos, btn, 'foto');
+      btn.textContent = 'Salvando...';
+      const {numero} = await solApi({acao:'proximo-numero'});
+      const agora = new Date().toISOString();
+      await salvarSolicitacao({
+        numero, criadoEm: agora, criadoPor: gQuem(),
+        vendedorCodigo: STATE.session.codigo, vendedorNome: STATE.session.nome,
+        cliente: {codigo: cli.codigo, nome: cli.nome},
+        embalagem: f.embalagem, observacao: f.observacao.trim(), fotos,
+        itens: f.itens.map(it => ({id: it.id, codigo: it.codigo.trim().toUpperCase(), descricao: it.descricao.trim(), novo: !it.temNaBase, quantidade: Number(it.quantidade)})),
+        historico: [{em: agora, por: gQuem(), acao: 'aberta'}],
+        versao: 0,
+      });
+      fechar();
+      STATE.solUI.vista = 'andamento';
+      if(aoSalvar) aoSalvar();
+    }catch(err){
+      enviando = false; btn.disabled = false; btn.textContent = 'Enviar para o comprador';
+      erro(gEsc(err.message));
+    }
+  }
+  desenhar();
+}
+
+// ---------- Detalhe + ações de cada etapa ----------
+const SOL_ACAO_TEXTO = {aberta:'Solicitação aberta', cotada:'Cotação enviada pelo comprador', condicoes:'Condições definidas', aceita:'Cliente aceitou', recusada:'Cliente recusou', comprada:'Marcada como comprada'};
+
+function abrirDetalheSolicitacao(s, aoMudar){
+  const t = solTipo();
+  const tmp = {};
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.style.alignItems = 'flex-start';
+  backdrop.innerHTML = `<div class="modal" style="max-width:900px; max-height:94vh; overflow-y:auto;"><div id="solDetCorpo"></div></div>`;
+  document.body.appendChild(backdrop);
+  const corpo = backdrop.querySelector('#solDetCorpo');
+  let salvando = false;
+  const limparLocais = () => { ['prints','comprovantes'].forEach(k => ((tmp.ac||{})[k]||[]).forEach(x => URL.revokeObjectURL(x.url))); };
+  const fechar = () => { limparLocais(); backdrop.remove(); };
+  backdrop.onclick = (e) => { if(e.target === backdrop && !salvando) fechar(); };
+
+  async function gravar(btn, rotulo, alterar){
+    if(salvando) return;
+    salvando = true; btn.disabled = true;
+    const msg = corpo.querySelector('#solDetMsg');
+    try{
+      const copia = JSON.parse(JSON.stringify(s));
+      await alterar(copia, btn);
+      btn.textContent = 'Salvando...';
+      await salvarSolicitacao(copia);
+      fechar();
+      if(aoMudar) aoMudar();
+    }catch(err){
+      salvando = false; btn.disabled = false; btn.textContent = rotulo;
+      if(msg) msg.innerHTML = `<div class="msg err">${gEsc(err.message)}</div>`;
+    }
+  }
+
+  function linhaTempo(st){
+    if(st === 'recusado') return `<div class="sol-tl">${['cotacao','condicoes','cliente'].map(k => `<span class="ok">${SOL_STATUS[k].label}</span>`).join('')}<span class="bad">✖ Recusado pelo cliente</span></div>`;
+    const idx = SOL_FLUXO.indexOf(st);
+    return `<div class="sol-tl">${SOL_FLUXO.map((k,i) => `<span class="${i<idx?'ok':i===idx?'cur':''}">${k==='aceito'?'Aceito':SOL_STATUS[k].label}</span>`).join('')}</div>`;
+  }
+  function secPedido(){
+    const veRmb = solVeRMB();
+    return `<div class="sol-sec"><h4>1 · Solicitação <small>por ${gEsc(s.vendedorNome)} em ${fmtDataHora(s.criadoEm)}</small></h4>
+      <div style="display:flex; flex-wrap:wrap; gap:6px 24px; margin-bottom:10px; font-size:14px;">
+        <div><span class="hint">Cliente</span><br>${gEsc(s.cliente.codigo)} — ${gEsc(s.cliente.nome)}</div>
+        <div><span class="hint">Embalagem personalizada</span><br>${s.embalagem ? '<b style="color:var(--accent)">Sim</b>' : 'Não'}</div>
+      </div>
+      <div class="sol-wrap"><table class="sol-tbl"><thead><tr><th>Código</th><th>Descrição</th><th class="num">Qtd</th>
+        ${s.cotacao && veRmb ? '<th class="num">RMB</th>' : ''}${s.cotacao ? '<th class="num">Qtd mínima</th>' : ''}${s.compra ? '<th>Status</th>' : ''}</tr></thead>
+      <tbody>${s.itens.map(i => { const q = s.cotacao && s.cotacao.itens ? s.cotacao.itens[i.id] : null; const si = solStatusItem(s,i);
+        return `<tr><td><b>${gEsc(i.codigo)}</b>${i.novo ? ' <span class="sol-pill">novo</span>' : ''}</td><td>${gEsc(i.descricao)}</td><td class="num">${solNum(i.quantidade)}</td>
+          ${s.cotacao && veRmb ? `<td class="num sol-rmb">${q ? solRMB(q.rmb) : '—'}</td>` : ''}${s.cotacao ? `<td class="num">${q ? solNum(q.minimo) : '—'}</td>` : ''}
+          ${s.compra ? `<td>${si ? `<span class="status-badge status-${SOL_STATUS[si.st].cls}">${SOL_STATUS[si.st].icon} ${SOL_STATUS[si.st].label} · ${gEsc(si.cont.nome)}${si.st==='acaminho' && si.cont.previsaoChegada ? ' · ' + fmtDatePt(si.cont.previsaoChegada) : ''}</span>` : '<span class="status-badge status-warn">🛒 Comprado</span>'}</td>` : ''}</tr>`; }).join('')}</tbody></table></div>
+      <div style="margin-top:10px;"><label class="field-label">Observação do vendedor</label><div style="white-space:pre-wrap; font-size:14px;">${gEsc(s.observacao)}</div></div>
+      <div style="margin-top:10px;"><label class="field-label">Fotos</label>${solThumbsHTML(s.fotos)}</div></div>`;
+  }
+  function secCotacao(st){
+    if(s.cotacao){
+      if(!solVeRMB()) return `<div class="sol-sec"><h4>2 · Cotação <small>${fmtDataHora(s.cotacao.em)}</small></h4><div class="hint">✓ Cotado pelo comprador. A quantidade mínima de cada item está na tabela acima.</div></div>`;
+      return `<div class="sol-sec"><h4>2 · Cotação <small>${gEsc((s.cotacao.por||{}).nome||'Compras')} em ${fmtDataHora(s.cotacao.em)}</small></h4>
+        <div class="hint">Preços em RMB e quantidade mínima estão na tabela acima. 🔒 O vendedor não vê o RMB.</div>
+        ${s.cotacao.obs ? `<div style="margin-top:8px;"><label class="field-label">Observação do comprador</label><div style="white-space:pre-wrap; font-size:14px;">${gEsc(s.cotacao.obs)}</div></div>` : ''}</div>`;
+    }
+    if(!(t === 'compras' && st === 'cotacao')) return `<div class="sol-sec"><h4>2 · Cotação <small>Compras</small></h4><div class="hint">⏳ Aguardando o comprador cotar na China.</div></div>`;
+    tmp.cot = tmp.cot || {obs:'', itens: Object.fromEntries(s.itens.map(i => [i.id, {rmb:'', minimo:''}]))};
+    return `<div class="sol-sec acao"><h4>2 · Sua cotação <small>🔒 o vendedor não vê o RMB</small></h4>
+      <div class="sol-wrap"><table class="sol-tbl"><thead><tr><th>Item</th><th class="num">Qtd pedida</th><th style="width:150px;">Preço RMB (unit.)</th><th style="width:140px;">Qtd mínima</th></tr></thead>
+      <tbody>${s.itens.map(i => `<tr><td><b>${gEsc(i.codigo)}</b><div class="hint">${gEsc(i.descricao)}</div></td><td class="num">${solNum(i.quantidade)}</td>
+        <td><input type="text" inputmode="decimal" data-cot="rmb" data-it="${i.id}" placeholder="10,00" value="${gEsc(tmp.cot.itens[i.id].rmb)}"></td>
+        <td><input type="number" min="1" step="1" data-cot="minimo" data-it="${i.id}" placeholder="${i.quantidade}" value="${gEsc(tmp.cot.itens[i.id].minimo)}"></td></tr>`).join('')}</tbody></table></div>
+      <label class="field-label" style="margin-top:10px;">Observação para o gerente (opcional)</label>
+      <textarea id="scObs" placeholder="Fornecedor, prazo de produção, custo da embalagem…">${gEsc(tmp.cot.obs)}</textarea>
+      <div class="modal-actions" style="margin-top:10px;"><button class="primary-btn" id="scEnviar">Enviar cotação para o gerente</button></div></div>`;
+  }
+  function condHTML(c, ix, escolhivel){
+    const v = solValorCond(s,c), sinal = solSinal(s,c);
+    const escolhida = s.aceite && s.aceite.resultado === 'aceito' && s.aceite.escolhida === ix;
+    const precos = s.condicoes.modo === 'item' ? `<div class="hint" style="margin-top:4px;">${s.itens.map(i => `${gEsc(i.codigo)}: <b>${fmtMoney((c.precos||{})[i.id])}</b>/un × ${solNum(i.quantidade)}`).join(' · ')}</div>` : '';
+    const topo = `<div style="display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center;"><b>${solDescCond(c)}</b><b>Total ${fmtMoney(v)}</b>
+      ${c.tipo === 'antecipado' ? `<span style="color:var(--accent); font-weight:600; font-size:13px;">Sinal ${c.pct}% = ${fmtMoney(sinal)}</span>` : ''}
+      ${escolhida ? '<span class="status-badge status-ok">✓ Escolhida pelo cliente</span>' : ''}</div>${precos}`;
+    if(escolhivel) return `<div class="sol-cond"><label class="pick"><input type="radio" name="solEscolha" value="${ix}" ${tmp.ac && tmp.ac.escolhida === ix ? 'checked' : ''}><div style="flex:1;">${topo}</div></label></div>`;
+    return `<div class="sol-cond ${escolhida?'escolhida':''}">${topo}</div>`;
+  }
+  const novaCond = (tipo) => ({tipo, pct: tipo==='antecipado' ? 100 : '', parcelas: (tipo==='prazo'||tipo==='ato') ? '30/60/90' : '', valorAto:'', texto:'', total:'', precos:{}});
+  function secCondicoes(st){
+    if(!s.cotacao) return '';
+    if(s.condicoes){
+      const vendedorEscolhendo = t === 'vendedor' && st === 'cliente';
+      return `<div class="sol-sec"><h4>3 · Condições de venda <small>${gEsc((s.condicoes.por||{}).nome||'Gerente')} em ${fmtDataHora(s.condicoes.em)} · ${s.condicoes.modo==='item' ? 'preço por item' : 'valor da solicitação toda'}</small></h4>
+        ${vendedorEscolhendo ? '<div class="hint">Apresente ao cliente e marque abaixo qual condição ele aceitou.</div>' : s.condicoes.lista.map((c,ix) => condHTML(c,ix,false)).join('')}
+        ${s.condicoes.obs ? `<div style="margin-top:8px;"><label class="field-label">Observação do gerente</label><div style="white-space:pre-wrap; font-size:14px;">${gEsc(s.condicoes.obs)}</div></div>` : ''}</div>`;
+    }
+    if(!(t === 'gerente' && st === 'condicoes')) return `<div class="sol-sec"><h4>3 · Condições de venda <small>Gerente</small></h4><div class="hint">📝 Aguardando o gerente definir as condições em R$.</div></div>`;
+    tmp.cond = tmp.cond || {modo:'item', obs:'', lista:[novaCond('antecipado')]};
+    const totalRmb = s.itens.reduce((a,i) => a + ((s.cotacao.itens[i.id]||{}).rmb||0) * i.quantidade, 0);
+    return `<div class="sol-sec acao"><h4>3 · Defina as condições em R$</h4>
+      <div class="hint" style="margin-bottom:10px;">Cotação: ${s.itens.map(i => `<b>${gEsc(i.codigo)}</b> <span class="sol-rmb">${solRMB((s.cotacao.itens[i.id]||{}).rmb)}</span> (mín. ${solNum((s.cotacao.itens[i.id]||{}).minimo)})`).join(' · ')} · Total ${solRMB(totalRmb)}</div>
+      <label class="field-label">Como vai precificar?</label>
+      <div class="sol-seg" style="margin-bottom:12px;"><button type="button" data-modo="item" class="${tmp.cond.modo==='item'?'on':''}">Preço por item (R$/un)</button><button type="button" data-modo="unica" class="${tmp.cond.modo==='unica'?'on':''}">Valor da solicitação toda</button></div>
+      ${tmp.cond.lista.map((c,ix) => `<div class="sol-cond" data-cix="${ix}">
+        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end;">
+          <div style="min-width:200px;"><label class="field-label">Condição ${ix+1}</label><select data-c="tipo" class="filter-select" style="width:100%;">${Object.entries(SOL_TIPOS_COND).map(([k,l]) => `<option value="${k}" ${c.tipo===k?'selected':''}>${l}</option>`).join('')}</select></div>
+          ${c.tipo==='antecipado' ? `<div style="width:120px;"><label class="field-label">% antecipado</label><input type="number" min="1" max="100" data-c="pct" value="${gEsc(c.pct)}" style="width:100%;"></div>` : ''}
+          ${c.tipo==='prazo' || c.tipo==='ato' ? `<div style="width:140px;"><label class="field-label">Parcelas</label><input type="text" data-c="parcelas" value="${gEsc(c.parcelas)}" placeholder="30/60/90" style="width:100%;"></div>` : ''}
+          ${c.tipo==='ato' ? `<div style="width:150px;"><label class="field-label">Valor no ato (R$)</label><input type="text" inputmode="decimal" data-c="valorAto" value="${gEsc(c.valorAto)}" placeholder="2000,00" style="width:100%;"></div>` : ''}
+          ${c.tipo==='livre' ? `<div style="flex:1; min-width:180px;"><label class="field-label">Descreva</label><input type="text" data-c="texto" value="${gEsc(c.texto)}" style="width:100%;"></div>` : ''}
+          ${tmp.cond.lista.length > 1 ? '<button type="button" class="ghost-btn" data-cdel style="margin-left:auto; color:var(--danger);">Remover</button>' : ''}
+        </div>
+        <div style="margin-top:8px;">${tmp.cond.modo === 'item'
+          ? `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:8px;">${s.itens.map(i => `<div><label class="field-label">${gEsc(i.codigo)} — R$/un</label><input type="text" inputmode="decimal" data-preco="${i.id}" value="${gEsc(c.precos[i.id] ?? '')}" placeholder="18,00" style="width:100%;"></div>`).join('')}</div>`
+          : `<div style="width:220px;"><label class="field-label">Valor total da solicitação (R$)</label><input type="text" inputmode="decimal" data-c="total" value="${gEsc(c.total)}" placeholder="36000,00" style="width:100%;"></div>`}
+          <div class="hint" data-prev style="margin-top:6px;"></div></div>
+      </div>`).join('')}
+      <button type="button" class="ghost-btn" id="sgAdd">+ Adicionar condição</button>
+      <label class="field-label" style="margin-top:12px;">Observação para o vendedor (opcional)</label>
+      <textarea id="sgObs" placeholder="Validade da proposta, frete, prazo de entrega…">${gEsc(tmp.cond.obs)}</textarea>
+      <div class="modal-actions" style="margin-top:10px;"><button class="primary-btn" id="sgEnviar">Enviar condições para o vendedor</button></div></div>`;
+  }
+  function secAceite(st){
+    if(!s.condicoes) return '';
+    if(s.aceite){
+      if(s.aceite.resultado === 'recusado') return `<div class="sol-sec"><h4>4 · Resposta do cliente <small>${fmtDataHora(s.aceite.em)}</small></h4>
+        <span class="status-badge status-danger">✖ Recusado</span><div style="margin-top:8px; font-size:14px;"><span class="hint">Motivo:</span> ${gEsc(s.aceite.motivo)}</div></div>`;
+      const c = s.condicoes.lista[s.aceite.escolhida];
+      return `<div class="sol-sec"><h4>4 · Resposta do cliente <small>${fmtDataHora(s.aceite.em)}</small></h4>
+        <span class="status-badge status-ok">✓ Aceito</span> <b style="margin-left:6px;">${solDescCond(c)} — ${fmtMoney(solValorCond(s,c))}</b>
+        ${s.aceite.obs ? `<div style="margin-top:8px; font-size:14px;">${gEsc(s.aceite.obs)}</div>` : ''}
+        <div style="margin-top:10px;"><label class="field-label">Print do aceite do cliente</label>${solThumbsHTML(s.aceite.prints)}</div>
+        <div style="margin-top:10px;"><label class="field-label">Comprovantes / outras imagens</label>${solThumbsHTML(s.aceite.comprovantes)}</div></div>`;
+    }
+    if(!(t === 'vendedor' && st === 'cliente')) return `<div class="sol-sec"><h4>4 · Resposta do cliente <small>Vendedor</small></h4><div class="hint">🤝 Aguardando o vendedor apresentar ao cliente.</div></div>`;
+    tmp.ac = tmp.ac || {resultado:null, escolhida:null, prints:[], comprovantes:[], obs:'', motivo:''};
+    const cEsc = tmp.ac.escolhida != null ? s.condicoes.lista[tmp.ac.escolhida] : null;
+    const exigeComp = cEsc && cEsc.tipo === 'antecipado';
+    return `<div class="sol-sec acao"><h4>4 · O cliente aceitou?</h4>
+      <div class="sol-seg" style="margin-bottom:12px;"><button type="button" data-res="aceito" class="${tmp.ac.resultado==='aceito'?'on':''}">✓ Aceitou</button><button type="button" data-res="recusado" class="${tmp.ac.resultado==='recusado'?'on':''}">✖ Recusou</button></div>
+      ${tmp.ac.resultado === 'aceito' ? `
+        <label class="field-label">Qual condição o cliente escolheu?</label>
+        ${s.condicoes.lista.map((c,ix) => condHTML(c,ix,true)).join('')}
+        <label class="field-label" style="margin-top:12px;">Print do aceite do cliente <span class="sol-req">*</span></label>
+        ${solSeletorHTML('saPrints', tmp.ac.prints, 'Anexar print do aceite')}
+        <label class="field-label" style="margin-top:12px;">Comprovante de pagamento / outras imagens ${exigeComp ? '<span class="sol-req">* obrigatório (antecipado)</span>' : '(opcional)'}</label>
+        ${solSeletorHTML('saComp', tmp.ac.comprovantes, 'Anexar comprovante ou outras imagens')}
+        <label class="field-label" style="margin-top:12px;">Observação (opcional)</label><textarea id="saObs">${gEsc(tmp.ac.obs)}</textarea>` : ''}
+      ${tmp.ac.resultado === 'recusado' ? `<label class="field-label">Motivo da recusa <span class="sol-req">*</span></label><textarea id="saMotivo" placeholder="Preço, prazo, comprou em outro lugar…">${gEsc(tmp.ac.motivo)}</textarea>` : ''}
+      ${tmp.ac.resultado ? `<div class="modal-actions" style="margin-top:10px;"><button class="primary-btn" id="saEnviar" ${tmp.ac.resultado==='recusado' ? 'style="background:var(--danger); border-color:var(--danger);"' : ''}>${tmp.ac.resultado==='aceito' ? 'Confirmar aceite e enviar para compra' : 'Registrar recusa'}</button></div>` : ''}</div>`;
+  }
+  function secCompra(){
+    if(!s.aceite || s.aceite.resultado !== 'aceito') return '';
+    if(s.compra) return `<div class="sol-sec"><h4>5 · Compra <small>${gEsc((s.compra.por||{}).nome||'Compras')} em ${fmtDataHora(s.compra.em)}</small></h4>
+      <div class="hint">🛒 Comprado. Fica <b>A caminho</b> quando o código entrar num container da Previsão de Compras e <b>Chegou</b> quando o comprador der entrada no container.</div></div>`;
+    if(t === 'compras') return `<div class="sol-sec acao"><h4>5 · Comprar</h4><div class="hint" style="margin-bottom:10px;">Cliente aceitou. Depois de fechar o pedido com o fornecedor, marque como comprado.</div>
+      <div class="modal-actions"><button class="primary-btn" id="spComprar">🛒 Marcar como comprado</button></div></div>`;
+    return `<div class="sol-sec"><h4>5 · Compra <small>Compras</small></h4><div class="hint">✅ Aguardando o comprador fechar o pedido na China.</div></div>`;
+  }
+  function secHistorico(){
+    const h = s.historico || [];
+    if(!h.length) return '';
+    return `<details style="margin-top:4px;"><summary class="hint" style="cursor:pointer;">Histórico (${h.length})</summary>
+      <div style="margin-top:8px; font-size:13px;">${h.map(x => `<div>${fmtDataHora(x.em)} · <b>${gEsc((x.por||{}).nome||'')}</b> — ${SOL_ACAO_TEXTO[x.acao]||gEsc(x.acao)}</div>`).join('')}</div></details>`;
+  }
+
+  function desenhar(){
+    const st = solStatus(s);
+    corpo.innerHTML = `
+      <div style="display:flex; gap:12px; align-items:flex-start; margin-bottom:12px;">
+        <div><h3 style="margin:0 0 6px;">Solicitação ${solNumeroFmt(s.numero)}</h3>${solBadge(s)}</div>
+        <button class="ghost-btn" id="solFechar" style="margin-left:auto;">Fechar</button>
+      </div>
+      ${linhaTempo(st)}
+      ${secPedido()}${secCotacao(st)}${secCondicoes(st)}${secAceite(st)}${secCompra()}
+      <div id="solDetMsg"></div>
+      ${secHistorico()}`;
+    const $ = (id) => corpo.querySelector('#'+id);
+    $('solFechar').onclick = () => { if(!salvando) fechar(); };
+    solCarregarThumbs(corpo);
+
+    // Comprador: cotação
+    corpo.querySelectorAll('[data-cot]').forEach(inp => inp.oninput = () => { tmp.cot.itens[inp.dataset.it][inp.dataset.cot] = inp.value; });
+    if($('scObs')) $('scObs').oninput = (e) => tmp.cot.obs = e.target.value;
+    if($('scEnviar')) $('scEnviar').onclick = () => {
+      const itens = {};
+      for(const i of s.itens){
+        const r = solParseNum(tmp.cot.itens[i.id].rmb), m = Number(tmp.cot.itens[i.id].minimo);
+        if(!(r > 0)) return $('solDetMsg').innerHTML = `<div class="msg err">Informe o preço em RMB de ${gEsc(i.codigo)}.</div>`;
+        if(!(m > 0)) return $('solDetMsg').innerHTML = `<div class="msg err">Informe a quantidade mínima de ${gEsc(i.codigo)}.</div>`;
+        itens[i.id] = {rmb:r, minimo:m};
+      }
+      gravar($('scEnviar'), 'Enviar cotação para o gerente', (c) => {
+        c.cotacao = {em: new Date().toISOString(), por: gQuem(), obs: tmp.cot.obs.trim(), itens};
+        solHistorico(c, 'cotada');
+      });
+    };
+
+    // Gerente: condições
+    corpo.querySelectorAll('[data-modo]').forEach(b => b.onclick = () => { tmp.cond.modo = b.dataset.modo; desenhar(); });
+    if($('sgAdd')) $('sgAdd').onclick = () => { tmp.cond.lista.push(novaCond('avista')); desenhar(); };
+    if($('sgObs')) $('sgObs').oninput = (e) => tmp.cond.obs = e.target.value;
+    corpo.querySelectorAll('[data-cix]').forEach(el => {
+      const c = tmp.cond.lista[Number(el.dataset.cix)];
+      const previa = () => {
+        const fake = {...c, total: solParseNum(c.total), precos: Object.fromEntries(Object.entries(c.precos).map(([k,v]) => [k, solParseNum(v)]))};
+        const v = solValorCond({...s, condicoes:{modo: tmp.cond.modo}}, fake);
+        el.querySelector('[data-prev]').innerHTML = v > 0 ? `Total: <b>${fmtMoney(v)}</b>${c.tipo==='antecipado' && Number(c.pct) > 0 ? ` · Sinal antecipado ${c.pct}%: <b style="color:var(--accent)">${fmtMoney(v * Number(c.pct) / 100)}</b>` : ''}` : '';
+      };
+      el.querySelectorAll('[data-c]').forEach(inp => {
+        inp.oninput = () => { c[inp.dataset.c] = inp.value; previa(); };
+        if(inp.dataset.c === 'tipo') inp.onchange = () => { const precos = c.precos, total = c.total; Object.assign(c, novaCond(inp.value), {precos, total}); desenhar(); };
+      });
+      el.querySelectorAll('[data-preco]').forEach(inp => inp.oninput = () => { c.precos[inp.dataset.preco] = inp.value; previa(); });
+      const del = el.querySelector('[data-cdel]'); if(del) del.onclick = () => { tmp.cond.lista.splice(Number(el.dataset.cix),1); desenhar(); };
+      previa();
+    });
+    if($('sgEnviar')) $('sgEnviar').onclick = () => {
+      const erro = (m) => { $('solDetMsg').innerHTML = `<div class="msg err">${m}</div>`; };
+      const lista = [];
+      for(const [ix,c] of tmp.cond.lista.entries()){
+        const o = {tipo: c.tipo};
+        if(c.tipo === 'antecipado'){ o.pct = Number(c.pct); if(!(o.pct > 0 && o.pct <= 100)) return erro(`Condição ${ix+1}: informe a % antecipada (1 a 100).`); }
+        if(c.tipo === 'prazo' || c.tipo === 'ato'){ o.parcelas = String(c.parcelas||'').trim(); if(!o.parcelas) return erro(`Condição ${ix+1}: informe as parcelas.`); }
+        if(c.tipo === 'ato'){ o.valorAto = solParseNum(c.valorAto); if(!(o.valorAto > 0)) return erro(`Condição ${ix+1}: informe o valor no ato.`); }
+        if(c.tipo === 'livre'){ o.texto = String(c.texto||'').trim(); if(!o.texto) return erro(`Condição ${ix+1}: descreva a condição.`); }
+        if(tmp.cond.modo === 'item'){
+          o.precos = {};
+          for(const i of s.itens){ const p = solParseNum(c.precos[i.id]); if(!(p > 0)) return erro(`Condição ${ix+1}: informe o preço de ${gEsc(i.codigo)}.`); o.precos[i.id] = p; }
+        } else { o.total = solParseNum(c.total); if(!(o.total > 0)) return erro(`Condição ${ix+1}: informe o valor total.`); }
+        lista.push(o);
+      }
+      gravar($('sgEnviar'), 'Enviar condições para o vendedor', (cp) => {
+        cp.condicoes = {em: new Date().toISOString(), por: gQuem(), modo: tmp.cond.modo, obs: tmp.cond.obs.trim(), lista};
+        solHistorico(cp, 'condicoes');
+      });
+    };
+
+    // Vendedor: aceite / recusa
+    corpo.querySelectorAll('[data-res]').forEach(b => b.onclick = () => { tmp.ac.resultado = b.dataset.res; desenhar(); });
+    corpo.querySelectorAll('input[name=solEscolha]').forEach(r => r.onchange = () => { tmp.ac.escolhida = Number(r.value); desenhar(); });
+    if($('saObs')) $('saObs').oninput = (e) => tmp.ac.obs = e.target.value;
+    if($('saMotivo')) $('saMotivo').oninput = (e) => tmp.ac.motivo = e.target.value;
+    if(tmp.ac){ solLigarSeletor(corpo, 'saPrints', tmp.ac.prints, desenhar, $('solDetMsg')); solLigarSeletor(corpo, 'saComp', tmp.ac.comprovantes, desenhar, $('solDetMsg')); }
+    if($('saEnviar')) $('saEnviar').onclick = () => {
+      const erro = (m) => { $('solDetMsg').innerHTML = `<div class="msg err">${m}</div>`; };
+      if(tmp.ac.resultado === 'recusado'){
+        if(!tmp.ac.motivo.trim()) return erro('Escreva o motivo da recusa.');
+        return gravar($('saEnviar'), 'Registrar recusa', (cp) => {
+          cp.aceite = {em: new Date().toISOString(), por: gQuem(), resultado:'recusado', motivo: tmp.ac.motivo.trim()};
+          solHistorico(cp, 'recusada');
+        });
+      }
+      if(tmp.ac.escolhida == null) return erro('Escolha qual condição o cliente aceitou.');
+      if(!tmp.ac.prints.length) return erro('Anexe o print do aceite do cliente.');
+      if(s.condicoes.lista[tmp.ac.escolhida].tipo === 'antecipado' && !tmp.ac.comprovantes.length) return erro('Condição antecipada: anexe o comprovante de pagamento.');
+      gravar($('saEnviar'), 'Confirmar aceite e enviar para compra', async (cp, btn) => {
+        const prints = await solEnviarVarias(tmp.ac.prints, btn, 'print');
+        const comprovantes = await solEnviarVarias(tmp.ac.comprovantes, btn, 'imagem');
+        cp.aceite = {em: new Date().toISOString(), por: gQuem(), resultado:'aceito', escolhida: tmp.ac.escolhida, prints, comprovantes, obs: tmp.ac.obs.trim()};
+        solHistorico(cp, 'aceita');
+      });
+    };
+
+    // Comprador: comprado
+    if($('spComprar')) $('spComprar').onclick = () => gravar($('spComprar'), '🛒 Marcar como comprado', (cp) => {
+      cp.compra = {em: new Date().toISOString(), por: gQuem()};
+      solHistorico(cp, 'comprada');
+    });
+  }
+  desenhar();
+}
+
 // ---------- Tela da aba Compras (sub-abas) ----------
 async function renderComprasModulo(main, rerender){
   STATE.comprasUI = STATE.comprasUI || {};
@@ -2532,8 +3266,9 @@ async function renderComprasModulo(main, rerender){
   const abas = comprasTemAbasEstoque()
     ? [{id:'previsao', label:'Previsão de Compras'}, {id:'saldo', label:'Saldo de Estoque'}, {id:'sugestao', label:'Sugestão de Compras'}, {id:'reclamacao', label:'Reclamação'}]
     : [{id:'previsao', label:'Previsão de Compras'}];
+  if(solPodeUsar()) abas.splice(1, 0, {id:'solicitacao', label:'Solicitação de Compra'});
   if(!abas.some(a => a.id === ui.aba)) ui.aba = abas[0].id;
-  const titulos = {previsao:'Previsão de Compras', saldo:'Saldo de Estoque', sugestao:'Sugestão de Compras', reclamacao:'Reclamação de item'};
+  const titulos = {previsao:'Previsão de Compras', solicitacao:'Solicitação de Compra — Itens Novos', saldo:'Saldo de Estoque', sugestao:'Sugestão de Compras', reclamacao:'Reclamação de item'};
 
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Compras</div><h2>${titulos[ui.aba]}</h2></div>
@@ -2548,6 +3283,7 @@ async function renderComprasModulo(main, rerender){
   const box = main.querySelector('#comprasConteudo');
   if(ui.aba === 'saldo' || ui.aba === 'sugestao') await renderComprasEstoque(box, ui.aba);
   else if(ui.aba === 'reclamacao') await renderReclamacoes(box);
+  else if(ui.aba === 'solicitacao') await renderSolicitacoesCompra(box);
   else await renderPrevisaoCompras(box);
 }
 

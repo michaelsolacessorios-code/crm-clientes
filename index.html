@@ -1117,6 +1117,14 @@ function painelProdutosCadHTML(){
     <div id="msgProdutosCad"></div>
   </div>`;
 }
+async function montarProdutosCadEm(main){
+  const ref = main.querySelector('.import-panel'); if(!ref) return;
+  const wrap = document.createElement('div'); wrap.id = 'produtosCadWrap';
+  wrap.innerHTML = '<div class="hint" style="margin-bottom:18px">Carregando cadastro de produtos…</div>';
+  ref.parentNode.insertBefore(wrap, ref);
+  await carregarProdutosCad(true);
+  wrap.innerHTML = painelProdutosCadHTML(); ligarPainelProdutosCad(main);
+}
 function ligarPainelProdutosCad(main){
   const btn = main.querySelector('#btnProdutosCad'); if(!btn) return;
   btn.onclick = async () => {
@@ -1138,7 +1146,6 @@ function ligarPainelProdutosCad(main){
 
 async function renderConexoes(main){
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
-  await carregarProdutosCad(true);
   const presenca = (await safeGet('crm:presenca')) || {};
   const agora = Date.now();
   const sessoes = Object.entries(presenca)
@@ -1146,7 +1153,6 @@ async function renderConexoes(main){
     .sort((a,b) => b.ultimoPing - a.ultimoPing);
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Conexões</div><h2>Quem está usando o CRM agora</h2></div>
-    <div id="produtosCadWrap">${painelProdutosCadHTML()}</div>
     <div class="panel">
       <p class="hint">Atualiza sozinho a cada 30s. "Forçar atualização" recarrega a página da pessoa na hora, sem ela precisar fazer nada — útil depois de qualquer correção no banco.</p>
       ${sessoes.length===0 ? `<div class="empty-state">Ninguém conectado no momento.</div>` : `
@@ -1167,7 +1173,6 @@ async function renderConexoes(main){
       `}
     </div>
   `;
-  ligarPainelProdutosCad(main);
   main.querySelectorAll('.btnForcarAtualizacao').forEach(btn => {
     btn.onclick = async () => {
       btn.disabled = true; btn.textContent = 'Enviando...';
@@ -8483,13 +8488,10 @@ function renderVendorDashboard(main){
     ritmoCls = bateu ? 'ok' : (pctVendasReal >= 90 ? 'warn' : 'bad');
     ritmoSub = 'mês fechado';
   } else {
-    const diff = p.pctMedioIndicadores - p.pctMesPassado, pts = Math.abs(diff);
-    if(bateu){ ritmoTxt = 'Meta batida, agora é saldo'; ritmoCls = 'ok'; }
-    else if(diff === 0){ ritmoTxt = 'No ritmo do mês'; ritmoCls = 'ok'; }
-    else if(diff > 0){ ritmoTxt = `${pts} ${pts===1?'pt':'pts'} à frente do ritmo`; ritmoCls = 'ok'; }
-    else if(diff > -15){ ritmoTxt = `${pts} ${pts===1?'pt':'pts'} atrás do ritmo`; ritmoCls = 'warn'; }
-    else { ritmoTxt = `${pts} pts atrás: hora de acelerar`; ritmoCls = 'bad'; }
-    ritmoSub = `${p.pctMedioIndicadores}% feito · ${p.pctMesPassado}% do mês`;
+    // Painel do vendedor: mostra só a % da meta de vendas (sem "ritmo").
+    if(!s.metaVendas){ ritmoTxt = 'Meta ainda não definida'; ritmoCls = 'warn'; ritmoSub = ''; }
+    else if(bateu){ ritmoTxt = `${pctVendasReal}% da meta · batida!`; ritmoCls = 'ok'; ritmoSub = 'agora é saldo'; }
+    else { ritmoTxt = `${pctVendasReal}% da meta`; ritmoCls = 'warn'; ritmoSub = `faltam ${fmtMoney(Math.max(0, s.metaVendas - s.valorVendas))}`; }
   }
 
   // Tabela de metas: os mesmos 5 indicadores dos cards antigos.
@@ -8523,7 +8525,7 @@ function renderVendorDashboard(main){
   ];
   let escalacaoHTML;
   if(!s.mesEhAtual){
-    escalacaoHTML = `<div class="pl-vazio"><b>Mês fechado</b>A escalação aparece só no mês atual. Volte para o mês atual no seletor acima.</div>`;
+    escalacaoHTML = `<div class="pl-vazio"><b>Mês fechado</b>A sugestão aparece só no mês atual. Volte para o mês atual no seletor acima.</div>`;
   } else if(escalados.length === 0){
     escalacaoHTML = `<div class="pl-vazio"><b>${s.hojeTotal ? 'Ninguém com retorno ou crédito livre hoje' : 'Sem lista para hoje'}</b>${s.hojeTotal ? 'Siga a lista completa em Contatos hoje.' : 'Fim de semana ou dia sem clientes fixos.'}</div>`;
   } else {
@@ -8575,7 +8577,7 @@ function renderVendorDashboard(main){
         <span class="x" aria-hidden="true">×</span>
         <div class="lado"><span class="lab">Meta</span><span class="val dim">${s.metaVendas ? placarMil(s.metaVendas) : 'sem meta'}</span></div>
       </div>
-      <div class="pl-pace"><b class="${ritmoCls}">${ritmoTxt}</b><span class="dim">${ritmoSub}</span></div>
+      <div class="pl-pace"><b class="${ritmoCls}">${ritmoTxt}</b><span class="dim">${ritmoSub}</span>${s.mesEhAtual && s.hojeTotal ? `<b class="${s.hojeFeitos >= s.hojeTotal ? 'ok' : 'bad'}" style="margin-top:8px; font-size:15px;">${s.hojeFeitos} de ${s.hojeTotal} contatos</b><span class="dim">hoje</span>` : ''}</div>
     </div>
     ${placarLinhaTempoHTML(anoSel, mesSel, diasNoMes, diaAtual, s.mesEhAtual, vendasPorDia)}
 
@@ -8583,23 +8585,23 @@ function renderVendorDashboard(main){
       <div class="pl-dica">
         <p>${p.mensagem}</p>
         ${dicas.length ? `<details><summary>Dicas para hoje (${dicas.length})</summary><ul>${dicas.map(d => `<li>${d}</li>`).join('')}</ul></details>` : ''}
-      </div>` : `<p class="hint" style="margin-bottom:16px;">Vendo dados de um mês passado: só os números do mês aparecem aqui. Volte pro mês atual pra ver a escalação e as dicas.</p>`}
+      </div>` : `<p class="hint" style="margin-bottom:16px;">Vendo dados de um mês passado: só os números do mês aparecem aqui. Volte pro mês atual pra ver a sugestão de hoje e as dicas.</p>`}
 
     <div class="pl-cols">
       <div class="pl-stack">
         <section class="pl-painel">
-          <div class="pl-ph"><h3>Tabela de metas</h3><span>clique numa linha para ver o detalhe · ${s.mesEhAtual ? 'pts vs. ritmo do mês' : 'resultado do mês'}</span></div>
-          <table class="pl-goals"><thead><tr><th>Indicador</th><th>Feito</th><th>Meta</th><th class="pl-esconde">%</th><th>${s.mesEhAtual?'Ritmo':'Resultado'}</th></tr></thead><tbody>
+          <div class="pl-ph"><h3>Tabela de metas</h3><span>clique numa linha para ver o detalhe · ${s.mesEhAtual ? '% da meta' : 'resultado do mês'}</span></div>
+          <table class="pl-goals"><thead><tr><th>Indicador</th><th>Feito</th><th>Meta</th>${s.mesEhAtual ? '<th>%</th>' : '<th class="pl-esconde">%</th><th>Resultado</th>'}</tr></thead><tbody>
             ${linhas.map((l,i) => `<tr class="pl-ind" data-ind="${['vendas','contato','posit','skus','volume'][i]}" tabindex="0">
               <td>${l.nome}${l.sub?`<span class="pl-sm">${l.sub}</span>`:''}${l.pct!==null?`<span class="pl-meter"><i class="${l.pct>=100?'cheio':''}" style="width:${Math.min(100,l.pct)}%"></i></span>`:''}</td>
               <td>${l.feito}</td><td>${l.meta!==null?l.meta:'<span class="pl-na">—</span>'}</td>
-              <td class="pl-esconde">${l.pct!==null?l.pct+'%':'—'}</td><td>${ritmoCel(l.pct)}</td></tr>`).join('')}
+              ${s.mesEhAtual ? `<td><b class="${l.pct===null?'':(l.pct>=100?'pl-up':'')}">${l.pct!==null?l.pct+'%':'<span class="pl-na">sem meta</span>'}</b></td>` : `<td class="pl-esconde">${l.pct!==null?l.pct+'%':'—'}</td><td>${ritmoCel(l.pct)}</td>`}</tr>`).join('')}
           </tbody></table>
         </section>
         <div class="progress-row pl-extras">${extras}</div>
       </div>
       <section class="pl-painel pl-escalacao">
-        <div class="pl-ph"><h3>Escalação de hoje</h3><span>${s.mesEhAtual ? `${nomeDia} · ${s.hojeFeitos} de ${s.hojeTotal} feitos` : ''}</span></div>
+        <div class="pl-ph"><h3>Sugestão hoje</h3><span>${s.mesEhAtual ? `${nomeDia} · ${s.hojeFeitos} de ${s.hojeTotal} feitos` : ''}</span></div>
         ${escalacaoHTML}
         ${s.mesEhAtual ? `<button type="button" class="pl-mais" id="plVerHoje">Ver todos os contatos de hoje</button>` : ''}
       </section>
@@ -10187,7 +10189,7 @@ async function renderConfiguracoes(main){
   });
   const box = main.querySelector('#cfgConteudo');
   if(ui.aba === 'conexoes') await renderConexoes(box);
-  else if(ui.aba === 'importacoes') renderManagerImportacoes(box);
+  else if(ui.aba === 'importacoes'){ renderManagerImportacoes(box); await montarProdutosCadEm(box); }
   else if(ui.aba === 'admin') await renderManagerAdmin(box);
   else renderManagerCredenciais(box);
 }
@@ -10637,6 +10639,12 @@ function renderManagerOverview(main){
     if(!mesEhAtual) return r.pctV >= 100 ? '<span class="pl-up">Bateu</span>' : `<span class="pl-dn">${r.pctV}%</span>`;
     return r.ritmo >= 0 ? `<span class="pl-up">+${r.ritmo}</span>` : `<span class="pl-dn">−${Math.abs(r.ritmo)}</span>`;
   };
+  // Contatos de hoje: feitos / agenda do dia. Verde se fez tudo (ou mais), vermelho se ficou abaixo.
+  const contatosHojeCel = (r) => {
+    const feitos = r.s.hojeFeitos || 0, total = r.s.hojeTotal || 0;
+    if(!total && !feitos) return '<span class="pl-na">sem agenda</span>';
+    return `<span class="${feitos >= total ? 'pl-up' : 'pl-dn'}" title="${feitos} feitos de ${total} na agenda de hoje">${feitos} / ${total}</span>`;
+  };
 
   main.innerHTML = `
     <div class="page-header pl-topo">
@@ -10658,7 +10666,7 @@ function renderManagerOverview(main){
     <section class="pl-painel pl-ranking">
       <div class="pl-ph"><h3>Classificação da equipe</h3><span>${ehGerente ? 'clique no vendedor para ver a carteira' : 'por % da meta de vendas'}</span></div>
       <div class="pl-rolagem"><table class="pl-goals pl-rank"><thead><tr>
-        <th></th><th>Vendedor</th><th>Vendas</th><th>% meta</th><th class="pl-esconde">Contato</th><th class="pl-esconde">Positiv.</th><th class="pl-esconde">Clientes</th><th class="pl-esconde">Atras.</th><th>${mesEhAtual?'Ritmo':'Fechou'}</th>
+        <th></th><th>Vendedor</th><th>Vendas</th><th>% meta</th><th class="pl-esconde">Contato</th><th class="pl-esconde">Positiv.</th><th class="pl-esconde">Clientes</th><th class="pl-esconde">Atras.</th><th>${mesEhAtual?'Contatos hoje':'Fechou'}</th>
       </tr></thead><tbody>
         ${ranking.length ? ranking.map((r,i) => `
           <tr class="${ehGerente?'pl-clica':''} ${i===0?'pl-lider':''}" data-codigo="${r.v.codigo}" ${ehGerente?'tabindex="0"':''}>
@@ -10670,7 +10678,7 @@ function renderManagerOverview(main){
             <td class="pl-esconde">${r.m.pctPositivacao}%</td>
             <td class="pl-esconde">${r.s.total}</td>
             <td class="pl-esconde ${r.s.atrasados>0?'pl-dn':''}">${r.s.atrasados}</td>
-            <td>${ritmoCel(r)}</td>
+            <td>${mesEhAtual ? contatosHojeCel(r) : ritmoCel(r)}</td>
           </tr>`).join('') : `<tr><td colspan="9" class="pl-na" style="text-align:center;">Nenhum vendedor ativo nesse mês.</td></tr>`}
       </tbody></table></div>
     </section>

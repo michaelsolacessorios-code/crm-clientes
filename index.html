@@ -1426,6 +1426,15 @@ async function atualizarCorrecaoVendedor(codigo, novoValorOuNull){
   STATE.correcoesVendedor = atual;
 }
 
+// Busca de cliente: se digitou só número, traz o cliente com ESSE número exato
+// (20 traz o 20, não 2001/2002). CNPJ só entra se digitar 8+ dígitos (raiz do CNPJ).
+function ehBuscaNumero(q){ return /^\d+$/.test(String(q||'').trim()); }
+function numeroClienteBate(c, q){
+  q = String(q).trim();
+  if(String(c.codigo) === String(Number(q))) return true;
+  return q.length >= 8 && String(c.cnpj||'').replace(/\D/g,'').includes(q);
+}
+
 async function getInativos(){
   return (await safeGet('crm:inativos')) || [];
 }
@@ -8898,7 +8907,7 @@ async function renderFinanceiroBody(main, rerender){
     const q = document.getElementById('buscaFinanceiro').value.trim();
     const ordem = document.getElementById('ordenarFinanceiro').value;
     const filtroContato = document.getElementById('filtroContatoFinanceiro').value;
-    let r = clientes.filter(c => !q || String(c.codigo).includes(q));
+    let r = clientes.filter(c => !q || (ehBuscaNumero(q) ? numeroClienteBate(c, q) : String(c.codigo).includes(q)));
     if(filtroContato === 'sem_contato') r = r.filter(c => !c.cobranca || !c.cobranca.historico || c.cobranca.historico.length===0);
     const cmp = {
       dias_desc: (a,b) => b.diasMax - a.diasMax,
@@ -9019,7 +9028,7 @@ async function renderVendorInativos(main){
   function draw(){
     const q = document.getElementById('busca').value.trim().toLowerCase();
     let filtered = pool.filter(c => {
-      return !q || c.nome.toLowerCase().includes(q) || (c.municipio||'').toLowerCase().includes(q) || (c.cnpj||'').includes(q) || (c.contato||'').toLowerCase().includes(q) || String(c.codigo).includes(q);
+      return !q || (ehBuscaNumero(q) ? numeroClienteBate(c, q) : (c.nome.toLowerCase().includes(q) || (c.municipio||'').toLowerCase().includes(q) || (c.cnpj||'').includes(q) || (c.contato||'').toLowerCase().includes(q) || String(c.codigo).includes(q)));
     });
     filtered.sort((a,b) => a.ultimaCompra < b.ultimaCompra ? 1 : -1);
     document.getElementById('contagem').textContent = `${filtered.length} cliente(s) sem vendedor (sem comprar há mais de 120 dias)`;
@@ -9734,7 +9743,7 @@ function renderVendorCarteira(main){
     const f = document.getElementById('filtroStatus').value;
     const fc = document.getElementById('filtroCompra').value;
     let filtered = meusClientes.filter(c => {
-      const matchQ = !q || c.nome.toLowerCase().includes(q) || (c.municipio||'').toLowerCase().includes(q) || (c.contato||'').toLowerCase().includes(q) || String(c.codigo).includes(q);
+      const matchQ = !q || (ehBuscaNumero(q) ? numeroClienteBate(c, q) : (c.nome.toLowerCase().includes(q) || (c.municipio||'').toLowerCase().includes(q) || (c.contato||'').toLowerCase().includes(q) || String(c.codigo).includes(q)));
       const st = statusFor(c.ultimoContato);
       const matchF = !f || st===f;
       const comprouMes = valorCompradoMesCliente(c) > 0;
@@ -10695,7 +10704,7 @@ async function abrirModalVincularCNPJ(){
     const q = buscaInput.value.trim().toLowerCase();
     if(!q){ resultadoDiv.innerHTML = ''; return; }
     const encontrados = todosOsClientesParaBusca().filter(c =>
-      c.nome.toLowerCase().includes(q) || (c.cnpj||'').includes(q) || String(c.codigo).includes(q)
+      (ehBuscaNumero(q) ? numeroClienteBate(c, q) : (c.nome.toLowerCase().includes(q) || (c.cnpj||'').includes(q) || String(c.codigo).includes(q)))
     ).slice(0,15);
     if(encontrados.length===0){ resultadoDiv.innerHTML = `<div class="hint">Nenhum cliente encontrado.</div>`; return; }
     resultadoDiv.innerHTML = encontrados.map(c => `
@@ -10933,7 +10942,7 @@ async function renderManagerInativos(main){
   function draw(){
     const q = document.getElementById('busca').value.trim().toLowerCase();
     let filtered = pool.filter(c => {
-      return !q || c.nome.toLowerCase().includes(q) || (c.municipio||'').toLowerCase().includes(q) || (c.cnpj||'').includes(q) || (c.contato||'').toLowerCase().includes(q) || String(c.codigo).includes(q);
+      return !q || (ehBuscaNumero(q) ? numeroClienteBate(c, q) : (c.nome.toLowerCase().includes(q) || (c.municipio||'').toLowerCase().includes(q) || (c.cnpj||'').includes(q) || (c.contato||'').toLowerCase().includes(q) || String(c.codigo).includes(q)));
     });
     filtered.sort((a,b) => a.ultimaCompra < b.ultimaCompra ? 1 : -1);
     document.getElementById('contagem').textContent = `${filtered.length} de ${pool.length} cliente(s) sem vendedor (sem comprar há mais de 120 dias)`;
@@ -11203,7 +11212,7 @@ function abrirGavetaIndicador(tipo, mesChave, vendedorCodigo){
       const rotOk = ehContato ? 'Contatados' : 'Compraram', rotNao = ehContato ? 'Não contatados' : 'Não compraram';
       filtros = chips('filtro', [['nao', `${rotNao} (${todos.length - nOk})`], ['sim', `${rotOk} (${nOk})`], ['todos', `Todos (${todos.length})`]]) + `<input type="text" class="search-input pl-gav-busca" id="plGavBusca" placeholder="Buscar nome ou número" value="${ui.busca.replace(/"/g,'&quot;')}">`;
       const q = ui.busca.trim().toLowerCase();
-      const r = todos.filter(x => (ui.filtro==='todos' || (ui.filtro==='sim' ? x.ok : !x.ok)) && (!q || String(x.c.nome||'').toLowerCase().includes(q) || String(x.c.codigo).includes(q)))
+      const r = todos.filter(x => (ui.filtro==='todos' || (ui.filtro==='sim' ? x.ok : !x.ok)) && (!q || (ehBuscaNumero(q) ? numeroClienteBate(x.c, q) : (String(x.c.nome||'').toLowerCase().includes(q) || String(x.c.codigo).includes(q)))))
         .sort((a,b) => daysBetween(b.ult) - daysBetween(a.ult) || String(a.c.nome||'').localeCompare(String(b.c.nome||''),'pt-BR'));
       cab = ['Cliente','Telefone','Último contato','No mês'];
       linhas = r.map(x => [`<span class="client-name-link" data-codigo="${x.c.codigo}">${x.c.nome}</span> <span class="client-num">Nº ${x.c.codigo}</span>`, x.c.telefone||'', x.ult ? fmtDatePt(x.ult) : 'nunca', x.ok ? `<span class="pl-up">${ehContato?'Contatado':'Comprou'}</span>` : `<span class="pl-am">${ehContato?'Sem contato':'Não comprou'}</span>`]);
@@ -11230,7 +11239,7 @@ function abrirGavetaIndicador(tipo, mesChave, vendedorCodigo){
       const nSim = todos.filter(x => x.comprou).length;
       filtros = chips('filtro', [['todos', `Todos (${todos.length})`], ['sim', `Compraram (${nSim})`], ['nao', `Não compraram (${todos.length - nSim})`]]) + selVend() + `<input type="text" class="search-input pl-gav-busca" id="plGavBusca" placeholder="Buscar nome ou número" value="${ui.busca.replace(/"/g,'&quot;')}">`;
       const q = ui.busca.trim().toLowerCase();
-      const r = todos.filter(x => doVend(x.vendedor) && (ui.filtro==='todos' || (ui.filtro==='sim' ? x.comprou : !x.comprou)) && (!q || String(x.c.nome||'').toLowerCase().includes(q) || String(x.c.codigo).includes(q)))
+      const r = todos.filter(x => doVend(x.vendedor) && (ui.filtro==='todos' || (ui.filtro==='sim' ? x.comprou : !x.comprou)) && (!q || (ehBuscaNumero(q) ? numeroClienteBate(x.c, q) : (String(x.c.nome||'').toLowerCase().includes(q) || String(x.c.codigo).includes(q)))))
         .sort((a,b) => String(a.c.nome||'').localeCompare(String(b.c.nome||''), 'pt-BR'));
       cab = ['Cliente','Vendedor','Cidade','No mês'];
       linhas = r.map(x => [`<span class="client-name-link" data-codigo="${x.c.codigo}">${x.c.nome}</span> <span class="client-num">Nº ${x.c.codigo}</span>`, x.vendedor, [x.c.municipio, x.c.uf].filter(Boolean).join('/'), x.comprou ? '<span class="pl-up">Comprou</span>' : '<span class="pl-na">Não comprou</span>']);
@@ -11551,7 +11560,7 @@ function renderManagerVendorDetail(main){
     const fc = document.getElementById('filtroCompra').value;
     let list = clientsForVendor(codigo).map(c => ({...c, ultimoContato: contatos[c.codigo]?.ultimoContato}));
     list = list.filter(c => {
-      const matchQ = !q || c.nome.toLowerCase().includes(q) || String(c.codigo).includes(q);
+      const matchQ = !q || (ehBuscaNumero(q) ? numeroClienteBate(c, q) : (c.nome.toLowerCase().includes(q) || String(c.codigo).includes(q)));
       const st = statusFor(c.ultimoContato);
       const matchF = !f || st===f;
       const comprouMes = valorCompradoMesCliente(c) > 0;
@@ -12505,7 +12514,7 @@ async function renderManagerAdmin(main){
     if(!q){ resultadoDiv.innerHTML = ''; return; }
     const todos = todosOsClientesParaBusca();
     const encontrados = todos.filter(c =>
-      c.nome.toLowerCase().includes(q) || (c.cnpj||'').includes(q) || String(c.codigo).includes(q)
+      (ehBuscaNumero(q) ? numeroClienteBate(c, q) : (c.nome.toLowerCase().includes(q) || (c.cnpj||'').includes(q) || String(c.codigo).includes(q)))
     ).slice(0,15);
     if(encontrados.length===0){ resultadoDiv.innerHTML = `<div class="hint">Nenhum cliente encontrado.</div>`; return; }
     resultadoDiv.innerHTML = encontrados.map(c => `

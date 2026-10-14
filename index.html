@@ -5123,7 +5123,7 @@ async function getContatos(vendedorCodigo){
 async function registrarEntradaContato(vendedorCodigo, clientCodigo, obs, vendeu, valor, agendarPara, skusInfo, extra){
   const data = await getContatos(vendedorCodigo);
   const hist = data[clientCodigo]?.historico || [];
-  hist.unshift({
+  const entradaNova = {
     id: 'h'+Date.now().toString(36)+Math.random().toString(36).slice(2,7),
     data: todayStr(),
     obs: obs || '',
@@ -5132,10 +5132,13 @@ async function registrarEntradaContato(vendedorCodigo, clientCodigo, obs, vendeu
     agendou: agendarPara || null,
     skus: (vendeu && skusInfo) ? skusInfo : null,
     ...(extra || {}),
-  });
+  };
+  hist.unshift(entradaNova);
   data[clientCodigo] = {ultimoContato: todayStr(), historico: hist.slice(0,30), agendadoPara: agendarPara || null};
   STATE.contatosCache[vendedorCodigo] = data;
   await safeSet('crm:contatos:'+vendedorCodigo, data);
+  // Propostas/desafios: se o cliente tem desafio aceito e no período, o pedido entra no contador.
+  if(entradaNova.vendeu && entradaNova.valor > 0) await propostaRegistrarPedidoSeHouver(clientCodigo, entradaNova);
 }
 
 // ---------------- LEADS ----------------
@@ -7318,6 +7321,555 @@ async function renderEcommerce(main){
 
 
 
+
+// ================= PROPOSTAS / DESAFIOS DE CLIENTE =================
+// Gerente/diretor cadastra a proposta enviada ao cliente (sobe o .pptx, a IA lê os slides e preenche
+// os campos, ele confere). O vendedor do cliente registra o aceite (ou a recusa, com motivo).
+// Só contam os pedidos subidos DEPOIS do aceite, dentro da duração (padrão 90 dias), em ciclos de
+// 30 dias: no fim de cada ciclo o valor comprado define a faixa de cashback (ex: 50 mil = 5%).
+// Cada proposta é uma linha própria (crm:proposta:000001) via /api/proposta — não mexe em nada existente.
+// Os pedidos entram na proposta no momento em que são salvos (registrarEntradaContato) e, ao abrir a
+// tela, o CRM confere o histórico e acrescenta algum que tenha ficado de fora (nunca duplica).
+const PROP_MIME_PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const PROP_STATUS = {
+  pendente:   {label:'Aguardando aceite', cls:'warn'},
+  recusada:   {label:'Recusada', cls:'danger'},
+  cancelada:  {label:'Cancelada', cls:'danger'},
+  andamento:  {label:'Em andamento', cls:'info'},
+  alcancou:   {label:'Alcançou ✓', cls:'ok'},
+  naoalcancou:{label:'Não alcançou', cls:'danger'},
+};
+
+async function propostaApi(body){
+  const res = await fetch('/api/proposta', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok){ const err = new Error(data.error || 'Falha ao falar com o servidor.'); err.status = res.status; err.atual = data.atual; throw err; }
+  return data;
+}
+async function propostasCarregar(forcar){
+  if(!forcar && STATE.propostas && (Date.now() - (STATE._propostasEm||0)) < 60000) return STATE.propostas;
+  try{
+    const res = await fetch('/api/proposta?acao=listar');
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok) throw new Error(data.error || 'falha');
+    STATE.propostas = data.propostas || [];
+    STATE._propostasEm = Date.now();
+  }catch(e){ console.warn('propostas', e); STATE.propostas = STATE.propostas || []; }
+  return STATE.propostas;
+}
+async function propostaSalvar(p){
+  const data = await propostaApi({acao:'salvar', proposta: p});
+  propostaAtualizarLocal(data.proposta);
+  return data.proposta;
+}
+function propostaAtualizarLocal(p){
+  STATE.propostas = STATE.propostas || [];
+  const i = STATE.propostas.findIndex(x => x.numero === p.numero);
+  if(i === -1) STATE.propostas.push(p); else STATE.propostas[i] = p;
+}
+function pEsc(v){ return String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+function pQuem(){ return (STATE.session && STATE.session.nome) || ''; }
+function pAddDias(iso, n){ const d = new Date(iso+'T12:00:00'); d.setDate(d.getDate()+n); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function pDataBR(iso){ return iso ? iso.slice(8,10)+'/'+iso.slice(5,7)+'/'+iso.slice(0,4) : '—'; }
+function pNum(v){ if(typeof v === 'number') return v; const s = String(v||'').trim(); if(!s) return 0; const x = parseFloat(s.includes(',') ? s.replace(/\./g,'').replace(',','.') : s); return isNaN(x) ? 0 : x; }
+function pClienteCodigos(p){ return (p.clientes||[]).map(c => String(c.codigo)); }
+function pEhGestor(){ return STATE.session && STATE.session.tipo === 'gerente'; }
+// Vendedor vê as propostas dos clientes dele; gerente e diretores veem todas.
+function pPodeVer(p){
+  if(pEhGestor()) return true;
+  const meu = STATE.session && STATE.session.codigo;
+  if(p.vendedorCodigo === meu) return true;
+  return pClienteCodigos(p).some(cod => { const c = (STATE.roster||[]).find(x => String(x.codigo) === cod); return c && c.vendedorCodigo === meu; });
+}
+function pPodeResponder(p){ return pEhGestor() || p.vendedorCodigo === (STATE.session && STATE.session.codigo); }
+
+// Período, ciclos de 30 dias, pedidos e cashback de uma proposta (tudo calculado, nada gravado).
+function propostaCalculo(p){
+  const dur = Math.max(1, Number(p.duracaoDias) || 90);
+  const r = {inicio:null, fim:null, ciclos:[], total:0, skus:new Set(), pedidos:[], pctMeta:0, status:p.status, diasRestantes:null};
+  if(p.status !== 'aceita' || !p.aceiteEm){
+    r.status = p.status === 'aceita' ? 'andamento' : p.status;
+    return r;
+  }
+  r.inicio = p.aceiteEm; r.fim = pAddDias(p.aceiteEm, dur - 1);
+  const nC = Math.ceil(dur / 30);
+  const faixas = (p.faixas||[]).filter(f => f.valorMes > 0).sort((a,b) => a.valorMes - b.valorMes);
+  for(let i = 0; i < nC; i++){
+    const ini = pAddDias(p.aceiteEm, i*30);
+    let fim = pAddDias(ini, 29); if(fim > r.fim) fim = r.fim;
+    r.ciclos.push({n:i+1, inicio:ini, fim, valor:0, pedidos:0, skus:new Set()});
+  }
+  (p.pedidos||[]).forEach(ped => {
+    if(!ped || !ped.data || ped.data < r.inicio || ped.data > r.fim) return;
+    const ci = r.ciclos.find(c => ped.data >= c.inicio && ped.data <= c.fim);
+    r.pedidos.push({...ped, ciclo: ci ? ci.n : null});
+    if(ped.ignorado || !ci) return;
+    ci.valor += Number(ped.valor)||0; ci.pedidos++;
+    (ped.skus||[]).forEach(s => { ci.skus.add(s); r.skus.add(s); });
+    r.total += Number(ped.valor)||0;
+  });
+  const hoje = todayStr();
+  r.ciclos.forEach(c => {
+    c.encerrado = hoje > c.fim;
+    c.atual = hoje >= c.inicio && hoje <= c.fim;
+    const fx = faixas.filter(f => c.valor >= f.valorMes).pop() || null;
+    c.faixa = fx; c.cashback = fx ? Math.round(c.valor * fx.pct) / 100 : 0;
+    const prox = faixas.find(f => c.valor < f.valorMes) || null;
+    c.proxima = prox; c.faltaProxima = prox ? prox.valorMes - c.valor : 0;
+    const reg = (p.cashbacks||{})[c.n] || null; c.registro = reg;
+  });
+  r.pctMeta = p.metaValor ? Math.round(r.total / p.metaValor * 100) : 0;
+  const bateuValor = !p.metaValor || r.total >= p.metaValor;
+  const bateuSkus = !p.metaSkus || r.skus.size >= p.metaSkus;
+  r.bateuValor = bateuValor; r.bateuSkus = bateuSkus;
+  if(hoje > r.fim) r.status = (bateuValor && bateuSkus) ? 'alcancou' : 'naoalcancou';
+  else { r.status = 'andamento'; r.diasRestantes = Math.round((new Date(r.fim+'T12:00:00') - new Date(hoje+'T12:00:00'))/86400000) + 1; }
+  return r;
+}
+
+// Chamado sempre que um pedido (venda com valor) é salvo: se o cliente tem proposta aceita e no
+// período, acrescenta o pedido nela. Erro aqui nunca impede o pedido de ser salvo.
+async function propostaRegistrarPedidoSeHouver(clienteCodigo, entrada){
+  try{
+    if(!entrada || !entrada.vendeu || !(Number(entrada.valor) > 0)) return;
+    const lista = await propostasCarregar(true);
+    const cod = String(clienteCodigo);
+    for(const p of lista){
+      if(p.status !== 'aceita' || !p.aceiteEm || !pClienteCodigos(p).includes(cod)) continue;
+      const fim = pAddDias(p.aceiteEm, Math.max(1, Number(p.duracaoDias)||90) - 1);
+      if(entrada.data < p.aceiteEm || entrada.data > fim) continue;
+      const data = await propostaApi({acao:'registrar-pedido', numero: p.numero, pedido: propostaPedidoDaEntrada(cod, entrada)});
+      propostaAtualizarLocal(data.proposta);
+    }
+  }catch(e){ console.warn('proposta: registrar pedido', e); }
+}
+function propostaPedidoDaEntrada(cod, h){
+  const sk = h.skus || {};
+  return {
+    id: h.id, clienteCodigo: cod, data: h.data, valor: Number(h.valor)||0,
+    numeroPedido: sk.numeroPedido || '', rateio: !!h.rateioGrupo,
+    skus: Array.from(new Set((sk.itens||[]).map(i => String(i.codigo||'').trim().toUpperCase()).filter(x => x && x !== '?'))),
+    registradoEm: new Date().toISOString(),
+  };
+}
+// Confere o histórico dos clientes e acrescenta pedidos que ficaram de fora (ex: salvos de outro aparelho).
+async function propostaConferirPedidos(p){
+  if(p.status !== 'aceita' || !p.aceiteEm) return p;
+  const fim = pAddDias(p.aceiteEm, Math.max(1, Number(p.duracaoDias)||90) - 1);
+  const ja = new Set((p.pedidos||[]).map(x => x.id));
+  let atual = p;
+  for(const cod of pClienteCodigos(p)){
+    const c = (STATE.roster||[]).find(x => String(x.codigo) === cod);
+    if(!c || !c.vendedorCodigo) continue;
+    const dados = STATE.contatosCache[c.vendedorCodigo];
+    if(!dados) continue;
+    const hist = (dados[c.codigo] && dados[c.codigo].historico) || [];
+    for(const h of hist){
+      if(!h.id || ja.has(h.id) || !h.vendeu || !(Number(h.valor) > 0) || !h.data || h.data < p.aceiteEm || h.data > fim) continue;
+      try{ const d = await propostaApi({acao:'registrar-pedido', numero: p.numero, pedido: propostaPedidoDaEntrada(cod, h)}); atual = d.proposta; ja.add(h.id); }
+      catch(e){ console.warn('proposta: conferir', e); }
+    }
+  }
+  if(atual !== p) propostaAtualizarLocal(atual);
+  return atual;
+}
+
+// Linha que aparece no card do cliente na carteira.
+function propostaLinhaClienteHTML(c){
+  const lista = (STATE.propostas||[]).filter(p => (p.status === 'pendente' || p.status === 'aceita') && pClienteCodigos(p).includes(String(c.codigo)));
+  if(!lista.length) return '';
+  return lista.map(p => {
+    const k = propostaCalculo(p);
+    if(k.status === 'alcancou' || k.status === 'naoalcancou') return '';
+    const txt = p.status === 'pendente' ? `🏆 Proposta Nº ${p.numero} aguardando aceite do cliente`
+      : `🏆 Desafio: <b>${fmtMoney(k.total)}</b> de ${fmtMoney(p.metaValor||0)} (${k.pctMeta}%) · faltam ${k.diasRestantes} dia(s)`;
+    return `<div class="meta-cliente-linha"><span class="meta-cliente-editar" style="cursor:pointer;" onclick="event.stopPropagation(); propostaIrPara(${Number(p.numero)})">${txt} ›</span></div>`;
+  }).join('');
+}
+function propostaIrPara(numero){
+  STATE.propostaUI = Object.assign(STATE.propostaUI||{}, {aberta: numero});
+  STATE.route = {page:'propostas'};
+  if(pEhGestor()) renderManagerShell(); else renderVendorShell();
+}
+function propostasPendentesDoVendedor(){
+  const meu = STATE.session && STATE.session.codigo;
+  return (STATE.propostas||[]).filter(p => p.status === 'pendente' && p.vendedorCodigo === meu).length;
+}
+
+// ---------- Leitura do PowerPoint (texto dos slides) ----------
+async function propCarregarJSZip(){
+  if(window.JSZip) return window.JSZip;
+  await new Promise((ok, erro) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    s.onload = ok; s.onerror = () => erro(new Error('Não consegui carregar o leitor de PowerPoint. Verifique a internet.'));
+    document.head.appendChild(s);
+  });
+  return window.JSZip;
+}
+async function propLerSlidesPptx(file){
+  const JSZip = await propCarregarJSZip();
+  const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  const nomes = Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+    .sort((a,b) => Number(a.match(/(\d+)\.xml$/)[1]) - Number(b.match(/(\d+)\.xml$/)[1]));
+  const slides = [];
+  for(const n of nomes){
+    const xml = await zip.file(n).async('string');
+    const doc = new DOMParser().parseFromString(xml, 'application/xml');
+    const paras = Array.from(doc.getElementsByTagNameNS('*', 'p')).filter(el => el.namespaceURI && el.namespaceURI.includes('drawingml'));
+    const linhas = paras.map(par => Array.from(par.getElementsByTagNameNS('*','t')).map(t => t.textContent).join('').trim()).filter(Boolean);
+    slides.push(linhas.join('\n'));
+  }
+  return slides;
+}
+async function propEnviarArquivo(file){
+  const {path, uploadUrl} = await propostaApi({acao:'url-upload', nome: file.name});
+  const tipo = file.type || (/\.pdf$/i.test(file.name) ? 'application/pdf' : PROP_MIME_PPTX);
+  const r = await fetch(uploadUrl, {method:'PUT', headers:{'Content-Type': tipo, 'x-upsert':'false'}, body: file});
+  if(!r.ok) throw new Error('Não consegui enviar o arquivo. Tente de novo.');
+  return {path, nome: file.name, tamanho: file.size, tipo};
+}
+async function propBaixarArquivo(p){
+  try{
+    const {url} = await propostaApi({acao:'url-arquivo', path: p.arquivo.path, nome: p.arquivo.nome});
+    window.open(url, '_blank');
+  }catch(e){ avisar(pEsc(e.message)); }
+}
+
+// ---------- Tela ----------
+async function renderPropostas(main){
+  STATE.propostaUI = STATE.propostaUI || {filtro:'ativas', aberta:null};
+  const ui = STATE.propostaUI;
+  main.innerHTML = `<div class="loading" style="min-height:200px">Carregando propostas…</div>`;
+  await propostasCarregar(true);
+  // Confere pedidos que possam ter ficado de fora (só das propostas que a pessoa vê e estão valendo).
+  for(const p of (STATE.propostas||[]).filter(x => x.status === 'aceita' && pPodeVer(x))){ await propostaConferirPedidos(p); }
+  const visiveis = (STATE.propostas||[]).filter(pPodeVer).sort((a,b) => b.numero - a.numero);
+  const comCalc = visiveis.map(p => ({p, k: propostaCalculo(p)}));
+  const grupos = {
+    ativas: comCalc.filter(x => x.k.status === 'pendente' || x.k.status === 'andamento'),
+    encerradas: comCalc.filter(x => x.k.status === 'alcancou' || x.k.status === 'naoalcancou'),
+    outras: comCalc.filter(x => x.k.status === 'recusada' || x.k.status === 'cancelada'),
+  };
+  const lista = grupos[ui.filtro] || grupos.ativas;
+  const nomeVend = cod => (STATE.vendors.find(v => v.codigo === cod) || {}).nome || '—';
+  main.innerHTML = `
+    <div class="page-header"><div class="eyebrow">Carteira</div><h2>🏆 Propostas / desafios</h2></div>
+    <p class="hint" style="margin-bottom:14px;">${pEhGestor() ? 'Cadastre a proposta enviada ao cliente (suba o PowerPoint — o CRM lê os slides e preenche). O vendedor registra o aceite do cliente e, a partir daí, os pedidos desse cliente entram no contador por ciclos de 30 dias.' : 'Propostas dos seus clientes. Quando o cliente aceitar o desafio, clique em "Cliente aceitou" — só os pedidos subidos depois do aceite contam.'}</p>
+    <div class="form-row" style="margin-bottom:14px; align-items:center;">
+      ${pEhGestor() ? `<button class="primary-btn" id="btnNovaProposta">+ Nova proposta</button>` : ''}
+      ${[['ativas','Ativas'],['encerradas','Encerradas'],['outras','Recusadas / canceladas']].map(([id,l]) => `<button class="ghost-btn ${ui.filtro===id?'active':''}" data-pfiltro="${id}" style="${ui.filtro===id?'border-color:var(--primary); color:var(--primary); font-weight:700;':''}">${l} (${grupos[id].length})</button>`).join('')}
+    </div>
+    <div class="client-list">
+      ${lista.length ? lista.map(({p,k}) => {
+        const st = PROP_STATUS[k.status] || {label:k.status, cls:'info'};
+        const nomes = (p.clientes||[]).map(c => `${pEsc(c.nome||'Cliente')} <span class="client-num">Nº ${pEsc(c.codigo)}</span>`).join(' + ');
+        return `<div class="client-row status-${st.cls==='info'?'ok':st.cls}" data-prop="${p.numero}" style="cursor:pointer;">
+          <div class="client-info">
+            <div class="client-name">Nº ${p.numero} · ${pEsc(p.titulo || 'Proposta')}</div>
+            <div class="client-meta"><span>${nomes}</span><span>Vendedor: ${pEsc(nomeVend(p.vendedorCodigo))}</span></div>
+            ${k.inicio ? `<div class="credito-line"><span>Período: <b>${pDataBR(k.inicio)} a ${pDataBR(k.fim)}</b></span><span>Comprado: <b>${fmtMoney(k.total)}</b> de ${fmtMoney(p.metaValor||0)} (${k.pctMeta}%)</span>${p.metaSkus ? `<span>SKUs: <b>${k.skus.size}</b> de ${p.metaSkus}</span>` : ''}${k.diasRestantes ? `<span>Faltam <b>${k.diasRestantes}</b> dia(s)</span>` : ''}</div>
+              <div style="height:8px; background:var(--border); border-radius:6px; margin-top:6px; overflow:hidden;"><div style="height:100%; width:${Math.min(100,k.pctMeta)}%; background:${k.pctMeta>=100?'var(--ok)':'var(--primary)'};"></div></div>` :
+              `<div class="credito-line"><span>Meta: <b>${fmtMoney(p.metaValor||0)}</b> em ${p.duracaoDias||90} dias</span>${p.metaSkus ? `<span>${p.metaSkus} SKUs</span>` : ''}<span>Criada em ${pDataBR((p.criadoEm||'').slice(0,10))}</span></div>`}
+          </div>
+          <span class="status-badge status-${st.cls}">${st.label}</span>
+        </div>`; }).join('') : `<div class="empty-state">Nenhuma proposta aqui.</div>`}
+    </div>`;
+  const btnN = main.querySelector('#btnNovaProposta'); if(btnN) btnN.onclick = () => abrirPropostaForm(null, () => renderPropostas(main));
+  main.querySelectorAll('[data-pfiltro]').forEach(b => b.onclick = () => { ui.filtro = b.dataset.pfiltro; renderPropostas(main); });
+  main.querySelectorAll('[data-prop]').forEach(r => r.onclick = () => abrirPropostaDetalhe(Number(r.dataset.prop), () => renderPropostas(main)));
+  if(ui.aberta){ const n = ui.aberta; ui.aberta = null; if(visiveis.some(p => p.numero === n)) abrirPropostaDetalhe(n, () => renderPropostas(main)); }
+}
+
+// Cadastro / edição (gerente e diretores).
+function abrirPropostaForm(existente, aoSalvar){
+  const p0 = existente ? JSON.parse(JSON.stringify(existente)) : {clientes:[], duracaoDias:90, metaValor:0, metaSkus:0, faixas:[{valorMes:50000,pct:5},{valorMes:75000,pct:7},{valorMes:100000,pct:10}], regras:[], resumo:'', titulo:''};
+  let arquivoNovo = null, slidesNovos = null;
+  const bd = document.createElement('div');
+  bd.className = 'modal-backdrop';
+  bd.innerHTML = `
+    <div class="modal" style="max-width:720px; max-height:90vh; overflow-y:auto;">
+      <h3>${existente ? 'Editar proposta Nº '+existente.numero : 'Nova proposta / desafio'}</h3>
+      <label class="field-label">Arquivo enviado ao cliente (.pptx ou .pdf)</label>
+      <div class="form-row" style="align-items:center;">
+        <input type="file" id="pfArquivo" accept=".pptx,.pdf" class="login-input" style="flex:1; margin:0;">
+        <button class="ghost-btn" id="pfLer">📖 Ler proposta (IA)</button>
+      </div>
+      <p class="hint" id="pfArqInfo" style="margin:6px 0 12px;">${p0.arquivo ? `Arquivo atual: <b>${pEsc(p0.arquivo.nome)}</b> — escolha outro só se quiser trocar.` : 'O CRM lê o texto dos slides do .pptx e preenche os campos abaixo. Você confere tudo antes de salvar. (.pdf é só guardado — preencha à mão.)'}</p>
+      <div id="pfMsg"></div>
+      <label class="field-label">Nº do(s) cliente(s) — separe por vírgula se for grupo</label>
+      <input type="text" id="pfClientes" class="login-input" placeholder="ex: 1329, 1161" value="${pEsc((p0.clientes||[]).map(c => c.codigo).join(', '))}">
+      <div class="hint" id="pfClientesNomes" style="margin:-6px 0 12px;"></div>
+      <label class="field-label">Título</label>
+      <input type="text" id="pfTitulo" class="login-input" value="${pEsc(p0.titulo)}">
+      <div class="form-row">
+        <div style="flex:1"><label class="field-label">Duração (dias, a partir do aceite)</label><input type="number" id="pfDur" class="login-input" min="30" step="30" value="${p0.duracaoDias||90}"></div>
+        <div style="flex:1"><label class="field-label">Meta de compras no período (R$)</label><input type="text" id="pfMeta" class="login-input" value="${p0.metaValor||''}"></div>
+        <div style="flex:1"><label class="field-label">Meta de SKUs distintos (0 = sem)</label><input type="number" id="pfSkus" class="login-input" min="0" value="${p0.metaSkus||0}"></div>
+      </div>
+      <label class="field-label">Faixas de cashback — compra em cada ciclo de 30 dias</label>
+      <div id="pfFaixas"></div>
+      <button class="ghost-btn" id="pfAddFaixa" style="margin:4px 0 12px;">+ faixa</button>
+      <label class="field-label">Regras / combinados (uma por linha)</label>
+      <textarea id="pfRegras" class="login-input" rows="5">${pEsc((p0.regras||[]).join('\n'))}</textarea>
+      <label class="field-label">Resumo</label>
+      <textarea id="pfResumo" class="login-input" rows="3">${pEsc(p0.resumo||'')}</textarea>
+      <div id="pfMsgSalvar"></div>
+      <div class="modal-actions" style="margin-top:14px;">
+        <button class="ghost-btn" id="pfFechar">Fechar</button>
+        <button class="primary-btn" id="pfSalvar">${existente ? 'Salvar alterações' : 'Salvar proposta'}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bd);
+  const $ = s => bd.querySelector(s);
+  let faixas = (p0.faixas||[]).map(f => ({...f}));
+  const drawFaixas = () => {
+    $('#pfFaixas').innerHTML = faixas.map((f,i) => `<div class="form-row" style="align-items:center; margin-bottom:6px;">
+      <span class="hint" style="margin:0;">A partir de R$</span><input type="text" class="login-input pfFxV" data-i="${i}" value="${f.valorMes||''}" style="margin:0; max-width:160px;">
+      <span class="hint" style="margin:0;">no ciclo →</span><input type="number" class="login-input pfFxP" data-i="${i}" value="${f.pct||''}" style="margin:0; max-width:90px;"><span class="hint" style="margin:0;">% cashback</span>
+      <button class="ghost-btn pfFxDel" data-i="${i}" style="padding:4px 10px;">✕</button></div>`).join('') || '<p class="hint">Sem faixas — não gera cashback.</p>';
+    bd.querySelectorAll('.pfFxV').forEach(el => el.oninput = () => { faixas[el.dataset.i].valorMes = pNum(el.value); });
+    bd.querySelectorAll('.pfFxP').forEach(el => el.oninput = () => { faixas[el.dataset.i].pct = pNum(el.value); });
+    bd.querySelectorAll('.pfFxDel').forEach(el => el.onclick = () => { faixas.splice(Number(el.dataset.i),1); drawFaixas(); });
+  };
+  drawFaixas();
+  $('#pfAddFaixa').onclick = () => { faixas.push({valorMes:0,pct:0}); drawFaixas(); };
+  const lerClientes = () => $('#pfClientes').value.split(/[,;\s]+/).map(x => x.trim()).filter(x => /^\d+$/.test(x));
+  const mostrarNomes = () => {
+    const cods = lerClientes();
+    $('#pfClientesNomes').innerHTML = cods.map(cod => {
+      const c = (STATE.roster||[]).find(x => String(x.codigo) === cod);
+      const v = c && STATE.vendors.find(v => v.codigo === c.vendedorCodigo);
+      return c ? `Nº ${cod}: <b>${pEsc(c.nome)}</b>${v ? ' · vendedor '+pEsc(v.nome) : ' · <span style="color:var(--danger)">sem vendedor no CRM</span>'}` : `Nº ${cod}: <span style="color:var(--danger)">não encontrado na carteira</span>`;
+    }).join('<br>');
+  };
+  $('#pfClientes').oninput = mostrarNomes; mostrarNomes();
+  $('#pfFechar').onclick = () => bd.remove();
+  $('#pfArquivo').onchange = () => { arquivoNovo = $('#pfArquivo').files[0] || null; slidesNovos = null; };
+  $('#pfLer').onclick = async () => {
+    const f = $('#pfArquivo').files[0];
+    const msg = $('#pfMsg');
+    if(!f){ msg.innerHTML = '<div class="msg err">Escolha o arquivo .pptx primeiro.</div>'; return; }
+    if(!/\.pptx$/i.test(f.name)){ msg.innerHTML = '<div class="msg err">A leitura automática funciona com .pptx. Para PDF, preencha os campos à mão (o arquivo é guardado do mesmo jeito).</div>'; return; }
+    const btn = $('#pfLer'); btn.disabled = true; btn.textContent = 'Lendo slides…';
+    try{
+      slidesNovos = await propLerSlidesPptx(f);
+      msg.innerHTML = `<div class="hint">${slidesNovos.length} slide(s) lidos. Pedindo para a IA organizar…</div>`;
+      const texto = slidesNovos.map((s,i) => `--- SLIDE ${i+1} ---\n${s}`).join('\n');
+      const {dados} = await propostaApi({acao:'analisar', texto});
+      if(dados.titulo) $('#pfTitulo').value = dados.titulo;
+      if(dados.duracaoDias) $('#pfDur').value = dados.duracaoDias;
+      if(dados.metaValor) $('#pfMeta').value = dados.metaValor;
+      if(dados.metaSkus) $('#pfSkus').value = dados.metaSkus;
+      if(Array.isArray(dados.faixas) && dados.faixas.length){ faixas = dados.faixas.map(x => ({valorMes:pNum(x.valorMes), pct:pNum(x.pct)})).filter(x => x.valorMes > 0); drawFaixas(); }
+      if(Array.isArray(dados.regras) && dados.regras.length) $('#pfRegras').value = dados.regras.join('\n');
+      if(dados.resumo) $('#pfResumo').value = dados.resumo;
+      const nomeArq = (f.name.match(/(\d{3,6})(?:_(\d{3,6}))+/) || [''])[0];
+      const codsArq = nomeArq ? nomeArq.split('_') : [];
+      const cods = (dados.clienteCodigos||[]).map(String).concat(codsArq).filter(x => /^\d+$/.test(x));
+      if(cods.length && !lerClientes().length){ $('#pfClientes').value = Array.from(new Set(cods)).join(', '); mostrarNomes(); }
+      msg.innerHTML = `<div class="msg ok">Pronto! Confira os campos abaixo${dados.clientes ? ' (cliente no arquivo: <b>'+pEsc(dados.clientes)+'</b>)' : ''} e salve.</div>`;
+    }catch(e){ msg.innerHTML = `<div class="msg err">${pEsc(e.message)} — você pode preencher à mão.</div>`; }
+    btn.disabled = false; btn.textContent = '📖 Ler proposta (IA)';
+  };
+  $('#pfSalvar').onclick = async () => {
+    const msg = $('#pfMsgSalvar');
+    const cods = lerClientes();
+    if(!cods.length){ msg.innerHTML = '<div class="msg err">Informe o Nº do cliente.</div>'; return; }
+    const clientes = cods.map(cod => { const c = (STATE.roster||[]).find(x => String(x.codigo) === cod); return {codigo: Number(cod), nome: c ? c.nome : 'Cliente Nº '+cod, vendedorCodigo: c ? c.vendedorCodigo : null}; });
+    const vendedorCodigo = (clientes.find(c => c.vendedorCodigo) || {}).vendedorCodigo || null;
+    if(!vendedorCodigo){ msg.innerHTML = '<div class="msg err">Nenhum desses clientes está na carteira de um vendedor — o vendedor é quem dá o aceite.</div>'; return; }
+    const metaValor = pNum($('#pfMeta').value);
+    if(!(metaValor > 0)){ msg.innerHTML = '<div class="msg err">Informe a meta de compras do período.</div>'; return; }
+    if(!existente && !arquivoNovo){ msg.innerHTML = '<div class="msg err">Escolha o arquivo enviado ao cliente.</div>'; return; }
+    const btn = $('#pfSalvar'); btn.disabled = true;
+    try{
+      const agora = new Date().toISOString();
+      const p = existente ? JSON.parse(JSON.stringify(existente)) : {status:'pendente', criadoEm: agora, criadoPor: pQuem(), pedidos:[], cashbacks:{}, historico:[], versao:0};
+      if(!existente){ btn.textContent = 'Gerando número…'; p.numero = (await propostaApi({acao:'proximo-numero'})).numero; }
+      if(arquivoNovo){
+        btn.textContent = 'Enviando arquivo…';
+        p.arquivo = await propEnviarArquivo(arquivoNovo);
+        if(!slidesNovos && /\.pptx$/i.test(arquivoNovo.name)){ try{ slidesNovos = await propLerSlidesPptx(arquivoNovo); }catch(e){} }
+        if(slidesNovos) p.slides = slidesNovos;
+      }
+      Object.assign(p, {
+        clientes, vendedorCodigo, titulo: $('#pfTitulo').value.trim() || 'Proposta', duracaoDias: Math.max(1, Math.round(pNum($('#pfDur').value)) || 90),
+        metaValor, metaSkus: Math.max(0, Math.round(pNum($('#pfSkus').value))),
+        faixas: faixas.filter(f => f.valorMes > 0 && f.pct > 0).sort((a,b) => a.valorMes - b.valorMes),
+        regras: $('#pfRegras').value.split('\n').map(x => x.trim()).filter(Boolean), resumo: $('#pfResumo').value.trim(),
+      });
+      p.historico = (p.historico||[]).concat([{em: agora, por: pQuem(), acao: existente ? 'Proposta editada' : 'Proposta cadastrada'}]);
+      btn.textContent = 'Salvando…';
+      await propostaSalvar(p);
+      bd.remove();
+      if(aoSalvar) aoSalvar();
+    }catch(e){ msg.innerHTML = `<div class="msg err">${pEsc(e.message)}</div>`; btn.disabled = false; btn.textContent = existente ? 'Salvar alterações' : 'Salvar proposta'; }
+  };
+}
+
+// Detalhe: aceite/recusa, contador por ciclo, pedidos, cashback.
+function abrirPropostaDetalhe(numero, aoMudar){
+  const p = (STATE.propostas||[]).find(x => x.numero === numero);
+  if(!p) return;
+  const k = propostaCalculo(p);
+  const st = PROP_STATUS[k.status] || {label:k.status, cls:'info'};
+  const gestor = pEhGestor();
+  const nomeVend = (STATE.vendors.find(v => v.codigo === p.vendedorCodigo) || {}).nome || '—';
+  const bd = document.createElement('div');
+  bd.className = 'modal-backdrop';
+  const blocoCiclos = !k.inicio ? '' : `
+    <h4 style="margin:16px 0 6px;">Ciclos de 30 dias</h4>
+    <div style="overflow-x:auto"><table class="cred-table" style="width:100%"><thead><tr><th>Ciclo</th><th>Período</th><th style="text-align:right">Pedidos</th><th style="text-align:right">Comprado</th><th>Faixa</th><th style="text-align:right">Cashback</th><th></th></tr></thead><tbody>
+      ${k.ciclos.map(c => `<tr style="${c.atual?'background:rgba(0,0,0,.035); font-weight:600;':''}">
+        <td>${c.n}º${c.atual?' (atual)':''}</td><td>${pDataBR(c.inicio)} a ${pDataBR(c.fim)}</td>
+        <td style="text-align:right">${c.pedidos}</td><td style="text-align:right"><b>${fmtMoney(c.valor)}</b></td>
+        <td>${c.faixa ? c.faixa.pct+'%' : '<span class="hint" style="margin:0">abaixo da 1ª faixa</span>'}${!c.encerrado && c.proxima ? `<br><small class="hint" style="margin:0">faltam ${fmtMoney(c.faltaProxima)} p/ ${c.proxima.pct}%</small>` : ''}</td>
+        <td style="text-align:right">${c.cashback ? fmtMoney(c.cashback) : '—'}</td>
+        <td>${c.registro && c.registro.garantiaNumero ? `<span class="status-badge status-ok" style="font-size:11px;">Garantia Nº ${c.registro.garantiaNumero}</span>`
+          : (c.encerrado && c.cashback > 0 ? (gestor ? `<button class="ghost-btn pdCash" data-ciclo="${c.n}" style="padding:3px 8px; font-size:12px;">Enviar p/ Garantia</button>` : '<span class="hint" style="margin:0">aguardando gerente</span>')
+          : (c.encerrado ? '' : '<span class="hint" style="margin:0">em aberto</span>'))}</td></tr>`).join('')}
+      <tr><td colspan="3"><b>Total</b></td><td style="text-align:right"><b>${fmtMoney(k.total)}</b></td><td colspan="3">${k.pctMeta}% da meta de ${fmtMoney(p.metaValor||0)}</td></tr>
+    </tbody></table></div>`;
+  const blocoPedidos = !k.inicio ? '' : `
+    <h4 style="margin:16px 0 6px;">Pedidos que entraram no contador (${k.pedidos.filter(x=>!x.ignorado).length})</h4>
+    ${k.pedidos.length ? `<div style="overflow-x:auto; max-height:240px;"><table class="cred-table" style="width:100%"><thead><tr><th>Data</th><th>Cliente</th><th>Pedido</th><th style="text-align:right">Valor</th><th style="text-align:right">SKUs</th><th>Ciclo</th>${gestor?'<th></th>':''}</tr></thead><tbody>
+      ${k.pedidos.sort((a,b) => (b.data||'').localeCompare(a.data||'')).map(x => `<tr style="${x.ignorado?'opacity:.45; text-decoration:line-through;':''}"><td>${pDataBR(x.data)}</td><td>Nº ${pEsc(x.clienteCodigo)}</td><td>${pEsc(x.numeroPedido||'—')}${x.rateio?' <small class="hint" style="margin:0">(rateio grupo)</small>':''}</td><td style="text-align:right">${fmtMoney(x.valor)}</td><td style="text-align:right">${(x.skus||[]).length}</td><td>${x.ciclo||'—'}º</td>${gestor?`<td><button class="ghost-btn pdIgn" data-id="${pEsc(x.id)}" style="padding:2px 8px; font-size:11.5px;">${x.ignorado?'Voltar a contar':'Tirar do contador'}</button></td>`:''}</tr>`).join('')}
+    </tbody></table></div>` : '<p class="hint">Nenhum pedido desde o aceite ainda.</p>'}`;
+  bd.innerHTML = `
+    <div class="modal" style="max-width:860px; max-height:92vh; overflow-y:auto;">
+      <div style="display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap;">
+        <h3 style="flex:1; margin:0;">Nº ${p.numero} · ${pEsc(p.titulo||'Proposta')}</h3>
+        <span class="status-badge status-${st.cls}">${st.label}</span>
+      </div>
+      <p class="hint" style="margin:6px 0 10px;">${(p.clientes||[]).map(c => `${pEsc(c.nome)} (Nº ${pEsc(c.codigo)})`).join(' + ')} · Vendedor: <b>${pEsc(nomeVend)}</b> · cadastrada por ${pEsc(p.criadoPor||'—')} em ${pDataBR((p.criadoEm||'').slice(0,10))}</p>
+      <div class="credito-line" style="flex-wrap:wrap;">
+        <span>Meta: <b>${fmtMoney(p.metaValor||0)}</b> em ${p.duracaoDias||90} dias</span>
+        ${p.metaSkus ? `<span>Mix: <b>${p.metaSkus} SKUs</b>${k.inicio ? ` (hoje ${k.skus.size})` : ''}</span>` : ''}
+        <span>Cashback por ciclo: ${(p.faixas||[]).map(f => `<b>${fmtMoney(f.valorMes)}</b> → ${f.pct}%`).join(' · ') || '—'}</span>
+        ${k.inicio ? `<span>Aceite em <b>${pDataBR(p.aceiteEm)}</b> (${pEsc(p.aceitePor||'')}) · vale até <b>${pDataBR(k.fim)}</b></span>` : ''}
+      </div>
+      ${k.inicio ? `<div style="height:12px; background:var(--border); border-radius:8px; margin:10px 0 2px; overflow:hidden;"><div style="height:100%; width:${Math.min(100,k.pctMeta)}%; background:${k.pctMeta>=100?'var(--ok)':'var(--primary)'};"></div></div>
+        <p class="hint" style="margin:0;"><b>${fmtMoney(k.total)}</b> de ${fmtMoney(p.metaValor||0)} (${k.pctMeta}%)${k.total < (p.metaValor||0) ? ' · faltam <b>'+fmtMoney((p.metaValor||0) - k.total)+'</b>' : ' · meta de valor batida!'}${k.diasRestantes ? ` · ${k.diasRestantes} dia(s) restantes` : ''}</p>` : ''}
+      ${p.status === 'recusada' ? `<div class="msg err" style="margin-top:10px;">Recusada em ${pDataBR((p.recusadaEm||'').slice(0,10))} por ${pEsc(p.recusadaPor||'')}: ${pEsc(p.recusaMotivo||'')}</div>` : ''}
+      ${p.resumo ? `<p style="margin:12px 0 6px; line-height:1.5;">${pEsc(p.resumo)}</p>` : ''}
+      ${(p.regras||[]).length ? `<details style="margin:6px 0;"><summary><b>Regras e combinados</b></summary><ul style="margin:6px 0 0 18px;">${p.regras.map(r => `<li>${pEsc(r)}</li>`).join('')}</ul></details>` : ''}
+      ${(p.slides||[]).length ? `<details style="margin:6px 0;"><summary><b>Texto dos slides (${p.slides.length})</b></summary><div style="max-height:260px; overflow:auto; font-size:12.5px; white-space:pre-wrap; background:var(--surface-2,#f6f7f6); padding:10px; border-radius:8px; margin-top:6px;">${p.slides.map((s,i) => `<b>Slide ${i+1}</b>\n${pEsc(s)}`).join('\n\n')}</div></details>` : ''}
+      ${p.arquivo ? `<button class="ghost-btn" id="pdBaixar" style="margin:8px 0;">📎 Baixar arquivo enviado ao cliente (${pEsc(p.arquivo.nome)})</button>` : ''}
+      ${p.status === 'pendente' && pPodeResponder(p) ? `<div class="panel" style="margin:12px 0 0; padding:14px 16px;">
+          <b>O cliente aceitou o desafio?</b>
+          <p class="hint" style="margin:4px 0 10px;">Só os pedidos subidos a partir do dia do aceite entram no contador, por ${p.duracaoDias||90} dias.</p>
+          <div class="form-row"><button class="primary-btn" id="pdAceitar">✓ Cliente aceitou</button><button class="ghost-btn" id="pdRecusar" style="color:var(--danger); border-color:var(--danger);">✕ Cliente recusou</button></div>
+        </div>` : ''}
+      ${blocoCiclos}
+      ${blocoPedidos}
+      ${gestor && (k.status === 'alcancou' || k.status === 'naoalcancou') ? `<div class="form-row" style="margin-top:12px; align-items:center;"><label class="field-label" style="margin:0;">Mix mínimo de linhas novas cumprido?</label>
+        <select id="pdMix" class="filter-select" style="max-width:160px;"><option value="">— não avaliado</option><option value="sim" ${p.mixCumprido===true?'selected':''}>Sim</option><option value="nao" ${p.mixCumprido===false?'selected':''}>Não</option></select></div>` : ''}
+      ${(p.historico||[]).length ? `<details style="margin-top:12px;"><summary class="hint" style="display:list-item;">Histórico</summary><ul style="margin:6px 0 0 18px; font-size:12.5px;">${p.historico.slice().reverse().map(h => `<li>${pDataBR((h.em||'').slice(0,10))} ${(h.em||'').slice(11,16)} · ${pEsc(h.por||'')}: ${pEsc(h.acao)}</li>`).join('')}</ul></details>` : ''}
+      <div id="pdMsg"></div>
+      <div class="modal-actions" style="margin-top:14px; flex-wrap:wrap;">
+        ${gestor && p.status === 'pendente' ? `<button class="ghost-btn" id="pdEditar">✎ Editar</button>` : ''}
+        ${gestor && (p.status === 'pendente' || (p.status === 'aceita' && k.status === 'andamento')) ? `<button class="ghost-btn" id="pdCancelar" style="color:var(--danger); border-color:var(--danger);">Cancelar proposta</button>` : ''}
+        <button class="primary-btn" id="pdFechar">Fechar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bd);
+  const $ = s => bd.querySelector(s);
+  const msg = $('#pdMsg');
+  const fechar = () => { bd.remove(); };
+  const salvarE = async (mudar, acao) => {
+    try{
+      const atual = JSON.parse(JSON.stringify((STATE.propostas||[]).find(x => x.numero === numero)));
+      mudar(atual);
+      atual.historico = (atual.historico||[]).concat([{em: new Date().toISOString(), por: pQuem(), acao}]);
+      await propostaSalvar(atual);
+      bd.remove(); if(aoMudar) aoMudar();
+    }catch(e){ msg.innerHTML = `<div class="msg err">${pEsc(e.message)}</div>`; if(e.status === 409){ await propostasCarregar(true); } }
+  };
+  $('#pdFechar').onclick = fechar;
+  bd.onclick = e => { if(e.target === bd) fechar(); };
+  if($('#pdBaixar')) $('#pdBaixar').onclick = () => propBaixarArquivo(p);
+  if($('#pdEditar')) $('#pdEditar').onclick = () => { bd.remove(); abrirPropostaForm(p, aoMudar); };
+  if($('#pdAceitar')) $('#pdAceitar').onclick = async () => {
+    if(!(await confirmarAcao(`Confirmar que o cliente ACEITOU o desafio hoje (${pDataBR(todayStr())})? A contagem dos pedidos começa hoje e vai até ${pDataBR(pAddDias(todayStr(), (p.duracaoDias||90)-1))}.`))) return;
+    salvarE(x => { x.status = 'aceita'; x.aceiteEm = todayStr(); x.aceitePor = pQuem(); }, 'Cliente aceitou o desafio');
+  };
+  if($('#pdRecusar')) $('#pdRecusar').onclick = async () => {
+    const motivo = await propPerguntarTexto('Por que o cliente recusou?', 'Motivo da recusa');
+    if(!motivo) return;
+    salvarE(x => { x.status = 'recusada'; x.recusadaEm = new Date().toISOString(); x.recusadaPor = pQuem(); x.recusaMotivo = motivo; }, 'Cliente recusou: ' + motivo);
+  };
+  if($('#pdCancelar')) $('#pdCancelar').onclick = async () => {
+    const motivo = await propPerguntarTexto('Cancelar esta proposta? Ela sai das ativas (nada é apagado).', 'Motivo do cancelamento');
+    if(!motivo) return;
+    salvarE(x => { x.status = 'cancelada'; x.canceladaEm = new Date().toISOString(); x.canceladaPor = pQuem(); x.cancelamentoMotivo = motivo; }, 'Proposta cancelada: ' + motivo);
+  };
+  if($('#pdMix')) $('#pdMix').onchange = () => { const v = $('#pdMix').value; salvarE(x => { x.mixCumprido = v === '' ? null : v === 'sim'; }, 'Mix mínimo: ' + (v === '' ? 'não avaliado' : v)); };
+  bd.querySelectorAll('.pdIgn').forEach(b => b.onclick = () => {
+    const id = b.dataset.id;
+    salvarE(x => { const ped = (x.pedidos||[]).find(y => y.id === id); if(ped){ ped.ignorado = !ped.ignorado; ped.ignoradoPor = pQuem(); } }, 'Pedido ' + id + ' ' + (b.textContent.includes('Tirar') ? 'tirado do contador' : 'voltou a contar'));
+  });
+  bd.querySelectorAll('.pdCash').forEach(b => b.onclick = async () => {
+    const n = Number(b.dataset.ciclo);
+    const c = k.ciclos.find(x => x.n === n);
+    if(!c || !(c.cashback > 0)) return;
+    if(!(await confirmarAcao(`Enviar o cashback do ${n}º ciclo para a Garantia (Pendentes) para autorizar? ${c.faixa.pct}% sobre ${fmtMoney(c.valor)} = <b>${fmtMoney(c.cashback)}</b>.`))) return;
+    b.disabled = true; b.textContent = 'Enviando…';
+    try{
+      const gNum = await propostaCriarGarantiaCashback(p, c);
+      await salvarE(x => { x.cashbacks = x.cashbacks || {}; x.cashbacks[n] = {garantiaNumero: gNum, valor: c.cashback, pct: c.faixa.pct, base: c.valor, em: new Date().toISOString(), por: pQuem()}; }, `Cashback do ${n}º ciclo enviado para a Garantia Nº ${gNum} (${fmtMoney(c.cashback)})`);
+    }catch(e){ msg.innerHTML = `<div class="msg err">${pEsc(e.message)}</div>`; b.disabled = false; b.textContent = 'Enviar p/ Garantia'; }
+  });
+}
+function propPerguntarTexto(pergunta, placeholder){
+  return new Promise(resolve => {
+    const bd = document.createElement('div');
+    bd.className = 'modal-backdrop';
+    bd.innerHTML = `<div class="modal" style="max-width:420px;"><p style="font-size:14px; margin-bottom:10px;">${pergunta}</p>
+      <textarea id="ptxt" class="login-input" rows="3" placeholder="${pEsc(placeholder||'')}"></textarea>
+      <div class="modal-actions"><button class="ghost-btn" id="ptxtNao">Voltar</button><button class="primary-btn" id="ptxtOk">Confirmar</button></div></div>`;
+    document.body.appendChild(bd);
+    const t = bd.querySelector('#ptxt'); t.focus();
+    bd.querySelector('#ptxtNao').onclick = () => { bd.remove(); resolve(null); };
+    bd.querySelector('#ptxtOk').onclick = () => { const v = t.value.trim(); if(!v){ t.style.borderColor = 'var(--danger)'; return; } bd.remove(); resolve(v); };
+  });
+}
+// Cashback do ciclo vira uma Garantia do tipo cashback em "Pendentes" (gerente autoriza → Aguardando lançamento → Concluída).
+async function propostaCriarGarantiaCashback(p, ciclo){
+  try{
+    const lista = await listarGarantias();
+    const ja = lista.find(x => x.origem === 'proposta-cashback' && !x.excluida && x.status !== 'recusada' && x.proposta && x.proposta.numero === p.numero && x.proposta.ciclo === ciclo.n);
+    if(ja) return ja.numero;
+  }catch(e){}
+  const {numero} = await garantiaApi({acao:'proximo-numero'});
+  const cli0 = (p.clientes||[])[0] || {};
+  const cli = (STATE.roster||[]).find(c => String(c.codigo) === String(cli0.codigo)) || {};
+  const vend = STATE.vendors.find(v => v.codigo === p.vendedorCodigo);
+  const agora = new Date().toISOString();
+  const cb = gR2(ciclo.cashback);
+  const desc = `Cashback proposta Nº ${p.numero} · ${ciclo.n}º ciclo (${pDataBR(ciclo.inicio)} a ${pDataBR(ciclo.fim)}): ${ciclo.faixa.pct}% sobre ${fmtMoney(ciclo.valor)}`;
+  const g = {
+    numero, criadoEm: agora, criadoPor: gQuem(),
+    vendedorCodigo: p.vendedorCodigo, vendedorNome: vend ? vend.nome : '',
+    clienteCodigo: Number(cli0.codigo) || cli0.codigo, clienteNome: cli.nome || cli0.nome || ('Cliente Nº '+cli0.codigo),
+    cnpj: cli.cnpj || '', municipio: cli.municipio || '', uf: (cli.uf || '').toUpperCase(),
+    numeroOrcamento: `Proposta ${p.numero} · ciclo ${ciclo.n}`, consultor: '',
+    valorTotal: cb, valorIpi: 0, valorSt: 0, valorFinanceiro: null,
+    nfDevolucao: true, clienteEnvia: false, fretePagoPor: null, freteValor: null,
+    obs: `🏆 ${desc}. Proposta "${p.titulo||''}"${(p.clientes||[]).length > 1 ? ' — grupo: '+p.clientes.map(c => 'Nº '+c.codigo).join(', ') : ''}. Bonificação conforme regras da proposta.`,
+    itens: [{codigo:'CASHBACK-PROPOSTA', descricao: desc, quantidade:1, unitario: cb, total: cb, conferencia:{veio:null, destino:null}}],
+    pdfPath: null, pdfNome: null,
+    status: 'pendente', excluida: false,
+    origem: 'proposta-cashback',
+    proposta: {numero: p.numero, ciclo: ciclo.n, pct: ciclo.faixa.pct, base: ciclo.valor, inicio: ciclo.inicio, fim: ciclo.fim},
+    historico: [{em: agora, por: pQuem(), acao: `Cashback da proposta Nº ${p.numero} (${ciclo.n}º ciclo) gerado — aguardando autorização`}],
+    versao: 0,
+  };
+  await salvarGarantia(g);
+  return numero;
+}
+// ================= FIM PROPOSTAS =================
+
 // ---------------- VENDOR VIEW ----------------
 async function renderVendorShell(){
   normalizarRotaAntiga();
@@ -7342,6 +7894,7 @@ async function renderVendorShell(){
   const main = document.getElementById('main');
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
   await getContatos(STATE.session.codigo);
+  await propostasCarregar();
   if(STATE.route.page==='dashboard') renderVendorDashboard(main);
   else if(STATE.route.page==='hoje') await renderVendorHoje(main);
   else if(STATE.route.page==='carteira') renderVendorCarteira(main);
@@ -7356,6 +7909,7 @@ async function renderVendorShell(){
   else if(STATE.route.page==='sac') await renderSacModulo(main);
   else if(STATE.route.page==='compras-estoque') await renderComprasModulo(main, renderVendorShell);
   else if(STATE.route.page==='relatorios') renderVendorRelatorios(main);
+  else if(STATE.route.page==='propostas') await renderPropostas(main);
   else renderVendorHistorico(main);
 }
 
@@ -8980,6 +9534,7 @@ function renderVendorCarteira(main){
     <div class="form-row" style="margin-bottom:16px;">
       <button class="ghost-btn" id="btnAbrirVinculo">🔗 Vincular clientes do mesmo grupo (CNPJ)</button>
       <button class="ghost-btn" id="btnLimparCarteira" style="color:var(--warn); border-color:var(--warn);">🗑️ Limpar minha carteira</button>
+      <button class="ghost-btn" id="btnPropostas" style="border-color:var(--primary); color:var(--primary); font-weight:600;">🏆 Propostas / desafios${propostasPendentesDoVendedor() ? ` <span class="status-badge status-warn" style="font-size:11px; margin-left:4px;">${propostasPendentesDoVendedor()} aguardando aceite</span>` : ''}</button>
     </div>
     <div class="toolbar">
       <input type="text" class="search-input" id="busca" placeholder="Buscar por nome, número, cidade ou contato...">
@@ -8998,6 +9553,7 @@ function renderVendorCarteira(main){
     <div class="client-list" id="lista"></div>
   `;
   document.getElementById('btnAbrirVinculo').onclick = () => abrirModalVincularCNPJ();
+  document.getElementById('btnPropostas').onclick = () => { STATE.route = {page:'propostas'}; renderVendorShell(); };
   document.getElementById('btnLimparCarteira').onclick = async () => {
     const numClientes = clientsForVendor(STATE.session.codigo).length;
     if(numClientes === 0){
@@ -9776,6 +10332,7 @@ function clientRowHTML(c, status, doneToday, showDay, showCredito){
             <span class="meta-cliente-editar" data-codigo="${c.codigo}" title="Clique para editar a meta">🎯 Meta: <b>${fmtMoney(meta)}</b> ✎</span>
           </div>
         ` : ''}
+        ${propostaLinhaClienteHTML(c)}
         ${c.vendedorCodigo ? `
           <div class="meta-cliente-linha">
             <span class="inadimplente-editar" data-codigo="${c.codigo}" title="Clique para gerenciar inadimplência">${inadimplente ? '🖤 Gerenciar inadimplência' : '⚠️ Marcar como inadimplente'}</span>
@@ -10136,6 +10693,7 @@ async function renderManagerShell(){
     {page:'vendedores', label:'Vendedores'},
     {page:'inativos', label:'Clientes inativos'},
     {page:'pedidos-equipe', label:'Pedidos'},
+    {page:'propostas', label:'🏆 Propostas'},
     {page:'elaboracao-metas', label:'Elaboração de Metas'},
     {page:'ecommerce', label:'🛒 E-commerce'},
     {page:'financeira', label:'Financeira'},
@@ -10149,6 +10707,7 @@ async function renderManagerShell(){
   const main = document.getElementById('main');
   main.innerHTML = `<div class="loading" style="min-height:200px">Carregando…</div>`;
   await Promise.all(STATE.vendors.map(v => getContatos(v.codigo)));
+  await propostasCarregar();
   if(STATE.route.page==='visao-geral') renderManagerOverview(main);
   else if(STATE.route.page==='vendedores') renderManagerVendorDetail(main);
   else if(STATE.route.page==='inativos') await renderManagerInativos(main);
@@ -10162,6 +10721,7 @@ async function renderManagerShell(){
   else if(STATE.route.page==='sac') await renderSacModulo(main);
   else if(STATE.route.page==='informar-nf') await renderInformarNf(main);
   else if(STATE.route.page==='saida') await renderSaidaModulo(main);
+  else if(STATE.route.page==='propostas') await renderPropostas(main);
   else await renderConfiguracoes(main);
 }
 
@@ -12189,7 +12749,7 @@ function gSacPreDecisao(g){ return g && (g.status === 'sac_analise' || g.status 
 // Tipo do registro (pra filtrar lista e relatório): garantia | sac | credito (crédito financeiro) | cashback (campanha).
 function gTipoRegistro(g){
   if(!g) return 'garantia';
-  if(g.origem === 'campanha-cashback') return 'cashback';
+  if(g.origem === 'campanha-cashback' || g.origem === 'proposta-cashback') return 'cashback';
   if(g.creditoFinanceiro) return 'credito';
   if(gEhSac(g)) return 'sac';
   return 'garantia';
@@ -12706,15 +13266,16 @@ function cardGarantiaHTML(g){
   const mostrarFormula = !preDecisao && (gConferente() || g.status === 'aguardando_mercadoria' || g.status === 'conferida');
   return `
     <div class="client-row status-${g.excluida ? 'danger' : st.cls} ${sac ? 'g-sac' : ''}" data-garantia="${g.numero}" style="cursor:pointer;">
-      <div style="font-family:var(--font-display); font-weight:700; font-size:18px; min-width:62px; color:${sac ? 'var(--sac)' : 'var(--primary)'};">${sac ? '<span class="sac-badge">SAC</span><br>' : ''}${g.origem === 'campanha-cashback' ? '<span class="sac-badge" style="background:#1a7f37;">💰 CASHBACK</span><br>' : ''}${g.creditoFinanceiro ? '<span class="sac-badge" style="background:#B26A00;">💳 CRÉDITO</span><br>' : ''}Nº ${g.numero}</div>
+      <div style="font-family:var(--font-display); font-weight:700; font-size:18px; min-width:62px; color:${sac ? 'var(--sac)' : 'var(--primary)'};">${sac ? '<span class="sac-badge">SAC</span><br>' : ''}${(g.origem === 'campanha-cashback' || g.origem === 'proposta-cashback') ? '<span class="sac-badge" style="background:#1a7f37;">💰 CASHBACK</span><br>' : ''}${g.creditoFinanceiro ? '<span class="sac-badge" style="background:#B26A00;">💳 CRÉDITO</span><br>' : ''}Nº ${g.numero}</div>
       <div class="client-info">
         <div class="client-name">${gEsc(g.clienteNome || 'Cliente')} <span class="client-num">Nº ${gEsc(g.clienteCodigo)}</span></div>
         <div class="client-meta">
           <span>${gEsc(g.uf || '—')}</span>
           <span>Vendedor: ${gEsc(g.vendedorNome || '—')}</span>
           <span>Lançada em ${fmtDataHora(g.criadoEm)}</span>
-          ${(sac || g.origem === 'campanha-cashback') ? (g.numeroOrcamento ? `<span>Pedido ${gEsc(g.numeroOrcamento)}</span>` : '') : ''}
+          ${(sac || g.origem === 'campanha-cashback' || g.origem === 'proposta-cashback') ? (g.numeroOrcamento ? `<span>Pedido ${gEsc(g.numeroOrcamento)}</span>` : '') : ''}
           ${g.creditoFinanceiro ? `<span>💳 Crédito financeiro: ${gEsc(G_CREDITO_MOTIVOS[g.creditoFinanceiro.motivo] || '')} · ${g.creditoFinanceiro.cobradoNaNF ? 'cobrado na NF' : 'não cobrado na NF'}</span>` : ''}
+          ${g.origem === 'proposta-cashback' ? `<span>🏆 Cashback proposta Nº ${g.proposta ? g.proposta.numero : ''} · ${g.proposta ? g.proposta.ciclo+'º ciclo · '+g.proposta.pct+'%' : ''} · ${fmtMoney(g.valorTotal)}</span>` : ''}
           ${g.origem === 'campanha-cashback' ? `<span>💰 Cashback campanha ferramentas ${g.campanha && g.campanha.cashbackPct ? g.campanha.cashbackPct+'%' : ''} · ${fmtMoney(g.valorTotal)}</span>` : ''}
           ${preDecisao ? `<span>${(g.itens||[]).length} item(ns) reclamado(s)</span>` : sac ? `
             ${g.clienteEnvia ? '<span>📦 Mercadoria pedida de volta</span>' : '<span>Sem retorno de mercadoria</span>'}

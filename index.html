@@ -10619,13 +10619,10 @@ function renderManagerOverview(main){
     ritmoTxt = !totalMetaVendas ? 'Mês fechado' : bateu ? 'Meta de vendas batida' : `Fechou em ${pctVendasReal}% da meta`;
     ritmoCls = bateu ? 'ok' : (pctVendasReal >= 90 ? 'warn' : 'bad'); ritmoSub = 'mês fechado';
   } else {
-    const diff = mediaEquipe - pctMes, pts = Math.abs(diff);
-    if(bateu){ ritmoTxt = 'Meta batida, agora é saldo'; ritmoCls = 'ok'; }
-    else if(diff === 0){ ritmoTxt = 'No ritmo do mês'; ritmoCls = 'ok'; }
-    else if(diff > 0){ ritmoTxt = `${ptsTxt(pts)} à frente do ritmo`; ritmoCls = 'ok'; }
-    else if(diff > -15){ ritmoTxt = `${ptsTxt(pts)} atrás do ritmo`; ritmoCls = 'warn'; }
-    else { ritmoTxt = `${ptsTxt(pts)} atrás: hora de acelerar`; ritmoCls = 'bad'; }
-    ritmoSub = `${mediaEquipe}% feito · ${pctMes}% do mês`;
+    // Painel do gerente: % da meta de vendas da equipe e quanto falta (sem "ritmo").
+    if(!totalMetaVendas){ ritmoTxt = 'Meta ainda não definida'; ritmoCls = 'warn'; ritmoSub = ''; }
+    else if(bateu){ ritmoTxt = `${pctVendasReal}% da meta · batida!`; ritmoCls = 'ok'; ritmoSub = `${fmtMoney(totalValorVendas - totalMetaVendas)} acima da meta`; }
+    else { ritmoTxt = `${pctVendasReal}% da meta`; ritmoCls = 'warn'; ritmoSub = `faltam ${fmtMoney(totalMetaVendas - totalValorVendas)}`; }
   }
 
   // Classificação: os mesmos números dos cartões de vendedor de antes, ordenados por % da meta de vendas.
@@ -10659,7 +10656,7 @@ function renderManagerOverview(main){
         <span class="x" aria-hidden="true">×</span>
         <div class="lado"><span class="lab">Meta</span><span class="val dim">${totalMetaVendas ? placarMil(totalMetaVendas) : 'sem meta'}</span></div>
       </div>
-      <div class="pl-pace"><b class="${ritmoCls}">${ritmoTxt}</b><span class="dim">${ritmoSub}</span></div>
+      <div class="pl-pace"><b class="${ritmoCls}">${ritmoTxt}</b><span class="dim">${ritmoSub}</span>${mesEhAtual && totalHoje ? `<b class="${totalHojeFeitos >= totalHoje ? 'ok' : 'bad'}" style="margin-top:8px; font-size:15px;">${totalHojeFeitos} de ${totalHoje} contatos</b><span class="dim">hoje · equipe</span>` : ''}</div>
     </div>
     ${placarLinhaTempoHTML(anoSel, mesSel, diasNoMes, diaAtual, mesEhAtual, vendasPorDia)}
 

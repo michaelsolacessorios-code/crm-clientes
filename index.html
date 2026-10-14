@@ -7635,15 +7635,20 @@ function abrirPropostaForm(existente, aoSalvar){
   drawFaixas();
   $('#pfAddFaixa').onclick = () => { faixas.push({valorMes:0,pct:0}); drawFaixas(); };
   const lerClientes = () => $('#pfClientes').value.split(/[,;\s]+/).map(x => x.trim()).filter(x => /^\d+$/.test(x));
+  let inativos = [];
   const mostrarNomes = () => {
     const cods = lerClientes();
     $('#pfClientesNomes').innerHTML = cods.map(cod => {
       const c = (STATE.roster||[]).find(x => String(x.codigo) === cod);
       const v = c && STATE.vendors.find(v => v.codigo === c.vendedorCodigo);
-      return c ? `Nº ${cod}: <b>${pEsc(c.nome)}</b>${v ? ' · vendedor '+pEsc(v.nome) : ' · <span style="color:var(--danger)">sem vendedor no CRM</span>'}` : `Nº ${cod}: <span style="color:var(--danger)">não encontrado na carteira</span>`;
+      if(c) return `Nº ${cod}: <b>${pEsc(c.nome)}</b>${v ? ' · vendedor '+pEsc(v.nome) : ' · <span style="color:var(--danger)">sem vendedor no CRM</span>'}`;
+      const ina = inativos.find(x => String(x.codigo) === cod);
+      if(ina) return `Nº ${cod}: <b>${pEsc(ina.nome)}</b> · <span style="color:var(--warn)">está em Clientes inativos (sem vendedor) — os pedidos dele só entram no contador depois que um vendedor assumir o cliente na carteira</span>`;
+      return `Nº ${cod}: <span style="color:var(--danger)">não encontrado na carteira nem nos inativos</span>`;
     }).join('<br>');
   };
   $('#pfClientes').oninput = mostrarNomes; mostrarNomes();
+  getInativos().then(l => { inativos = l || []; mostrarNomes(); }).catch(() => {});
   $('#pfFechar').onclick = () => bd.remove();
   $('#pfArquivo').onchange = () => { arquivoNovo = $('#pfArquivo').files[0] || null; slidesNovos = null; };
   $('#pfLer').onclick = async () => {
@@ -7676,7 +7681,7 @@ function abrirPropostaForm(existente, aoSalvar){
     const msg = $('#pfMsgSalvar');
     const cods = lerClientes();
     if(!cods.length){ msg.innerHTML = '<div class="msg err">Informe o Nº do cliente.</div>'; return; }
-    const clientes = cods.map(cod => { const c = (STATE.roster||[]).find(x => String(x.codigo) === cod); return {codigo: Number(cod), nome: c ? c.nome : 'Cliente Nº '+cod, vendedorCodigo: c ? c.vendedorCodigo : null}; });
+    const clientes = cods.map(cod => { const c = (STATE.roster||[]).find(x => String(x.codigo) === cod); const ina = !c && inativos.find(x => String(x.codigo) === cod); return {codigo: Number(cod), nome: c ? c.nome : (ina ? ina.nome : 'Cliente Nº '+cod), vendedorCodigo: c ? c.vendedorCodigo : null}; });
     const vendedorCodigo = (clientes.find(c => c.vendedorCodigo) || {}).vendedorCodigo || null;
     if(!vendedorCodigo){ msg.innerHTML = '<div class="msg err">Nenhum desses clientes está na carteira de um vendedor — o vendedor é quem dá o aceite.</div>'; return; }
     const metaValor = pNum($('#pfMeta').value);
@@ -8848,7 +8853,7 @@ async function renderVendorInativos(main){
     <div class="page-header"><div class="eyebrow">Clientes inativos</div><h2>Clientes sem vendedor</h2></div>
     <p style="font-size:13px; color:var(--ink-soft); margin-bottom:16px; line-height:1.5;">Clientes com CNPJ cadastrado, pelo menos uma compra no sistema e sem comprar há mais de 120 dias, sem vendedor responsável hoje. Assim que você marcar um contato aqui, o cliente entra automaticamente na sua carteira.</p>
     <div class="toolbar">
-      <input type="text" class="search-input" id="busca" placeholder="Buscar por nome, cidade, CNPJ ou contato...">
+      <input type="text" class="search-input" id="busca" placeholder="Buscar por nome, número, cidade, CNPJ ou contato...">
     </div>
     <div id="contagem" style="font-size:12.5px; color:var(--ink-soft); margin-bottom:12px;"></div>
     <div class="client-list" id="lista"></div>
@@ -8856,7 +8861,7 @@ async function renderVendorInativos(main){
   function draw(){
     const q = document.getElementById('busca').value.trim().toLowerCase();
     let filtered = pool.filter(c => {
-      return !q || c.nome.toLowerCase().includes(q) || (c.municipio||'').toLowerCase().includes(q) || (c.cnpj||'').includes(q) || (c.contato||'').toLowerCase().includes(q);
+      return !q || c.nome.toLowerCase().includes(q) || (c.municipio||'').toLowerCase().includes(q) || (c.cnpj||'').includes(q) || (c.contato||'').toLowerCase().includes(q) || String(c.codigo).includes(q);
     });
     filtered.sort((a,b) => a.ultimaCompra < b.ultimaCompra ? 1 : -1);
     document.getElementById('contagem').textContent = `${filtered.length} cliente(s) sem vendedor (sem comprar há mais de 120 dias)`;
@@ -10762,7 +10767,7 @@ async function renderManagerInativos(main){
     <div class="page-header"><div class="eyebrow">Clientes</div><h2>Clientes inativos (sem vendedor)</h2></div>
     <p style="font-size:13px; color:var(--ink-soft); margin-bottom:16px; line-height:1.5;">Clientes com CNPJ, pelo menos uma compra no sistema e sem comprar há mais de 120 dias, sem vendedor responsável. Qualquer vendedor pode assumir esses clientes ao contatá-los, ou você pode atribuir manualmente abaixo.</p>
     <div class="toolbar">
-      <input type="text" class="search-input" id="busca" placeholder="Buscar por nome, cidade, CNPJ ou contato...">
+      <input type="text" class="search-input" id="busca" placeholder="Buscar por nome, número, cidade, CNPJ ou contato...">
     </div>
     <div id="contagem" style="font-size:12.5px; color:var(--ink-soft); margin-bottom:12px;"></div>
     <div class="client-list" id="lista"></div>

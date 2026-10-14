@@ -6,7 +6,72 @@
 <title>TF Imports — Carteira de Clientes</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- xlsx-js-style = mesma SheetJS 0.18.5, mas grava cores/bordas/formatos no Excel -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+<script>
+  // Deixa TODA planilha exportada pelo CRM com visual profissional, sem mexer em cada export:
+  // cabeçalho azul, linhas zebradas, bordas, R$ formatado, larguras automáticas, filtro e linha TOTAL destacada.
+  (function(){
+    if(typeof XLSX === 'undefined' || !XLSX.writeFile) return;
+    var AZUL='1F3A5F', ZEBRA='F3F6FA', BORDA='D5DDE8', TOTAL_BG='DCE6F2';
+    var REGEX_DINHEIRO = /valor|r\$|preço|preco|crédito|credito|ticket|comiss|faturad|devido/i;
+    function borda(cor){ var b={style:'thin',color:{rgb:cor}}; return {top:b,bottom:b,left:b,right:b}; }
+    function estilizar(ws){
+      if(!ws || !ws['!ref']) return;
+      var rg = XLSX.utils.decode_range(ws['!ref']);
+      var larguras = [];
+      var dinheiro = {};
+      for(var c=rg.s.c; c<=rg.e.c; c++){
+        var h = ws[XLSX.utils.encode_cell({r:rg.s.r,c:c})];
+        var txt = h ? String(h.v) : '';
+        dinheiro[c] = REGEX_DINHEIRO.test(txt);
+        larguras[c] = Math.max(10, txt.length + 4);
+      }
+      for(var r=rg.s.r; r<=rg.e.r; r++){
+        var primeira = ws[XLSX.utils.encode_cell({r:r,c:rg.s.c})];
+        var ehTotal = r>rg.s.r && primeira && String(primeira.v).trim().toUpperCase()==='TOTAL';
+        for(var c2=rg.s.c; c2<=rg.e.c; c2++){
+          var ref = XLSX.utils.encode_cell({r:r,c:c2});
+          var cell = ws[ref];
+          if(!cell){ cell = ws[ref] = {t:'s', v:''}; }
+          if(r===rg.s.r){
+            cell.s = { font:{bold:true, color:{rgb:'FFFFFF'}, sz:11, name:'Calibri'},
+                       fill:{patternType:'solid', fgColor:{rgb:AZUL}},
+                       alignment:{horizontal:'center', vertical:'center', wrapText:true},
+                       border:borda(AZUL) };
+            continue;
+          }
+          var num = cell.t==='n';
+          var s = { font:{sz:10.5, name:'Calibri', bold:ehTotal, color:{rgb: ehTotal?AZUL:'1E1E1E'}},
+                    alignment:{vertical:'center', horizontal: num?'right':'left'},
+                    border:borda(BORDA) };
+          if(ehTotal){ s.fill={patternType:'solid', fgColor:{rgb:TOTAL_BG}}; s.border.top={style:'medium',color:{rgb:AZUL}}; }
+          else if((r-rg.s.r)%2===0){ s.fill={patternType:'solid', fgColor:{rgb:ZEBRA}}; }
+          if(num){
+            if(dinheiro[c2]) s.numFmt = '"R$" #,##0.00';
+            else s.numFmt = Number.isInteger(cell.v) ? '#,##0' : '#,##0.00';
+            cell.z = s.numFmt;
+          }
+          cell.s = s;
+          var len = num ? (dinheiro[c2] ? 16 : String(Math.round(cell.v)).length + 4) : String(cell.v==null?'':cell.v).length + 2;
+          if(len > larguras[c2]) larguras[c2] = len;
+        }
+      }
+      ws['!cols'] = larguras.map(function(w){ return {wch: Math.min(Math.max(w||10, 8), 55)}; });
+      var alturas = [{hpt: 30}];
+      for(var rr=rg.s.r+1; rr<=rg.e.r; rr++) alturas.push({hpt: 20});
+      ws['!rows'] = alturas;
+      var temTotal = (function(){ var p = ws[XLSX.utils.encode_cell({r:rg.e.r,c:rg.s.c})]; return rg.e.r>rg.s.r && p && String(p.v).trim().toUpperCase()==='TOTAL'; })();
+      var fimFiltro = temTotal ? rg.e.r-1 : rg.e.r;
+      if(fimFiltro > rg.s.r) ws['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:rg.s.r,c:rg.s.c}, e:{r:fimFiltro,c:rg.e.c}}) };
+    }
+    var writeOriginal = XLSX.writeFile;
+    XLSX.writeFile = function(wb, nome, opts){
+      try{ (wb.SheetNames||[]).forEach(function(n){ estilizar(wb.Sheets[n]); }); }catch(e){ console.warn('Estilo da planilha falhou, exportando sem estilo', e); }
+      return writeOriginal.call(XLSX, wb, nome, Object.assign({cellStyles:true}, opts||{}));
+    };
+  })();
+</script>
 <script>
   // Aparência Claro/Escuro escolhida pela pessoa (fica só neste navegador; não grava nada no banco).
   try{ var __modo = localStorage.getItem('crm-modo'); if(__modo==='claro') document.documentElement.setAttribute('data-visual','white'); else if(__modo==='escuro') document.documentElement.setAttribute('data-visual','dark'); }catch(e){}
@@ -2172,6 +2237,46 @@ function exportarPrevisaoExcel(containers, somenteVendedorCodigo){
   XLSX.writeFile(wb, `previsao_${sufixo}${quem}_${todayStr()}.xlsx`);
 }
 
+// Exporta o container COMPLETO pro vendedor: todos os itens (100%), com quanto chega,
+// quanto já está reservado no total, quanto está livre e quanto é reserva dele.
+// Não expõe vendedor/cliente das reservas dos colegas. Inclui aba "Minhas reservas" se houver.
+function exportarContainerCompletoVendedor(containers, vendedorCodigo){
+  if(typeof XLSX === 'undefined'){ alert('Biblioteca de planilha não carregou. Recarregue a página.'); return; }
+  const itens = [], minhas = [];
+  containers.forEach(cont => {
+    cont.itens.forEach(item => {
+      const r = resumoItemPrevisao(item);
+      const mi = (item.intencoes||[]).filter(i => i.vendedorCodigo === vendedorCodigo);
+      itens.push({
+        'Container': cont.nome,
+        'Previsão de chegada': cont.previsaoChegada ? fmtDatePt(cont.previsaoChegada) : '',
+        'Código': item.codigo, 'Descrição': item.descricao,
+        'Qtd chegando': item.quantidade,
+        'Reservado total': r.reservado,
+        'Livre': r.livre,
+        'Minha reserva': mi.reduce((s,i) => s + (Number(i.quantidade)||0), 0),
+      });
+      mi.forEach(i => minhas.push({
+        'Container': cont.nome, 'Código': item.codigo, 'Descrição': item.descricao,
+        'Nº cliente': i.clienteCodigo, 'Cliente': i.clienteNome,
+        'Qtd reservada': i.quantidade,
+        'Data lançamento': i.data ? fmtDatePt(i.data) : '',
+      }));
+    });
+  });
+  if(!itens.length){ alert('Nenhum item nesses containers.'); return; }
+  const soma = (arr, k) => arr.reduce((s,l) => s + (Number(l[k])||0), 0);
+  itens.push({'Container':'TOTAL', 'Qtd chegando': soma(itens,'Qtd chegando'), 'Reservado total': soma(itens,'Reservado total'), 'Livre': soma(itens,'Livre'), 'Minha reserva': soma(itens,'Minha reserva')});
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(itens), 'Container completo');
+  if(minhas.length){
+    minhas.push({'Container':'TOTAL', 'Qtd reservada': soma(minhas,'Qtd reservada')});
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(minhas), 'Minhas reservas');
+  }
+  const sufixo = containers.length === 1 ? containers[0].nome : 'containers';
+  XLSX.writeFile(wb, `container_${sufixo}_completo_${todayStr()}.xlsx`);
+}
+
 // Registra a intenção de venda de um vendedor pra um item de um container específico.
 async function registrarIntencaoVenda(containerId, itemId, clienteCodigo, quantidade){
   await recarregarPrevisoesFrescas();
@@ -4164,6 +4269,7 @@ async function renderPrevisaoCompras(main){
     const ehVendedor = STATE.session.tipo === 'vendedor';
     box.innerHTML = `
       <div class="form-row" style="justify-content:flex-end; margin-bottom:8px;">
+        ${ehVendedor ? `<button class="ghost-btn" id="btnExportarTodosCompletos">📦 Exportar todos os containers completos (Excel)</button>` : ''}
         <button class="ghost-btn" id="btnExportarTodosContainers">📊 ${ehVendedor ? 'Exportar minhas reservas (Excel)' : 'Exportar todos os containers (Excel)'}</button>
       </div>` + pendentes.slice().reverse().map(cont => {
       const resumoCont = resumoContainerPrevisao(cont);
@@ -4189,6 +4295,11 @@ async function renderPrevisaoCompras(main){
             <button class="primary-btn btnDarEntrada" data-id="${cont.id}">📥 Dar entrada (chegou no estoque)</button>
             <button class="ghost-btn btnExportarContainer" data-id="${cont.id}">📊 Exportar Excel</button>
             <button class="ghost-btn btnRemoverContainer" data-id="${cont.id}" style="color:var(--danger); border-color:var(--danger);">🗑️ Remover container</button>
+          </div>
+        ` : ''}
+        ${ehVendedor ? `
+          <div class="form-row" style="margin-top:6px;">
+            <button class="ghost-btn btnExportarContainerCompleto" data-id="${cont.id}">📊 Exportar container completo (Excel)</button>
           </div>
         ` : ''}
         <div class="client-list containerItens" data-id="${cont.id}" style="display:${containersAbertos.has(cont.id)?'flex':'none'}; flex-direction:column; margin-top:14px;">
@@ -4263,6 +4374,15 @@ async function renderPrevisaoCompras(main){
     });
     const btnTodos = document.getElementById('btnExportarTodosContainers');
     if(btnTodos) btnTodos.onclick = () => ehVendedor ? exportarPrevisaoExcel(pendentes, STATE.session.codigo) : exportarPrevisaoExcel(pendentes);
+    const btnTodosCompletos = document.getElementById('btnExportarTodosCompletos');
+    if(btnTodosCompletos) btnTodosCompletos.onclick = () => exportarContainerCompletoVendedor(pendentes, STATE.session.codigo);
+    box.querySelectorAll('.btnExportarContainerCompleto').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const cont = STATE.previsoes.find(c=>c.id===btn.dataset.id);
+        if(cont) exportarContainerCompletoVendedor([cont], STATE.session.codigo);
+      };
+    });
     box.querySelectorAll('.btnExportarContainer').forEach(btn => {
       btn.onclick = (e) => {
         e.stopPropagation();

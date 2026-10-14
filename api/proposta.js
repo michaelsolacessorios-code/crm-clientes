@@ -156,13 +156,14 @@ async function analisarComIA(texto, res) {
   if (texto.trim().length < 20) return res.status(400).json({ error: 'Não achei texto nos slides.' });
   const prompt = `Você recebe o texto extraído dos slides de uma proposta comercial (desafio de compras) que a TF Imports enviou a um cliente lojista.
 Extraia os dados do desafio e responda APENAS com um JSON válido, sem texto antes ou depois, neste formato:
-{"titulo":"","clientes":"","clienteCodigos":[],"duracaoDias":90,"metaValor":0,"metaSkus":0,"faixas":[{"valorMes":0,"pct":0}],"regras":[""],"resumo":""}
+{"titulo":"","clientes":"","clienteCodigos":[],"duracaoDias":90,"metaValor":0,"metaSkus":0,"metaVolume":0,"faixas":[{"valorMes":0,"pct":0}],"regras":[""],"resumo":""}
 - titulo: nome curto da proposta (ex: "Plano de Crescimento 4º tri 2026 — Grupo X").
 - clientes: nome(s) do cliente/grupo como aparece no texto.
 - clienteCodigos: números de cadastro de cliente se aparecerem no texto (como texto); senão [].
 - duracaoDias: duração do desafio em dias (trimestre = 90).
 - metaValor: meta de compras do PERÍODO TODO em reais, número puro (ex: R$ 300 mil no trimestre = 300000).
 - metaSkus: meta de SKUs/mix ativos no período (número), 0 se não houver.
+- metaVolume: meta de volume em unidades no período (número), 0 se a proposta não definir meta de volume.
 - faixas: faixas de cashback por compra MENSAL (valorMes em reais, pct em %), em ordem crescente. Ex: R$ 50 mil/mês = 5%.
 - regras: lista curta com as regras e combinados da proposta (frases curtas).
 - resumo: 2 a 3 frases resumindo o desafio.

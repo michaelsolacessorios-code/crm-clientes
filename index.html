@@ -7386,7 +7386,7 @@ function pPodeResponder(p){ return pEhGestor() || p.vendedorCodigo === (STATE.se
 // Período, ciclos de 30 dias, pedidos e cashback de uma proposta (tudo calculado, nada gravado).
 function propostaCalculo(p){
   const dur = Math.max(1, Number(p.duracaoDias) || 90);
-  const r = {inicio:null, fim:null, ciclos:[], total:0, skus:new Set(), pedidos:[], pctMeta:0, status:p.status, diasRestantes:null};
+  const r = {inicio:null, fim:null, ciclos:[], total:0, skus:new Set(), un:0, porSku:{}, pedidos:[], pctMeta:0, status:p.status, diasRestantes:null};
   if(p.status !== 'aceita' || !p.aceiteEm){
     r.status = p.status === 'aceita' ? 'andamento' : p.status;
     return r;
@@ -7397,7 +7397,7 @@ function propostaCalculo(p){
   for(let i = 0; i < nC; i++){
     const ini = pAddDias(p.aceiteEm, i*30);
     let fim = pAddDias(ini, 29); if(fim > r.fim) fim = r.fim;
-    r.ciclos.push({n:i+1, inicio:ini, fim, valor:0, pedidos:0, skus:new Set()});
+    r.ciclos.push({n:i+1, inicio:ini, fim, valor:0, pedidos:0, skus:new Set(), un:0});
   }
   (p.pedidos||[]).forEach(ped => {
     if(!ped || !ped.data || ped.data < r.inicio || ped.data > r.fim) return;
@@ -7406,6 +7406,8 @@ function propostaCalculo(p){
     if(ped.ignorado || !ci) return;
     ci.valor += Number(ped.valor)||0; ci.pedidos++;
     (ped.skus||[]).forEach(s => { ci.skus.add(s); r.skus.add(s); });
+    ci.un += Number(ped.un)||0; r.un += Number(ped.un)||0;
+    (ped.itens||[]).forEach(([cod, q, d]) => { const x = r.porSku[cod] || (r.porSku[cod] = {cod, d:d||'', un:0, pedidos:0}); x.un += q; x.pedidos++; if(!x.d && d) x.d = d; });
     r.total += Number(ped.valor)||0;
   });
   const hoje = todayStr();
@@ -7449,6 +7451,8 @@ function propostaPedidoDaEntrada(cod, h){
     id: h.id, clienteCodigo: cod, data: h.data, valor: Number(h.valor)||0,
     numeroPedido: sk.numeroPedido || '', rateio: !!h.rateioGrupo,
     skus: Array.from(new Set((sk.itens||[]).map(i => String(i.codigo||'').trim().toUpperCase()).filter(x => x && x !== '?'))),
+    un: (sk.itens||[]).reduce((t,i) => t + (Number(i.quantidade)||0), 0),
+    itens: (sk.itens||[]).filter(i => i.codigo && i.codigo !== '?').map(i => [String(i.codigo).trim().toUpperCase(), Number(i.quantidade)||0, String(i.descricao||'').slice(0,40)]),
     registradoEm: new Date().toISOString(),
   };
 }
@@ -7555,7 +7559,7 @@ async function renderPropostas(main){
   const nomeVend = cod => (STATE.vendors.find(v => v.codigo === cod) || {}).nome || '—';
   main.innerHTML = `
     <div class="page-header"><div class="eyebrow">Carteira</div><h2>🏆 Propostas / desafios</h2></div>
-    <p class="hint" style="margin-bottom:14px;">${pEhGestor() ? 'Cadastre a proposta enviada ao cliente (suba o PowerPoint — o CRM lê os slides e preenche). O vendedor registra o aceite do cliente e, a partir daí, os pedidos desse cliente entram no contador por ciclos de 30 dias.' : 'Propostas dos seus clientes. Quando o cliente aceitar o desafio, clique em "Cliente aceitou" — só os pedidos subidos depois do aceite contam.'}</p>
+    <p class="hint" style="margin-bottom:14px;">${pEhGestor() ? 'Cadastre a proposta enviada ao cliente (suba o PowerPoint — o CRM lê os slides e preenche). O vendedor registra o aceite do cliente e, a partir daí, os pedidos desse cliente entram no contador por períodos de 30 dias (valor, SKUs e volume).' : 'Propostas dos seus clientes. Quando o cliente aceitar o desafio, clique em "Cliente aceitou" — só os pedidos subidos depois do aceite contam.'}</p>
     <div class="form-row" style="margin-bottom:14px; align-items:center;">
       ${pEhGestor() ? `<button class="primary-btn" id="btnNovaProposta">+ Nova proposta</button>` : ''}
       ${[['ativas','Ativas'],['encerradas','Encerradas'],['outras','Recusadas / canceladas']].map(([id,l]) => `<button class="ghost-btn ${ui.filtro===id?'active':''}" data-pfiltro="${id}" style="${ui.filtro===id?'border-color:var(--primary); color:var(--primary); font-weight:700;':''}">${l} (${grupos[id].length})</button>`).join('')}
@@ -7606,8 +7610,9 @@ function abrirPropostaForm(existente, aoSalvar){
         <div style="flex:1"><label class="field-label">Duração (dias, a partir do aceite)</label><input type="number" id="pfDur" class="login-input" min="30" step="30" value="${p0.duracaoDias||90}"></div>
         <div style="flex:1"><label class="field-label">Meta de compras no período (R$)</label><input type="text" id="pfMeta" class="login-input" value="${p0.metaValor||''}"></div>
         <div style="flex:1"><label class="field-label">Meta de SKUs distintos (0 = sem)</label><input type="number" id="pfSkus" class="login-input" min="0" value="${p0.metaSkus||0}"></div>
+        <div style="flex:1"><label class="field-label">Meta de volume em unidades (0 = sem)</label><input type="number" id="pfVol" class="login-input" min="0" value="${p0.metaVolume||0}"></div>
       </div>
-      <label class="field-label">Faixas de cashback — compra em cada ciclo de 30 dias</label>
+      <label class="field-label">Faixas de cashback — compra em cada período de 30 dias</label>
       <div id="pfFaixas"></div>
       <button class="ghost-btn" id="pfAddFaixa" style="margin:4px 0 12px;">+ faixa</button>
       <label class="field-label">Regras / combinados (uma por linha)</label>
@@ -7626,7 +7631,7 @@ function abrirPropostaForm(existente, aoSalvar){
   const drawFaixas = () => {
     $('#pfFaixas').innerHTML = faixas.map((f,i) => `<div class="form-row" style="align-items:center; margin-bottom:6px;">
       <span class="hint" style="margin:0;">A partir de R$</span><input type="text" class="login-input pfFxV" data-i="${i}" value="${f.valorMes||''}" style="margin:0; max-width:160px;">
-      <span class="hint" style="margin:0;">no ciclo →</span><input type="number" class="login-input pfFxP" data-i="${i}" value="${f.pct||''}" style="margin:0; max-width:90px;"><span class="hint" style="margin:0;">% cashback</span>
+      <span class="hint" style="margin:0;">no período →</span><input type="number" class="login-input pfFxP" data-i="${i}" value="${f.pct||''}" style="margin:0; max-width:90px;"><span class="hint" style="margin:0;">% cashback</span>
       <button class="ghost-btn pfFxDel" data-i="${i}" style="padding:4px 10px;">✕</button></div>`).join('') || '<p class="hint">Sem faixas — não gera cashback.</p>';
     bd.querySelectorAll('.pfFxV').forEach(el => el.oninput = () => { faixas[el.dataset.i].valorMes = pNum(el.value); });
     bd.querySelectorAll('.pfFxP').forEach(el => el.oninput = () => { faixas[el.dataset.i].pct = pNum(el.value); });
@@ -7666,6 +7671,7 @@ function abrirPropostaForm(existente, aoSalvar){
       if(dados.duracaoDias) $('#pfDur').value = dados.duracaoDias;
       if(dados.metaValor) $('#pfMeta').value = dados.metaValor;
       if(dados.metaSkus) $('#pfSkus').value = dados.metaSkus;
+      if(dados.metaVolume) $('#pfVol').value = dados.metaVolume;
       if(Array.isArray(dados.faixas) && dados.faixas.length){ faixas = dados.faixas.map(x => ({valorMes:pNum(x.valorMes), pct:pNum(x.pct)})).filter(x => x.valorMes > 0); drawFaixas(); }
       if(Array.isArray(dados.regras) && dados.regras.length) $('#pfRegras').value = dados.regras.join('\n');
       if(dados.resumo) $('#pfResumo').value = dados.resumo;
@@ -7700,7 +7706,7 @@ function abrirPropostaForm(existente, aoSalvar){
       }
       Object.assign(p, {
         clientes, vendedorCodigo, titulo: $('#pfTitulo').value.trim() || 'Proposta', duracaoDias: Math.max(1, Math.round(pNum($('#pfDur').value)) || 90),
-        metaValor, metaSkus: Math.max(0, Math.round(pNum($('#pfSkus').value))),
+        metaValor, metaSkus: Math.max(0, Math.round(pNum($('#pfSkus').value))), metaVolume: Math.max(0, Math.round(pNum($('#pfVol').value))),
         faixas: faixas.filter(f => f.valorMes > 0 && f.pct > 0).sort((a,b) => a.valorMes - b.valorMes),
         regras: $('#pfRegras').value.split('\n').map(x => x.trim()).filter(Boolean), resumo: $('#pfResumo').value.trim(),
       });
@@ -7723,23 +7729,55 @@ function abrirPropostaDetalhe(numero, aoMudar){
   const nomeVend = (STATE.vendors.find(v => v.codigo === p.vendedorCodigo) || {}).nome || '—';
   const bd = document.createElement('div');
   bd.className = 'modal-backdrop';
+  const nPer = Math.max(1, k.ciclos.length);
+  const metaPerValor = (p.metaValor||0) / nPer;
+  const kpi = (titulo, feito, meta, fmt, sub) => { const pct = meta ? Math.round(feito/meta*100) : null;
+    return `<div style="flex:1; min-width:200px; border:1px solid var(--border); border-radius:12px; padding:12px 14px; background:var(--surface);">
+      <div class="hint" style="margin:0; text-transform:uppercase; letter-spacing:.04em; font-size:11.5px;">${titulo}</div>
+      <div style="font-family:var(--font-display); font-size:26px; font-weight:700; line-height:1.15;">${fmt(feito)}</div>
+      <div class="hint" style="margin:0;">${meta ? `de ${fmt(meta)} · <b style="color:${pct>=100?'var(--ok)':'inherit'}">${pct}%</b>${feito < meta ? ' · faltam '+fmt(meta - feito) : ' · meta batida!'}` : (sub || 'sem meta definida')}</div>
+      ${meta ? `<div style="height:8px; background:var(--border); border-radius:6px; margin-top:8px; overflow:hidden;"><div style="height:100%; width:${Math.min(100,pct)}%; background:${pct>=100?'var(--ok)':'var(--primary)'};"></div></div>` : ''}
+    </div>`; };
+  const fmtNum = n => Number(n||0).toLocaleString('pt-BR');
+  const maxV = Math.max(1, metaPerValor, ...k.ciclos.map(c => c.valor));
+  const topSkus = Object.values(k.porSku).sort((x,y) => y.un - x.un).slice(0, 10);
   const blocoCiclos = !k.inicio ? '' : `
-    <h4 style="margin:16px 0 6px;">Ciclos de 30 dias</h4>
-    <div style="overflow-x:auto"><table class="cred-table" style="width:100%"><thead><tr><th>Ciclo</th><th>Período</th><th style="text-align:right">Pedidos</th><th style="text-align:right">Comprado</th><th>Faixa</th><th style="text-align:right">Cashback</th><th></th></tr></thead><tbody>
+    <h4 style="margin:18px 0 8px;">📊 Indicadores desde o aceite</h4>
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      ${kpi('Valor comprado', k.total, p.metaValor||0, fmtMoney)}
+      ${kpi('SKUs distintos', k.skus.size, p.metaSkus||0, fmtNum)}
+      ${kpi('Volume (unidades)', k.un, p.metaVolume||0, fmtNum)}
+    </div>
+    <h4 style="margin:18px 0 6px;">Período a período <span class="hint" style="font-weight:400; margin:0;">· 30 dias cada${metaPerValor ? ' · meta por período '+fmtMoney(metaPerValor) : ''}</span></h4>
+    <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px;">
+      ${k.ciclos.map(c => { const pc = metaPerValor ? Math.round(c.valor/metaPerValor*100) : null; return `
+        <div style="display:grid; grid-template-columns:110px 1fr 120px; gap:10px; align-items:center;">
+          <div><b>Período ${c.n}</b>${c.atual ? ' <span class="status-badge status-info" style="font-size:10.5px;">atual</span>' : ''}<br><small class="hint" style="margin:0">${pDataBR(c.inicio).slice(0,5)} a ${pDataBR(c.fim).slice(0,5)}</small></div>
+          <div style="position:relative; height:22px; background:var(--border); border-radius:6px; overflow:hidden;">
+            <div style="height:100%; width:${(c.valor/maxV*100).toFixed(1)}%; background:${pc!==null && pc>=100 ? 'var(--ok)' : 'var(--primary)'};"></div>
+            ${metaPerValor ? `<div title="meta do período" style="position:absolute; top:0; bottom:0; left:${(metaPerValor/maxV*100).toFixed(1)}%; width:2px; background:var(--ink);"></div>` : ''}
+          </div>
+          <div style="text-align:right;"><b>${fmtMoney(c.valor)}</b>${pc!==null ? `<br><small class="hint" style="margin:0">${pc}% da meta</small>` : ''}</div>
+        </div>`; }).join('')}
+    </div>
+    <div style="overflow-x:auto"><table class="cred-table" style="width:100%"><thead><tr><th>Período</th><th>Datas</th><th style="text-align:right">Pedidos</th><th style="text-align:right">Valor</th><th style="text-align:right">SKUs</th><th style="text-align:right">Volume</th><th>Faixa</th><th style="text-align:right">Cashback</th><th></th></tr></thead><tbody>
       ${k.ciclos.map(c => `<tr style="${c.atual?'background:rgba(0,0,0,.035); font-weight:600;':''}">
-        <td>${c.n}º${c.atual?' (atual)':''}</td><td>${pDataBR(c.inicio)} a ${pDataBR(c.fim)}</td>
+        <td>Período ${c.n}${c.atual?' (atual)':''}</td><td>${pDataBR(c.inicio)} a ${pDataBR(c.fim)}</td>
         <td style="text-align:right">${c.pedidos}</td><td style="text-align:right"><b>${fmtMoney(c.valor)}</b></td>
+        <td style="text-align:right">${c.skus.size}</td><td style="text-align:right">${fmtNum(c.un)}</td>
         <td>${c.faixa ? c.faixa.pct+'%' : '<span class="hint" style="margin:0">abaixo da 1ª faixa</span>'}${!c.encerrado && c.proxima ? `<br><small class="hint" style="margin:0">faltam ${fmtMoney(c.faltaProxima)} p/ ${c.proxima.pct}%</small>` : ''}</td>
         <td style="text-align:right">${c.cashback ? fmtMoney(c.cashback) : '—'}</td>
         <td>${c.registro && c.registro.garantiaNumero ? `<span class="status-badge status-ok" style="font-size:11px;">Garantia Nº ${c.registro.garantiaNumero}</span>`
           : (c.encerrado && c.cashback > 0 ? (gestor ? `<button class="ghost-btn pdCash" data-ciclo="${c.n}" style="padding:3px 8px; font-size:12px;">Enviar p/ Garantia</button>` : '<span class="hint" style="margin:0">aguardando gerente</span>')
           : (c.encerrado ? '' : '<span class="hint" style="margin:0">em aberto</span>'))}</td></tr>`).join('')}
-      <tr><td colspan="3"><b>Total</b></td><td style="text-align:right"><b>${fmtMoney(k.total)}</b></td><td colspan="3">${k.pctMeta}% da meta de ${fmtMoney(p.metaValor||0)}</td></tr>
-    </tbody></table></div>`;
+      <tr><td colspan="3"><b>Total</b></td><td style="text-align:right"><b>${fmtMoney(k.total)}</b></td><td style="text-align:right"><b>${k.skus.size}</b></td><td style="text-align:right"><b>${fmtNum(k.un)}</b></td><td colspan="3">${k.pctMeta}% da meta de ${fmtMoney(p.metaValor||0)}</td></tr>
+    </tbody></table></div>
+    ${topSkus.length ? `<details style="margin-top:10px;"><summary><b>SKUs mais comprados desde o aceite</b></summary><table class="cred-table" style="width:100%; margin-top:6px;"><thead><tr><th>Código</th><th>Descrição</th><th style="text-align:right">Unidades</th><th style="text-align:right">Pedidos</th></tr></thead><tbody>
+      ${topSkus.map(x => `<tr><td><b>${pEsc(x.cod)}</b></td><td>${pEsc(x.d)}</td><td style="text-align:right">${fmtNum(x.un)}</td><td style="text-align:right">${x.pedidos}</td></tr>`).join('')}</tbody></table></details>` : ''}`;
   const blocoPedidos = !k.inicio ? '' : `
     <h4 style="margin:16px 0 6px;">Pedidos que entraram no contador (${k.pedidos.filter(x=>!x.ignorado).length})</h4>
-    ${k.pedidos.length ? `<div style="overflow-x:auto; max-height:240px;"><table class="cred-table" style="width:100%"><thead><tr><th>Data</th><th>Cliente</th><th>Pedido</th><th style="text-align:right">Valor</th><th style="text-align:right">SKUs</th><th>Ciclo</th>${gestor?'<th></th>':''}</tr></thead><tbody>
-      ${k.pedidos.sort((a,b) => (b.data||'').localeCompare(a.data||'')).map(x => `<tr style="${x.ignorado?'opacity:.45; text-decoration:line-through;':''}"><td>${pDataBR(x.data)}</td><td>Nº ${pEsc(x.clienteCodigo)}</td><td>${pEsc(x.numeroPedido||'—')}${x.rateio?' <small class="hint" style="margin:0">(rateio grupo)</small>':''}</td><td style="text-align:right">${fmtMoney(x.valor)}</td><td style="text-align:right">${(x.skus||[]).length}</td><td>${x.ciclo||'—'}º</td>${gestor?`<td><button class="ghost-btn pdIgn" data-id="${pEsc(x.id)}" style="padding:2px 8px; font-size:11.5px;">${x.ignorado?'Voltar a contar':'Tirar do contador'}</button></td>`:''}</tr>`).join('')}
+    ${k.pedidos.length ? `<div style="overflow-x:auto; max-height:240px;"><table class="cred-table" style="width:100%"><thead><tr><th>Data</th><th>Cliente</th><th>Pedido</th><th style="text-align:right">Valor</th><th style="text-align:right">SKUs</th><th style="text-align:right">Volume</th><th>Período</th>${gestor?'<th></th>':''}</tr></thead><tbody>
+      ${k.pedidos.sort((a,b) => (b.data||'').localeCompare(a.data||'')).map(x => `<tr style="${x.ignorado?'opacity:.45; text-decoration:line-through;':''}"><td>${pDataBR(x.data)}</td><td>Nº ${pEsc(x.clienteCodigo)}</td><td>${pEsc(x.numeroPedido||'—')}${x.rateio?' <small class="hint" style="margin:0">(rateio grupo)</small>':''}</td><td style="text-align:right">${fmtMoney(x.valor)}</td><td style="text-align:right">${(x.skus||[]).length}</td><td style="text-align:right">${x.un != null ? Number(x.un).toLocaleString('pt-BR') : '—'}</td><td>${x.ciclo ? 'Período '+x.ciclo : '—'}</td>${gestor?`<td><button class="ghost-btn pdIgn" data-id="${pEsc(x.id)}" style="padding:2px 8px; font-size:11.5px;">${x.ignorado?'Voltar a contar':'Tirar do contador'}</button></td>`:''}</tr>`).join('')}
     </tbody></table></div>` : '<p class="hint">Nenhum pedido desde o aceite ainda.</p>'}`;
   bd.innerHTML = `
     <div class="modal" style="max-width:860px; max-height:92vh; overflow-y:auto;">
@@ -7750,12 +7788,12 @@ function abrirPropostaDetalhe(numero, aoMudar){
       <p class="hint" style="margin:6px 0 10px;">${(p.clientes||[]).map(c => `${pEsc(c.nome)} (Nº ${pEsc(c.codigo)})`).join(' + ')} · Vendedor: <b>${pEsc(nomeVend)}</b> · cadastrada por ${pEsc(p.criadoPor||'—')} em ${pDataBR((p.criadoEm||'').slice(0,10))}</p>
       <div class="credito-line" style="flex-wrap:wrap;">
         <span>Meta: <b>${fmtMoney(p.metaValor||0)}</b> em ${p.duracaoDias||90} dias</span>
-        ${p.metaSkus ? `<span>Mix: <b>${p.metaSkus} SKUs</b>${k.inicio ? ` (hoje ${k.skus.size})` : ''}</span>` : ''}
-        <span>Cashback por ciclo: ${(p.faixas||[]).map(f => `<b>${fmtMoney(f.valorMes)}</b> → ${f.pct}%`).join(' · ') || '—'}</span>
+        ${p.metaSkus ? `<span>Mix: <b>${p.metaSkus} SKUs</b></span>` : ''}
+        ${p.metaVolume ? `<span>Volume: <b>${Number(p.metaVolume).toLocaleString('pt-BR')} un.</b></span>` : ''}
+        <span>Cashback por período: ${(p.faixas||[]).map(f => `<b>${fmtMoney(f.valorMes)}</b> → ${f.pct}%`).join(' · ') || '—'}</span>
         ${k.inicio ? `<span>Aceite em <b>${pDataBR(p.aceiteEm)}</b> (${pEsc(p.aceitePor||'')}) · vale até <b>${pDataBR(k.fim)}</b></span>` : ''}
       </div>
-      ${k.inicio ? `<div style="height:12px; background:var(--border); border-radius:8px; margin:10px 0 2px; overflow:hidden;"><div style="height:100%; width:${Math.min(100,k.pctMeta)}%; background:${k.pctMeta>=100?'var(--ok)':'var(--primary)'};"></div></div>
-        <p class="hint" style="margin:0;"><b>${fmtMoney(k.total)}</b> de ${fmtMoney(p.metaValor||0)} (${k.pctMeta}%)${k.total < (p.metaValor||0) ? ' · faltam <b>'+fmtMoney((p.metaValor||0) - k.total)+'</b>' : ' · meta de valor batida!'}${k.diasRestantes ? ` · ${k.diasRestantes} dia(s) restantes` : ''}</p>` : ''}
+      ${k.diasRestantes ? `<p class="hint" style="margin:6px 0 0;">⏳ <b>${k.diasRestantes}</b> dia(s) restantes no desafio</p>` : ''}
       ${p.status === 'recusada' ? `<div class="msg err" style="margin-top:10px;">Recusada em ${pDataBR((p.recusadaEm||'').slice(0,10))} por ${pEsc(p.recusadaPor||'')}: ${pEsc(p.recusaMotivo||'')}</div>` : ''}
       ${p.resumo ? `<p style="margin:12px 0 6px; line-height:1.5;">${pEsc(p.resumo)}</p>` : ''}
       ${(p.regras||[]).length ? `<details style="margin:6px 0;"><summary><b>Regras e combinados</b></summary><ul style="margin:6px 0 0 18px;">${p.regras.map(r => `<li>${pEsc(r)}</li>`).join('')}</ul></details>` : ''}
@@ -7818,11 +7856,11 @@ function abrirPropostaDetalhe(numero, aoMudar){
     const n = Number(b.dataset.ciclo);
     const c = k.ciclos.find(x => x.n === n);
     if(!c || !(c.cashback > 0)) return;
-    if(!(await confirmarAcao(`Enviar o cashback do ${n}º ciclo para a Garantia (Pendentes) para autorizar? ${c.faixa.pct}% sobre ${fmtMoney(c.valor)} = <b>${fmtMoney(c.cashback)}</b>.`))) return;
+    if(!(await confirmarAcao(`Enviar o cashback do período ${n} para a Garantia (Pendentes) para autorizar? ${c.faixa.pct}% sobre ${fmtMoney(c.valor)} = <b>${fmtMoney(c.cashback)}</b>.`))) return;
     b.disabled = true; b.textContent = 'Enviando…';
     try{
       const gNum = await propostaCriarGarantiaCashback(p, c);
-      await salvarE(x => { x.cashbacks = x.cashbacks || {}; x.cashbacks[n] = {garantiaNumero: gNum, valor: c.cashback, pct: c.faixa.pct, base: c.valor, em: new Date().toISOString(), por: pQuem()}; }, `Cashback do ${n}º ciclo enviado para a Garantia Nº ${gNum} (${fmtMoney(c.cashback)})`);
+      await salvarE(x => { x.cashbacks = x.cashbacks || {}; x.cashbacks[n] = {garantiaNumero: gNum, valor: c.cashback, pct: c.faixa.pct, base: c.valor, em: new Date().toISOString(), por: pQuem()}; }, `Cashback do período ${n} enviado para a Garantia Nº ${gNum} (${fmtMoney(c.cashback)})`);
     }catch(e){ msg.innerHTML = `<div class="msg err">${pEsc(e.message)}</div>`; b.disabled = false; b.textContent = 'Enviar p/ Garantia'; }
   });
 }
@@ -7852,13 +7890,13 @@ async function propostaCriarGarantiaCashback(p, ciclo){
   const vend = STATE.vendors.find(v => v.codigo === p.vendedorCodigo);
   const agora = new Date().toISOString();
   const cb = gR2(ciclo.cashback);
-  const desc = `Cashback proposta Nº ${p.numero} · ${ciclo.n}º ciclo (${pDataBR(ciclo.inicio)} a ${pDataBR(ciclo.fim)}): ${ciclo.faixa.pct}% sobre ${fmtMoney(ciclo.valor)}`;
+  const desc = `Cashback proposta Nº ${p.numero} · período ${ciclo.n} (${pDataBR(ciclo.inicio)} a ${pDataBR(ciclo.fim)}): ${ciclo.faixa.pct}% sobre ${fmtMoney(ciclo.valor)}`;
   const g = {
     numero, criadoEm: agora, criadoPor: gQuem(),
     vendedorCodigo: p.vendedorCodigo, vendedorNome: vend ? vend.nome : '',
     clienteCodigo: Number(cli0.codigo) || cli0.codigo, clienteNome: cli.nome || cli0.nome || ('Cliente Nº '+cli0.codigo),
     cnpj: cli.cnpj || '', municipio: cli.municipio || '', uf: (cli.uf || '').toUpperCase(),
-    numeroOrcamento: `Proposta ${p.numero} · ciclo ${ciclo.n}`, consultor: '',
+    numeroOrcamento: `Proposta ${p.numero} · período ${ciclo.n}`, consultor: '',
     valorTotal: cb, valorIpi: 0, valorSt: 0, valorFinanceiro: null,
     nfDevolucao: true, clienteEnvia: false, fretePagoPor: null, freteValor: null,
     obs: `🏆 ${desc}. Proposta "${p.titulo||''}"${(p.clientes||[]).length > 1 ? ' — grupo: '+p.clientes.map(c => 'Nº '+c.codigo).join(', ') : ''}. Bonificação conforme regras da proposta.`,
@@ -7867,7 +7905,7 @@ async function propostaCriarGarantiaCashback(p, ciclo){
     status: 'pendente', excluida: false,
     origem: 'proposta-cashback',
     proposta: {numero: p.numero, ciclo: ciclo.n, pct: ciclo.faixa.pct, base: ciclo.valor, inicio: ciclo.inicio, fim: ciclo.fim},
-    historico: [{em: agora, por: pQuem(), acao: `Cashback da proposta Nº ${p.numero} (${ciclo.n}º ciclo) gerado — aguardando autorização`}],
+    historico: [{em: agora, por: pQuem(), acao: `Cashback da proposta Nº ${p.numero} (período ${ciclo.n}) gerado — aguardando autorização`}],
     versao: 0,
   };
   await salvarGarantia(g);
@@ -13280,7 +13318,7 @@ function cardGarantiaHTML(g){
           <span>Lançada em ${fmtDataHora(g.criadoEm)}</span>
           ${(sac || g.origem === 'campanha-cashback' || g.origem === 'proposta-cashback') ? (g.numeroOrcamento ? `<span>Pedido ${gEsc(g.numeroOrcamento)}</span>` : '') : ''}
           ${g.creditoFinanceiro ? `<span>💳 Crédito financeiro: ${gEsc(G_CREDITO_MOTIVOS[g.creditoFinanceiro.motivo] || '')} · ${g.creditoFinanceiro.cobradoNaNF ? 'cobrado na NF' : 'não cobrado na NF'}</span>` : ''}
-          ${g.origem === 'proposta-cashback' ? `<span>🏆 Cashback proposta Nº ${g.proposta ? g.proposta.numero : ''} · ${g.proposta ? g.proposta.ciclo+'º ciclo · '+g.proposta.pct+'%' : ''} · ${fmtMoney(g.valorTotal)}</span>` : ''}
+          ${g.origem === 'proposta-cashback' ? `<span>🏆 Cashback proposta Nº ${g.proposta ? g.proposta.numero : ''} · ${g.proposta ? 'período '+g.proposta.ciclo+' · '+g.proposta.pct+'%' : ''} · ${fmtMoney(g.valorTotal)}</span>` : ''}
           ${g.origem === 'campanha-cashback' ? `<span>💰 Cashback campanha ferramentas ${g.campanha && g.campanha.cashbackPct ? g.campanha.cashbackPct+'%' : ''} · ${fmtMoney(g.valorTotal)}</span>` : ''}
           ${preDecisao ? `<span>${(g.itens||[]).length} item(ns) reclamado(s)</span>` : sac ? `
             ${g.clienteEnvia ? '<span>📦 Mercadoria pedida de volta</span>' : '<span>Sem retorno de mercadoria</span>'}
